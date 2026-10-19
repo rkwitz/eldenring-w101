@@ -1,0 +1,7 @@
+reference/
+tools/*/
+*.wad
+*.nif
+*.obj
+*.mtl
+__pycache__/
