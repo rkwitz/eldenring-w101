@@ -1,4 +1,4 @@
-"""Fix two gaps in Elden Ring FLVERs (version 0x2001A) written by Soulstruct for Blender 3.2.1.
+"""Fix gaps in Elden Ring FLVERs (version 0x2001A) written by Soulstruct for Blender 3.2.1.
 
 1. Skeleton set: Elden Ring FLVERs carry a small table right after the texture headers. Soulstruct leaves it out, so
    SoulsFormats-based tools (Smithbox) fail with "Read Int32: 0xC | Expected: 0x0" in SkeletonSet. We insert one base
@@ -6,8 +6,11 @@
 2. Mesh bounds: each mesh has a 36-byte box stored as (half extents, unknown zero vector, center). Soulstruct writes
    only the older 24-byte "unset" placeholder (FLT_MAX, -FLT_MAX), which the game could cull. We make room for the
    full box and compute it from the vertex positions.
+3. Vertex layout (optional): Soulstruct writes its own vertex layout (bone indices, two tangents, vertex color 0), while
+   the game's asset for the same material uses a different one, and the game may not draw such a mesh, so
+   convert_layout repacks the vertices to the vanilla FLVER's layout.
 
-Usage: python flver_fix.py input.flver [output.flver]
+Usage: python flver_fix.py input.flver [output.flver] [vanilla.flver to copy the vertex layout from]
 In Blender (Soulstruct installed), fix_binder(path) fixes every FLVER inside a compressed GEOMBND in place.
 """
 
@@ -19,6 +22,7 @@ SECTIONS = (("dummy", 0x40), ("material", 0x20), ("bone", 0x80), ("mesh", 0x30),
             ("vertex_buffer", 0x20), ("layout", 0x10), ("texture", 0x20))
 SIZES = dict(SECTIONS)
 POSITION_SEMANTIC, FLOAT3_TYPE = 0, 2
+BYTE4_TYPES = {0x10, 0x11, 0x13}  # four normalized bytes; SoulsFormats decodes normals and tangents the same in each
 
 
 def _counts(data):
@@ -140,12 +144,108 @@ def fix_mesh_bounds(data):
     return data
 
 
-def fix_flver(data):
-    return add_skeleton_set(fix_mesh_bounds(data))
+def material_layout(data, material_index=0):
+    """(type, semantic, index) of each vertex member used by the first mesh with this material, e.g. to copy the
+    layout of the vanilla FLVER our export replaces."""
+    _, counts = _counts(data)
+    starts, _ = _section_starts(counts)
+    for i in range(counts["mesh"]):
+        mesh = starts["mesh"] + i * SIZES["mesh"]
+        if struct.unpack_from("<i", data, mesh + 4)[0] == material_index:
+            buffer_index = struct.unpack_from("<i", data, struct.unpack_from("<i", data, mesh + 0x2C)[0])[0]
+            vb = starts["vertex_buffer"] + buffer_index * SIZES["vertex_buffer"]
+            layout_index = struct.unpack_from("<i", data, vb + 4)[0]
+            break
+    else:
+        raise ValueError(f"No mesh uses material {material_index}.")
+    member_count, _, _, members = struct.unpack_from("<4i", data, starts["layout"] + layout_index * SIZES["layout"])
+    return [struct.unpack_from("<5i", data, members + 20 * k)[2:] for k in range(member_count)]
 
 
-def fix_binder(path):
-    """Fix the FLVERs inside a (DCX-compressed) binder such as a GEOMBND. Needs Soulstruct for Oodle compression."""
+def convert_layout(data, target, material_index=0):
+    """Repack the vertex buffers of meshes using `material_index` to the member list `target` [(type, semantic, index)], e.g. the vanilla layout
+    for the same material. Soulstruct adds bone indices, a second tangent and vertex color 0 where the game's own
+    asset uses color 1; the shader may not draw a mesh whose layout doesn't match. Members are copied byte for byte
+    from the source member with the same semantic (same index preferred) and the same type, or another byte4 type."""
+    _, counts = _counts(data)
+    starts, _ = _section_starts(counts)
+    target = [tuple(m) for m in target]
+    vertex_data = struct.unpack_from("<i", data, 0x0C)[0]
+    out = bytearray(data)
+    selected = set()
+    for i in range(counts["mesh"]):
+        mesh = starts["mesh"] + i * SIZES["mesh"]
+        if struct.unpack_from("<i", data, mesh + 4)[0] == material_index:
+            buffer_count, buffer_indices = struct.unpack_from("<2i", data, mesh + 0x28)
+            selected.update(struct.unpack_from(f"<{buffer_count}i", data, buffer_indices))
+    buffers = []
+    for i in range(counts["vertex_buffer"]):
+        vb = starts["vertex_buffer"] + i * SIZES["vertex_buffer"]
+        _, layout, vertex_size, vertex_count, _, _, length, offset = struct.unpack_from("<8i", data, vb)
+        buffers.append((offset, vb, layout, vertex_size, vertex_count, length))
+    converted_layouts = set()
+    # Last buffer first, so splicing never moves a buffer that is still to be converted.
+    for offset, vb, layout, vertex_size, vertex_count, length in sorted(buffers, reverse=True):
+        if (vb - starts["vertex_buffer"]) // SIZES["vertex_buffer"] not in selected:
+            continue
+        header = starts["layout"] + layout * SIZES["layout"]
+        member_count, _, _, members = struct.unpack_from("<4i", data, header)
+        source = [struct.unpack_from("<5i", data, members + 20 * k)[1:] for k in range(member_count)]
+        if [tuple(m[1:]) for m in source] == target:
+            continue
+        bounds = sorted(m[0] for m in source) + [vertex_size]
+        size_at = {start: end - start for start, end in zip(bounds, bounds[1:])}
+        picks, used = [], set()
+        for data_type, semantic, index in target:
+            candidates = [k for k, m in enumerate(source) if k not in used and m[2] == semantic and (
+                m[1] == data_type or {m[1], data_type} <= BYTE4_TYPES)]
+            if not candidates:
+                raise ValueError(f"No member of type {data_type} / semantic {semantic} to fill the target layout.")
+            k = next((k for k in candidates if source[k][3] == index), candidates[0])
+            used.add(k)
+            picks.append((source[k][0], size_at[source[k][0]]))
+        new_size = sum(size for _, size in picks)
+        start = vertex_data + offset
+        old = memoryview(data)[start:start + length]
+        new = bytearray(new_size * vertex_count)
+        pos = 0
+        for at, size in picks:
+            for v in range(vertex_count):
+                new[v * new_size + pos:v * new_size + pos + size] = old[v * vertex_size + at:v * vertex_size + at + size]
+            pos += size
+        if layout not in converted_layouts:
+            converted_layouts.add(layout)
+            struct.pack_into("<i", out, header, len(target))
+            pos = 0
+            for k, (data_type, semantic, index) in enumerate(target):
+                struct.pack_into("<5i", out, members + 20 * k, 0, pos, data_type, semantic, index)
+                pos += picks[k][1]
+        struct.pack_into("<i", out, vb + 8, new_size)
+        struct.pack_into("<i", out, vb + 0x18, len(new))
+        shift = len(new) - length
+        # Shift the relative offsets of anything stored after this buffer.
+        for j in range(counts["face_set"]):
+            fs = starts["face_set"] + j * SIZES["face_set"] + 0x10
+            if struct.unpack_from("<i", out, fs)[0] > offset:
+                struct.pack_into("<i", out, fs, struct.unpack_from("<i", out, fs)[0] + shift)
+        for other_offset, other_vb, *_ in buffers:
+            if other_offset > offset:
+                struct.pack_into("<i", out, other_vb + 0x1C, struct.unpack_from("<i", out, other_vb + 0x1C)[0] + shift)
+        struct.pack_into("<i", out, 0x10, struct.unpack_from("<i", out, 0x10)[0] + shift)
+        out[start:start + length] = new
+        data = bytes(out)
+        out = bytearray(data)
+    return bytes(out)
+
+
+def fix_flver(data, layout=None):
+    data = add_skeleton_set(fix_mesh_bounds(data))
+    return convert_layout(data, layout) if layout else data
+
+
+def fix_binder(path, layout=None):
+    """Fix the FLVERs inside a (DCX-compressed) binder such as a GEOMBND, optionally converting their vertices to
+    `layout`. Needs Soulstruct for Oodle compression."""
     from soulstruct.containers import Binder
 
     binder = Binder.from_path(path)
@@ -153,7 +253,7 @@ def fix_binder(path):
     for entry in binder.entries:
         if entry.name.lower().endswith(".flver"):
             data = entry.get_uncompressed_data()
-            fixed = fix_flver(data)
+            fixed = fix_flver(data, layout)
             if fixed != data:
                 entry.set_uncompressed_data(fixed)
                 changed = True
@@ -162,11 +262,19 @@ def fix_binder(path):
     return changed
 
 
+def flver_in_binder(path):
+    """The first FLVER inside a (DCX-compressed) binder, uncompressed. Needs Soulstruct."""
+    from soulstruct.containers import Binder
+
+    return next(e.get_uncompressed_data() for e in Binder.from_path(path).entries if e.name.lower().endswith(".flver"))
+
+
 def main():
     src = sys.argv[1]
     dst = sys.argv[2] if len(sys.argv) > 2 else src
     data = open(src, "rb").read()
-    fixed = fix_flver(data)
+    layout = material_layout(open(sys.argv[3], "rb").read()) if len(sys.argv) > 3 else None
+    fixed = fix_flver(data, layout)
     if fixed == data:
         print("Nothing to fix.")
         return
