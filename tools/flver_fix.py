@@ -9,8 +9,10 @@
 3. Vertex layout (optional): Soulstruct writes its own vertex layout (bone indices, two tangents, vertex color 0), while
    the game's asset for the same material uses a different one, and the game may not draw such a mesh, so
    convert_layout repacks the vertices to the vanilla FLVER's layout.
+4. Texture paths (optional): Soulstruct writes bare texture file names where the vanilla FLVER leaves paths empty (the
+   material supplies them); copy_texture_paths copies the vanilla paths.
 
-Usage: python flver_fix.py input.flver [output.flver] [vanilla.flver to copy the vertex layout from]
+Usage: python flver_fix.py input.flver [output.flver] [vanilla.flver to copy the vertex layout and texture paths from]
 In Blender (Soulstruct installed), fix_binder(path) fixes every FLVER inside a compressed GEOMBND in place.
 """
 
@@ -238,14 +240,69 @@ def convert_layout(data, target, material_index=0):
     return bytes(out)
 
 
-def fix_flver(data, layout=None):
+def _utf16(data, offset):
+    end = offset
+    while data[end:end + 2] != b"\0\0":
+        end += 2
+    return data[offset:end].decode("utf-16-le")
+
+
+def _material_textures(data, material_index=0):
+    """{texture type: (header position, path)} for one material."""
+    _, counts = _counts(data)
+    starts, _ = _section_starts(counts)
+    _, _, count, first = struct.unpack_from("<4i", data, starts["material"] + material_index * SIZES["material"])
+    textures = {}
+    for i in range(first, first + count):
+        header = starts["texture"] + i * SIZES["texture"]
+        path, kind = struct.unpack_from("<2i", data, header)
+        textures[_utf16(data, kind)] = (header, _utf16(data, path))
+    return textures
+
+
+def copy_texture_paths(data, vanilla, material_index=0):
+    """Give each texture of the material the path the vanilla FLVER uses for the same slot. Vanilla asset FLVERs leave
+    most paths empty and let the material supply the texture; Soulstruct writes bare file names instead."""
+    wanted = {kind: path for kind, (_, path) in _material_textures(vanilla, material_index).items()}
+    out = bytearray(data)
+    appended = []
+    for kind, (header, path) in _material_textures(data, material_index).items():
+        if kind not in wanted or path == wanted[kind]:
+            continue
+        if wanted[kind]:
+            appended.append((header, wanted[kind]))
+        else:
+            # Point at the terminator of the type name: an empty string.
+            kind_offset = struct.unpack_from("<i", data, header + 4)[0]
+            struct.pack_into("<i", out, header, kind_offset + 2 * len(kind))
+    data = bytes(out)
+    if appended:
+        # New strings go right before the vertex data, padded to keep it 16-byte aligned.
+        at = struct.unpack_from("<i", data, 0x0C)[0]
+        block, positions = bytearray(), []
+        for header, path in appended:
+            positions.append((header, at + len(block)))
+            block += path.encode("utf-16-le") + b"\0\0"
+        block += bytes(-len(block) % 16)
+        data = bytearray(_insert(data, at, bytes(block)))
+        for header, offset in positions:
+            struct.pack_into("<i", data, header, offset)
+        data = bytes(data)
+    return data
+
+
+def fix_flver(data, vanilla=None):
+    """Fix a Soulstruct export; with `vanilla` (the game's FLVER it replaces), also match its vertex layout and
+    texture paths for material 0."""
     data = add_skeleton_set(fix_mesh_bounds(data))
-    return convert_layout(data, layout) if layout else data
+    if vanilla:
+        data = copy_texture_paths(convert_layout(data, material_layout(vanilla)), vanilla)
+    return data
 
 
-def fix_binder(path, layout=None):
-    """Fix the FLVERs inside a (DCX-compressed) binder such as a GEOMBND, optionally converting their vertices to
-    `layout`. Needs Soulstruct for Oodle compression."""
+def fix_binder(path, vanilla=None):
+    """Fix the FLVERs inside a (DCX-compressed) binder such as a GEOMBND, optionally matching them to `vanilla` (see
+    fix_flver). Needs Soulstruct for Oodle compression."""
     from soulstruct.containers import Binder
 
     binder = Binder.from_path(path)
@@ -253,7 +310,7 @@ def fix_binder(path, layout=None):
     for entry in binder.entries:
         if entry.name.lower().endswith(".flver"):
             data = entry.get_uncompressed_data()
-            fixed = fix_flver(data, layout)
+            fixed = fix_flver(data, vanilla)
             if fixed != data:
                 entry.set_uncompressed_data(fixed)
                 changed = True
@@ -273,8 +330,8 @@ def main():
     src = sys.argv[1]
     dst = sys.argv[2] if len(sys.argv) > 2 else src
     data = open(src, "rb").read()
-    layout = material_layout(open(sys.argv[3], "rb").read()) if len(sys.argv) > 3 else None
-    fixed = fix_flver(data, layout)
+    vanilla = open(sys.argv[3], "rb").read() if len(sys.argv) > 3 else None
+    fixed = fix_flver(data, vanilla)
     if fixed == data:
         print("Nothing to fix.")
         return
