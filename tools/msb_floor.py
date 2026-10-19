@@ -92,6 +92,8 @@ def add_model(lists, name, template):
     entry = bytearray(models.entries[names.index(template)])
     old, new = template.encode("utf-16-le"), name.encode("utf-16-le")
     entry[:] = entry.replace(old, new).replace(old.lower(), new.lower())
+    folder = lambda n: f"\\{n[:6]}\\".encode("utf-16-le")  # the sib path's AEGxxx category folder
+    entry[:] = entry.replace(folder(template), folder(name))
     model_type = struct.unpack_from("<i", entry, 8)[0]
     same_type = [struct.unpack_from("<i", e, 12)[0] for e in models.entries if struct.unpack_from("<i", e, 8)[0] == model_type]
     struct.pack_into("<i", entry, 12, max(same_type) + 1)
@@ -144,6 +146,19 @@ def add_parts(lists, template, model_index, placements, first_id=8000):
     model = bytearray(models[model_index])
     struct.pack_into("<i", model, 0x18, users)
     models[model_index] = bytes(model)
+
+
+def place_asset(data, model, template_model, template_part, name, position, rotation=(0.0, 0.0, 0.0), first_id=9000):
+    """Map bytes with asset part `name` (model `model`, added as a copy of `template_model` if missing) at `position`
+    and `rotation`. A new part is a copy of `template_part` with no entity id; an existing one is just moved."""
+    header, lists = read_msb(data)
+    parts = _list(lists, "PARTS_PARAM_ST")
+    if any(entry_name(e) == name for e in parts.entries):
+        index = find(parts, name)
+        parts.entries[index] = set_transform(parts.entries[index], position, rotation)
+    else:
+        add_parts(lists, template_part, add_model(lists, model, template_model), [(name, position, rotation)], first_id)
+    return write_msb(header, lists)
 
 
 STREET = "AEG030_518_9000"
