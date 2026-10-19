@@ -5,6 +5,9 @@ mesh of every triangle of the exported street (hkx_collision.py), checks the res
 binder to the project's asset folder. An existing project copy is kept as aeg030_518_l.geomhkxbnd.dcx.before_writer;
 renaming the new file away (e.g. to .off) makes the game use the vanilla road's collision again.
 
+SOURCE = "vanilla" rebuilds the game's own aeg030_518_l collision (154 triangles) with our writer instead, and LIMIT keeps only that
+many street triangles nearest the road centre: both are for finding out why the game crashes on the full street.
+
 Run in Blender's Scripting tab. It takes about a minute; watch Window > Toggle System Console.
 """
 
@@ -30,13 +33,24 @@ ASSETS = ROOT / "reference" / "eldenring" / "project" / "asset" / "aeg" / "aeg03
 GEOMBND = ASSETS / "aeg030_518.geombnd.dcx"
 TARGET = ASSETS / "aeg030_518_l.geomhkxbnd.dcx"
 GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset\aeg\aeg030") / TARGET.name
+SOURCE = "vanilla"  # "street" (the exported Unicorn Way) or "vanilla" (the game's own road collision)
+LIMIT = None  # e.g. 2000: keep only the street triangles nearest ROAD_CENTER
+ROAD_CENTER = (-126.4, 0.0, 116.2)
 
 start = time.time()
-triangles = list(flver_floor._triangles(flver_fix.flver_in_binder(GEOMBND)))
-print(f"Read {len(triangles)} triangles from {GEOMBND.name}")
-
 binder = Binder.from_path(GAME)
 entry = next(e for e in binder.entries if e.name.lower().endswith(".hkx"))
+if SOURCE == "street":
+    model = GEOMBND
+    triangles = list(flver_floor._triangles(flver_fix.flver_in_binder(GEOMBND)))
+else:
+    model = GAME
+    triangles = list(hkx_collision.decode(hkx_collision.body_of(hkx_tag.read(entry.get_uncompressed_data())[1])["shape"]).values())
+if LIMIT:
+    triangles.sort(key=lambda t: sum((sum(v[k] for v in t) / 3 - ROAD_CENTER[k]) ** 2 for k in range(3)))
+    triangles = triangles[:LIMIT]
+print(f"Read {len(triangles)} triangles from {model}")
+
 data, _ = hkx_collision.build_hkx(entry.get_uncompressed_data(), triangles)
 print(f"Built {len(data)} bytes of collision in {time.time() - start:.0f} s; checking it")
 
