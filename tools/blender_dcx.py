@@ -2,8 +2,8 @@
 
 MODE = "unpack": write SOURCE's contents uncompressed to TARGET.
 MODE = "pack": compress SOURCE into TARGET with the DCX type of REFERENCE.
-Other scripts set MODE, SOURCE, TARGET and REFERENCE through runpy's init_globals; the defaults dump the Stranded
-Graveyard map from the Smithbox project to reference/eldenring/work/dump.
+Other scripts set MODE, SOURCE, TARGET and REFERENCE through runpy's init_globals; the defaults dump map MAP_NAME
+(the Smithbox project's copy if there is one, otherwise the game's) to reference/eldenring/work/dump.
 """
 
 from pathlib import Path
@@ -11,11 +11,15 @@ from pathlib import Path
 from soulstruct.dcx import compress, decompress
 
 ROOT = Path.home() / "Documents" / "game_modding"
-PROJECT_MAP = ROOT / "reference" / "eldenring" / "project" / "map" / "mapstudio" / "m18_00_00_00.msb.dcx"
+MAP_NAME = "m60_42_36_00"  # The First Step's Limgrave tile; the Stranded Graveyard is m18_00_00_00
+MAPSTUDIO = Path("map") / "mapstudio" / f"{MAP_NAME}.msb.dcx"
+PROJECT_MAP = ROOT / "reference" / "eldenring" / "project" / MAPSTUDIO
+if not PROJECT_MAP.exists():
+    PROJECT_MAP = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game") / MAPSTUDIO
 
 MODE = globals().get("MODE", "unpack")
 SOURCE = Path(globals().get("SOURCE", PROJECT_MAP))
-TARGET = Path(globals().get("TARGET", ROOT / "reference" / "eldenring" / "work" / "dump" / "m18_00_00_00.msb"))
+TARGET = Path(globals().get("TARGET", ROOT / "reference" / "eldenring" / "work" / "dump" / f"{MAP_NAME}.msb"))
 REFERENCE = Path(globals().get("REFERENCE", PROJECT_MAP))
 
 if MODE == "unpack":
