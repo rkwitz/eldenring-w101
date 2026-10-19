@@ -132,7 +132,8 @@ def convert(src, dst, scale=0.01):
             exported += 1
     with open(mtl_path, "w") as mtl:
         for mat, tex in materials.items():
-            mtl.write(f"newmtl {mat}\nmap_Kd {Path(tex.replace(chr(92), '/')).name}\n\n")
+            # textures/<name>.dds is what tex2dds.py writes next to the OBJ
+            mtl.write(f"newmtl {mat}\nmap_Kd textures/{mat}.dds\n\n")
     print(f"exported {exported} meshes, skipped {skipped}, {len(materials)} materials -> {dst}")
 
 
