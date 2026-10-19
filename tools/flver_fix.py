@@ -225,7 +225,7 @@ def convert_layout(data, target, material_index=0):
         shift = len(new) - length
         # Shift the relative offsets of anything stored after this buffer.
         for j in range(counts["face_set"]):
-            fs = starts["face_set"] + j * SIZES["face_set"] + 0x10
+            fs = starts["face_set"] + j * SIZES["face_set"] + 0x0C  # indices offset
             if struct.unpack_from("<i", out, fs)[0] > offset:
                 struct.pack_into("<i", out, fs, struct.unpack_from("<i", out, fs)[0] + shift)
         for other_offset, other_vb, *_ in buffers:
