@@ -2,8 +2,12 @@
 
 Soulstruct 3.2.1 has no panel button for it and looks for the GEOMBND in asset/aegXXX/, but Elden Ring keeps
 assets in asset/aeg/aegXXX/. This patches the path and runs the export into the Soulstruct Project Root.
+
+Soulstruct also fails with a bare KeyError ("Error: 'UVTexture1'") when the mesh keeps a UV layer that its material
+doesn't use, so those layers are removed and the export retried.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -18,4 +22,17 @@ def binder_path(settings, model_stem):
 
 
 module.ExportAssetFLVER._get_binder_path = staticmethod(binder_path)
-print(bpy.ops.export_scene.asset_flver())
+obj = bpy.context.active_object
+if obj.type != "MESH":
+    obj = next(child for child in obj.children if child.type == "MESH")
+mesh = obj.data
+for _ in range(8):
+    try:
+        print(bpy.ops.export_scene.asset_flver())
+        break
+    except RuntimeError as ex:
+        unused = re.search(r"Error: '([^']+)'$", str(ex).strip())
+        if not unused or unused.group(1) not in mesh.uv_layers:
+            raise
+        print(f"Removing UV layer '{unused.group(1)}', which the material doesn't use, and exporting again")
+        mesh.uv_layers.remove(mesh.uv_layers[unused.group(1)])
