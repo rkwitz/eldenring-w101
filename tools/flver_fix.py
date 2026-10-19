@@ -11,6 +11,8 @@
    convert_layout repacks the vertices to the vanilla FLVER's layout.
 4. Texture paths (optional): Soulstruct writes bare texture file names where the vanilla FLVER leaves paths empty (the
    material supplies them); copy_texture_paths copies the vanilla paths.
+5. Normal W (with a vanilla FLVER): the game reads the normal's fourth byte as the bone a vertex follows. Soulstruct
+   writes 127, vanilla assets 0; set_normal_w writes 0.
 
 Usage: python flver_fix.py input.flver [output.flver] [vanilla.flver to copy the vertex layout and texture paths from]
 In Blender (Soulstruct installed), fix_binder(path) fixes every FLVER inside a compressed GEOMBND in place.
@@ -23,7 +25,7 @@ HEADER_SIZE = 0x80
 SECTIONS = (("dummy", 0x40), ("material", 0x20), ("bone", 0x80), ("mesh", 0x30), ("face_set", 0x20),
             ("vertex_buffer", 0x20), ("layout", 0x10), ("texture", 0x20))
 SIZES = dict(SECTIONS)
-POSITION_SEMANTIC, FLOAT3_TYPE = 0, 2
+POSITION_SEMANTIC, NORMAL_SEMANTIC, FLOAT3_TYPE = 0, 3, 2
 BYTE4_TYPES = {0x10, 0x11, 0x13}  # four normalized bytes; SoulsFormats decodes normals and tangents the same in each
 
 
@@ -291,12 +293,38 @@ def copy_texture_paths(data, vanilla, material_index=0):
     return data
 
 
+def set_normal_w(data, value=0, material_index=0):
+    """Set the fourth byte of every byte4 normal in the material's meshes. Elden Ring reads it as the bone a rigid
+    vertex follows: vanilla assets store 0 (their only bone), Soulstruct stores 127 (no bone), and the game then
+    doesn't draw the mesh."""
+    _, counts = _counts(data)
+    starts, _ = _section_starts(counts)
+    vertex_data = struct.unpack_from("<i", data, 0x0C)[0]
+    out = bytearray(data)
+    for i in range(counts["mesh"]):
+        mesh = starts["mesh"] + i * SIZES["mesh"]
+        if struct.unpack_from("<i", data, mesh + 4)[0] != material_index:
+            continue
+        buffer_count, buffer_indices = struct.unpack_from("<2i", data, mesh + 0x28)
+        for buffer_index in struct.unpack_from(f"<{buffer_count}i", data, buffer_indices):
+            vb = starts["vertex_buffer"] + buffer_index * SIZES["vertex_buffer"]
+            _, layout, vertex_size, vertex_count, _, _, _, offset = struct.unpack_from("<8i", data, vb)
+            member_count, _, _, members = struct.unpack_from("<4i", data, starts["layout"] + layout * SIZES["layout"])
+            for k in range(member_count):
+                _, struct_offset, data_type, semantic, _ = struct.unpack_from("<5i", data, members + 20 * k)
+                if semantic == NORMAL_SEMANTIC and data_type in BYTE4_TYPES:
+                    first = vertex_data + offset + struct_offset + 3
+                    out[first:first + vertex_size * vertex_count:vertex_size] = bytes([value]) * vertex_count
+    return bytes(out)
+
+
 def fix_flver(data, vanilla=None):
     """Fix a Soulstruct export; with `vanilla` (the game's FLVER it replaces), also match its vertex layout and
     texture paths for material 0."""
     data = add_skeleton_set(fix_mesh_bounds(data))
     if vanilla:
         data = copy_texture_paths(convert_layout(data, material_layout(vanilla)), vanilla)
+        data = set_normal_w(data)
     return data
 
 
