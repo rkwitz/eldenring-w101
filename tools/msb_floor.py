@@ -151,7 +151,7 @@ FLOOR_MODEL = "AEG099_002"  # invisible wall, collision box x -7.466..7.459, y 0
 FLOOR_TEMPLATE_MODEL = "AEG099_001"
 FLOOR_TEMPLATE_PART = "AEG099_001_9000"  # a vanilla invisible wall asset in m18
 FLOOR_PREFIX = FLOOR_MODEL + "_8"  # part names AEG099_002_8000 and up
-GROUND_Y = -10.685  # grace room floor; the road surface sits at the street's own height 0
+GROUND_Y = 13.8  # where Ryan placed the street in Smithbox; the road surface sits at the street's own height 0
 
 
 def lay_floor(data, tiles, half_thickness, street=STREET, ground_y=GROUND_Y):

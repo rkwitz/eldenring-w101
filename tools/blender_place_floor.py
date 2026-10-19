@@ -1,8 +1,8 @@
 """Lay invisible floor under the Unicorn Way street in the Stranded Graveyard map (see flver_floor.py and msb_floor.py).
 
 Each tile gets two aeg099_002 invisible walls laid flat, one tipped +90 degrees about X and one -90, so together they
-cover the tile whichever way the game turns them. The script also levels the street with the grace room floor and
-clears its rotation. Rerunning replaces the floor it placed before. The first run keeps the map as
+cover the tile whichever way the game turns them. The script also puts the street back at the
+height Ryan placed it (msb_floor.GROUND_Y) and clears its rotation. Rerunning replaces the floor it placed before. The first run keeps the map as
 m18_00_00_00.msb.dcx.before_floor.
 
 Close Smithbox first (or reload the map afterwards), then run in Blender's Scripting tab.
