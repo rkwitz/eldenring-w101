@@ -484,6 +484,19 @@ def build_hkx(template_bytes, triangles, name=None):
     return hkx_tag.write(tag, root), decoded
 
 
+def replace_binder_entry(bnd, data):
+    """BND4 bytes with its only entry's data replaced. Soulstruct's binder writer starts entry data at an 8-byte
+    boundary, but Havok needs the tagfile 16-byte aligned (the game crashes on load otherwise), so we keep the game's
+    own header, which already places the data at a 16-byte offset, and only change the sizes."""
+    assert bnd[:4] == b"BND4" and struct.unpack_from("<i", bnd, 0x0C)[0] == 1, "expected a BND4 with one entry"
+    header = 0x40  # the entry header follows the 0x40-byte binder header
+    offset = struct.unpack_from("<I", bnd, header + 0x18)[0]
+    assert offset % 16 == 0
+    out = bytearray(bnd[:offset])
+    struct.pack_into("<qq", out, header + 0x08, len(data), len(data))
+    return bytes(out) + data
+
+
 def main():
     """python hkx_collision.py template.hkx model.flver out.hkx: collision for every triangle of the FLVER."""
     import sys

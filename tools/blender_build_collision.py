@@ -6,7 +6,8 @@ binder to the project's asset folder. An existing project copy is kept as aeg030
 renaming the new file away (e.g. to .off) makes the game use the vanilla road's collision again.
 
 The other SOURCE values are steps for finding out why the game crashes on our collision:
-"passthrough" writes the game's own HKX back unchanged (tests the packing), "body" only moves its body to the origin and
+"passthrough" writes the game's own HKX back unchanged (tests the packing; Soulstruct's Binder.write misaligns the
+HKX, so we patch the game's binder bytes instead), "body" only moves its body to the origin and
 drops its drag data (tests our tagfile writer), "vanilla" rebuilds its 154 triangles with our mesh builder. LIMIT keeps
 only that many street triangles nearest the road centre.
 
@@ -20,6 +21,7 @@ import time
 from pathlib import Path
 
 from soulstruct.containers import Binder
+from soulstruct.dcx import compress, decompress
 
 ROOT = Path.home() / "Documents" / "game_modding"
 sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
@@ -35,7 +37,7 @@ ASSETS = ROOT / "reference" / "eldenring" / "project" / "asset" / "aeg" / "aeg03
 GEOMBND = ASSETS / "aeg030_518.geombnd.dcx"
 TARGET = ASSETS / "aeg030_518_l.geomhkxbnd.dcx"
 GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset\aeg\aeg030") / TARGET.name
-SOURCE = "passthrough"  # "street" (the exported Unicorn Way), or a test: "passthrough", "body" or "vanilla"
+SOURCE = "street"  # "street" (the exported Unicorn Way), or a test: "passthrough", "body" or "vanilla"
 LIMIT = None  # e.g. 2000: keep only the street triangles nearest ROAD_CENTER
 ROAD_CENTER = (-126.4, 0.0, 116.2)
 
@@ -76,6 +78,6 @@ if TARGET.exists():
     backup = TARGET.with_name(TARGET.name + ".before_writer")
     if not backup.exists():
         shutil.copy2(TARGET, backup)
-entry.set_uncompressed_data(data)
-binder.write(TARGET)
+bnd, dcx_type = decompress(GAME)
+TARGET.write_bytes(compress(hkx_collision.replace_binder_entry(bnd, data), dcx_type))
 print(f"Wrote {TARGET} in {time.time() - start:.0f} s")
