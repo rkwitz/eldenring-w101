@@ -4,10 +4,12 @@ Soulstruct 3.2.1 has no panel button for it and looks for the GEOMBND in asset/a
 assets in asset/aeg/aegXXX/. This patches the path and runs the export into the Soulstruct Project Root.
 
 Soulstruct also fails with a bare KeyError ("Error: 'UVTexture1'") when the mesh keeps a UV layer that its material
-doesn't use, so those layers are removed and the export retried.
+doesn't use, so those layers are removed and the export retried. Afterwards blender_fix_asset.py adds what Soulstruct
+leaves out of Elden Ring FLVERs, so set Soulstruct's Project Root to reference/eldenring/project.
 """
 
 import re
+import runpy
 import sys
 from pathlib import Path
 
@@ -36,3 +38,5 @@ for _ in range(8):
             raise
         print(f"Removing UV layer '{unused.group(1)}', which the material doesn't use, and exporting again")
         mesh.uv_layers.remove(mesh.uv_layers[unused.group(1)])
+
+runpy.run_path(str(Path.home() / "Documents" / "game_modding" / "eldenring-w101" / "tools" / "blender_fix_asset.py"))
