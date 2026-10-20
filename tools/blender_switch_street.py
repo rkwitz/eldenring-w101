@@ -58,8 +58,17 @@ def backdrop(positions, face):
     Elden Ring they show as grey walls around the street, and their collision blocks the way, so they are left out."""
     points = [positions[v] for v, _ in face[1]]
     ys = [p[1] for p in points]
-    flat = len({round(p[0], 2) for p in points}) == 1 or len({round(p[2], 2) for p in points}) == 1
+    spread = lambda axis: max(p[axis] for p in points) - min(p[axis] for p in points)
+    flat = spread(0) < 0.01 or spread(2) < 0.01  # not rounding: one board's corners are 115.6249 and 115.6252
     return flat and min(ys) < -4.9 and max(ys) > 22.2
+
+
+def tunnel_inside(positions, face):
+    """The inside of the archway to the Commons (behind its front wall at z 10.91): its ramp and walls would stick into
+    the Stranded Graveyard's lift landing, because the street is placed with the graveyard door in that archway."""
+    points = [positions[v] for v, _ in face[1]]
+    x, y, z = (sum(p[i] for p in points) / 3 for i in range(3))
+    return abs(x) < 4.0 and 11.35 < z < 16.0 and y < 5.5
 
 
 def hd_copy(path):
@@ -77,8 +86,9 @@ def build_classic():
     print(f"Building from {OBJ.name}")
     positions, uvs, faces = flver_build.parse_obj(OBJ)
     walls = [f for f in faces if backdrop(positions, f)]
-    faces = [f for f in faces if not backdrop(positions, f)]
-    print(f"Left out {len(walls)} triangles of the zone's backdrop walls")
+    tunnel = [f for f in faces if tunnel_inside(positions, f)]
+    faces = [f for f in faces if not backdrop(positions, f) and not tunnel_inside(positions, f)]
+    print(f"Left out {len(walls)} triangles of the zone's backdrop walls and {len(tunnel)} inside the Commons archway")
     single, materials = flver_build.build_single_mesh(template, positions, uvs, faces)
     texture_of_material = flver_textures.parse_mtl(MTL)
     stems = sorted(set(texture_of_material.values()))
