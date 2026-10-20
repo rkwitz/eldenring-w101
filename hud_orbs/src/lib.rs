@@ -67,11 +67,51 @@ struct Orbs {
     shown: [f32; 2],
     start: Instant,
     error: Option<String>,
+    perf: Perf,
+}
+
+/// Frame timing written to w101_orbs.log every few seconds, to see what the overlay costs the game.
+struct Perf {
+    since: Instant,
+    last_frame: Option<Instant>,
+    frames: u32,
+    worst_gap: f32,
+    inside: f32,
+    worst_inside: f32,
+    initializations: u32,
+}
+
+impl Perf {
+    fn frame(&mut self, inside: f32) {
+        let now = Instant::now();
+        if let Some(last) = self.last_frame {
+            self.worst_gap = self.worst_gap.max((now - last).as_secs_f32());
+        }
+        self.last_frame = Some(now);
+        self.frames += 1;
+        self.inside += inside;
+        self.worst_inside = self.worst_inside.max(inside);
+        let elapsed = (now - self.since).as_secs_f32();
+        if elapsed >= 5.0 {
+            tracing::info!(
+                "{:.1} fps, slowest frame {:.0} ms, orbs code {:.3} ms average / {:.3} ms worst, {} initializations",
+                self.frames as f32 / elapsed, self.worst_gap * 1000.0, self.inside * 1000.0 / self.frames as f32,
+                self.worst_inside * 1000.0, self.initializations,
+            );
+            *self = Perf { since: now, last_frame: Some(now), initializations: self.initializations, ..Perf::new() };
+        }
+    }
+
+    fn new() -> Self {
+        Perf { since: Instant::now(), last_frame: None, frames: 0, worst_gap: 0.0, inside: 0.0, worst_inside: 0.0,
+               initializations: 0 }
+    }
 }
 
 impl Orbs {
     fn new() -> Self {
         let folder = dll_folder();
+        start_log(&folder.join("w101_orbs.log"));
         Orbs {
             settings: load_settings(&folder.join("w101_orbs.ini")),
             folder,
@@ -80,6 +120,7 @@ impl Orbs {
             shown: [1.0, 1.0],
             start: Instant::now(),
             error: None,
+            perf: Perf::new(),
         }
     }
 
@@ -102,6 +143,8 @@ impl Orbs {
 
 impl ImguiRenderLoop for Orbs {
     fn initialize<'a>(&'a mut self, ctx: &mut imgui::Context, render: &'a mut dyn RenderContext) {
+        self.perf.initializations += 1;
+        tracing::info!("initialize #{}", self.perf.initializations);
         ctx.set_ini_filename(None);
         ctx.fonts().add_font(&[FontSource::DefaultFontData {
             config: Some(FontConfig { size_pixels: 32.0, ..FontConfig::default() }),
@@ -113,6 +156,14 @@ impl ImguiRenderLoop for Orbs {
     }
 
     fn render(&mut self, ui: &mut imgui::Ui) {
+        let begin = Instant::now();
+        self.draw(ui);
+        self.perf.frame(begin.elapsed().as_secs_f32());
+    }
+}
+
+impl Orbs {
+    fn draw(&mut self, ui: &mut imgui::Ui) {
         // The pattern scan reads the whole executable, so it runs once.
         let game = self.game.get_or_insert_with(game::Game::find);
         if game.is_none() {
@@ -210,6 +261,16 @@ fn number(value: i32, layout: &Layout, origin: [f32; 2], s: f32) {
         let pos = sys::ImVec2 { x: at[0], y: at[1] };
         sys::ImDrawList_AddText_FontPtr(draw, font, size, pos, u32::from(ImColor32::WHITE), begin, end, 0.0, std::ptr::null());
     }
+}
+
+/// Sends hudhook's own messages and ours to `path` (replaced on each launch).
+fn start_log(path: &Path) {
+    let Ok(file) = std::fs::File::create(path) else { return };
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::sync::Mutex::new(file))
+        .with_ansi(false)
+        .with_env_filter(tracing_subscriber::EnvFilter::new("info,hudhook=debug"))
+        .try_init();
 }
 
 fn dll_folder() -> PathBuf {
