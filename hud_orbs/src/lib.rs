@@ -1,0 +1,217 @@
+//! Wizard101 health and mana globes for Elden Ring, drawn over the game with hudhook (Dear ImGui on DirectX 12).
+//!
+//! Loaded by Mod Engine 2 (`external_dlls`). Next to the DLL it expects a `w101_orbs` folder with the globe art
+//! (made by tools/w101_hud_art.py) and optionally `w101_orbs.ini` to move or resize the globes.
+//! The layout is Wizard101's own HUDWindow.gui, in its pixels: the health globe's glass is 128x128 with the liquid
+//! at (15,13)-(104,101); the mana globe is the same art at 62/89 size, offset (72,48) from the health globe.
+
+mod game;
+
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use hudhook::hooks::dx12::ImguiDx12Hooks;
+use hudhook::imgui::{self, DrawListMut, FontConfig, FontSource, ImColor32, TextureId};
+use hudhook::{ImguiRenderLoop, RenderContext};
+
+const LIQUID: [f32; 4] = [15.0, 13.0, 104.0, 101.0];
+const CHOP_WIDTH: f32 = 86.0;
+const CHOP_HEIGHT: f32 = 9.0;
+const MANA_SCALE: f32 = 62.0 / 89.0;
+const MANA_OFFSET: [f32; 2] = [72.0, 48.0];
+const FRAMES_PER_SECOND: f32 = 12.0;
+
+struct Art {
+    back: TextureId,
+    health: TextureId,
+    health_chop: TextureId,
+    mana: TextureId,
+    mana_chop: TextureId,
+}
+
+struct Settings {
+    x: f32,
+    y: f32,
+    scale: f32,
+    debug: bool,
+}
+
+struct Orbs {
+    folder: PathBuf,
+    settings: Settings,
+    art: Option<Art>,
+    game: Option<Option<game::Game>>,
+    shown: [f32; 2],
+    start: Instant,
+    error: Option<String>,
+}
+
+impl Orbs {
+    fn new() -> Self {
+        let folder = dll_folder();
+        Orbs {
+            settings: load_settings(&folder.join("w101_orbs.ini")),
+            folder,
+            art: None,
+            game: None,
+            shown: [1.0, 1.0],
+            start: Instant::now(),
+            error: None,
+        }
+    }
+
+    fn load_art(&self, render: &mut dyn RenderContext) -> Result<Art, String> {
+        let art = self.folder.join("w101_orbs");
+        let mut load = |name: &str| -> Result<TextureId, String> {
+            let path = art.join(format!("{name}.png"));
+            let image = image::open(&path).map_err(|e| format!("{}: {e}", path.display()))?.into_rgba8();
+            render.load_texture(&image, image.width(), image.height()).map_err(|e| format!("{name}: {e:?}"))
+        };
+        Ok(Art {
+            back: load("Health_Back")?,
+            health: load("Health_Liquid")?,
+            health_chop: load("Health_Chop_Anim")?,
+            mana: load("Mana_Liquid")?,
+            mana_chop: load("Mana_Chop_Anim")?,
+        })
+    }
+}
+
+impl ImguiRenderLoop for Orbs {
+    fn initialize<'a>(&'a mut self, ctx: &mut imgui::Context, render: &'a mut dyn RenderContext) {
+        ctx.set_ini_filename(None);
+        ctx.fonts().add_font(&[FontSource::DefaultFontData {
+            config: Some(FontConfig { size_pixels: 32.0, ..FontConfig::default() }),
+        }]);
+        match self.load_art(render) {
+            Ok(art) => self.art = Some(art),
+            Err(e) => self.error = Some(e),
+        }
+    }
+
+    fn render(&mut self, ui: &mut imgui::Ui) {
+        // The pattern scan reads the whole executable, so it runs once.
+        let game = self.game.get_or_insert_with(game::Game::find);
+        if game.is_none() {
+            self.error.get_or_insert_with(|| "Elden Ring's player data wasn't found".into());
+        }
+        let draw = ui.get_background_draw_list();
+        if let Some(error) = &self.error {
+            draw.add_text([20.0, 20.0], ImColor32::from_rgb(255, 80, 80), format!("w101_orbs: {error}"));
+        }
+        let (Some(art), Some(Some(game))) = (&self.art, &self.game) else { return };
+        let Some(stats) = game.stats() else { return };
+
+        let s = self.settings.scale * ui.io().display_size[1] / 768.0;
+        let origin = [self.settings.x, self.settings.y];
+        let frame = (self.start.elapsed().as_secs_f32() * FRAMES_PER_SECOND) as usize % 9;
+        let target = [fraction(stats.hp, stats.max_hp), fraction(stats.fp, stats.max_fp)];
+        // Ease toward the new value so hits drain the globe instead of snapping.
+        for (shown, target) in self.shown.iter_mut().zip(target) {
+            *shown += (target - *shown) * 0.2;
+            if (target - *shown).abs() < 0.002 {
+                *shown = target;
+            }
+        }
+        let mana_origin = [origin[0] + MANA_OFFSET[0] * s, origin[1] + MANA_OFFSET[1] * s];
+        globe(&draw, art.back, art.mana, art.mana_chop, mana_origin, s * MANA_SCALE, self.shown[1], frame);
+        globe(&draw, art.back, art.health, art.health_chop, origin, s, self.shown[0], frame);
+        number(stats.hp, [origin[0] + 59.5 * s, origin[1] + 57.0 * s], s);
+        number(stats.fp, [mana_origin[0] + 59.5 * s * MANA_SCALE, mana_origin[1] + 57.0 * s * MANA_SCALE], s * MANA_SCALE);
+        if self.settings.debug {
+            draw.add_text([20.0, 50.0], ImColor32::WHITE, format!("{stats:?}"));
+        }
+    }
+}
+
+fn fraction(value: i32, max: i32) -> f32 {
+    if max <= 0 { 0.0 } else { (value as f32 / max as f32).clamp(0.0, 1.0) }
+}
+
+/// UV corners of tile `frame` in a 3x3 sprite sheet.
+fn tile(frame: usize) -> ([f32; 2], [f32; 2]) {
+    let (u, v) = ((frame % 3) as f32 / 3.0, (frame / 3) as f32 / 3.0);
+    ([u, v], [u + 1.0 / 3.0, v + 1.0 / 3.0])
+}
+
+/// One globe: the glass, the liquid filled from the bottom to `fill`, and the sloshing surface on top of it.
+#[allow(clippy::too_many_arguments)]
+fn globe(draw: &DrawListMut, back: TextureId, liquid: TextureId, chop: TextureId, at: [f32; 2], s: f32, fill: f32, frame: usize) {
+    let p = |x: f32, y: f32| [at[0] + x * s, at[1] + y * s];
+    draw.add_image(back, p(0.0, 0.0), p(128.0, 128.0)).build();
+    if fill <= 0.0 {
+        return;
+    }
+    let [left, top, right, bottom] = LIQUID;
+    let surface = bottom - (bottom - top) * fill;
+    let (uv0, uv1) = tile(frame);
+    let v = uv1[1] - (uv1[1] - uv0[1]) * fill;
+    draw.add_image(liquid, p(left, surface), p(right, bottom)).uv_min([uv0[0], v]).uv_max(uv1).build();
+    if fill < 0.98 {
+        let (c0, c1) = tile(frame);
+        let middle = (left + right) / 2.0;
+        draw.add_image(chop, p(middle - CHOP_WIDTH / 2.0, surface - CHOP_HEIGHT / 2.0),
+                       p(middle + CHOP_WIDTH / 2.0, surface + CHOP_HEIGHT / 2.0)).uv_min(c0).uv_max(c1).build();
+    }
+}
+
+/// The value in the middle of a globe, white with a dark outline like Wizard101's.
+fn number(value: i32, centre: [f32; 2], s: f32) {
+    use hudhook::imgui::sys;
+    let text = value.to_string();
+    let size = 24.0 * s;
+    unsafe {
+        let draw = sys::igGetBackgroundDrawList();
+        let font = sys::igGetFont();
+        let (begin, end) = (text.as_ptr().cast(), text.as_ptr().add(text.len()).cast());
+        let mut extent = sys::ImVec2 { x: 0.0, y: 0.0 };
+        sys::ImFont_CalcTextSizeA(&mut extent, font, size, f32::MAX, 0.0, begin, end, std::ptr::null_mut());
+        let at = [centre[0] - extent.x / 2.0, centre[1] - extent.y / 2.0];
+        let outline = u32::from(ImColor32::from_rgba(0, 0, 0, 220));
+        for (dx, dy) in [(-1.5, 0.0), (1.5, 0.0), (0.0, -1.5), (0.0, 1.5)] {
+            let pos = sys::ImVec2 { x: at[0] + dx, y: at[1] + dy };
+            sys::ImDrawList_AddText_FontPtr(draw, font, size, pos, outline, begin, end, 0.0, std::ptr::null());
+        }
+        let pos = sys::ImVec2 { x: at[0], y: at[1] };
+        sys::ImDrawList_AddText_FontPtr(draw, font, size, pos, u32::from(ImColor32::WHITE), begin, end, 0.0, std::ptr::null());
+    }
+}
+
+fn dll_folder() -> PathBuf {
+    use windows_sys::Win32::System::LibraryLoader::{
+        GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+    };
+    let mut module = std::ptr::null_mut();
+    let mut buffer = [0u16; 1024];
+    unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            dll_folder as *const u16,
+            &mut module,
+        );
+        let len = GetModuleFileNameW(module, buffer.as_mut_ptr(), buffer.len() as u32) as usize;
+        let path = PathBuf::from(String::from_utf16_lossy(&buffer[..len]));
+        path.parent().map(Path::to_path_buf).unwrap_or_default()
+    }
+}
+
+/// `key = value` lines: x and y (screen pixels of the health globe's top-left), scale (1 = Wizard101's size on a
+/// 768-pixel-tall screen) and debug (1 shows the raw numbers).
+fn load_settings(path: &Path) -> Settings {
+    let mut settings = Settings { x: 40.0, y: 130.0, scale: 1.0, debug: false };
+    for line in std::fs::read_to_string(path).unwrap_or_default().lines() {
+        let Some((key, value)) = line.split_once('=') else { continue };
+        let value = value.trim();
+        match key.trim() {
+            "x" => settings.x = value.parse().unwrap_or(settings.x),
+            "y" => settings.y = value.parse().unwrap_or(settings.y),
+            "scale" => settings.scale = value.parse().unwrap_or(settings.scale),
+            "debug" => settings.debug = value == "1",
+            _ => {}
+        }
+    }
+    settings
+}
+
+hudhook::hudhook!(ImguiDx12Hooks, Orbs::new());

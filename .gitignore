@@ -5,3 +5,4 @@ tools/*/
 *.obj
 *.mtl
 __pycache__/
+hud_orbs/target/

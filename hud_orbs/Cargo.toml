@@ -1,0 +1,16 @@
+[package]
+name = "w101_orbs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+hudhook = "0.9.3"
+image = { version = "0.25", default-features = false, features = ["png"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Memory"] }
+
+[profile.release]
+panic = "abort"
+strip = true
