@@ -23,6 +23,11 @@ FILES = [
     "asset/aeg/aeg096/aeg096_000.geombnd.dcx",
     "asset/aeg/aeg096/aeg096_010.geombnd.dcx",
     "asset/aeg/aeg096/aeg096_101.geombnd.dcx",
+    # Text (place names for the "Unicorn Way" title) and the common events, too big for the cloud's Oodle decoder
+    "msg/engus/item.msgbnd.dcx",
+    "msg/engus/item_dlc02.msgbnd.dcx",
+    "msg/engus/menu.msgbnd.dcx",
+    "event/common_func.emevd.dcx",
 ]
 
 for name in FILES:
