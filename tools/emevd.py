@@ -1,9 +1,8 @@
 """Read Elden Ring event scripts (EMEVD, uncompressed) and insert instructions into them (stdlib only).
 
 Usage: python emevd.py m18_00_00_00.emevd out.emevd
-  closes the Stranded Graveyard exit door (AEG027_002_0504, entity 18001511) on every map load: event 0 starts the
-  door's common event 90005501 with open-flag 18000510, so a SetEventFlag(18000510, OFF) (2003[66]) goes right
-  before it. The output still needs DCX compression (DFLT, as Smithbox saves) to go in the project's event folder.
+  closes the Stranded Graveyard exit door on every map load and every rest (see close_graveyard_door). The output still
+  needs DCX compression (DFLT, as Smithbox saves) to go in the project's event folder.
 """
 import struct
 class Emevd:
@@ -15,12 +14,12 @@ class Emevd:
             eid,ic,io,pc,po,rest,_=struct.unpack_from('<qqqqqII',d,s.eo+k*48)
             ins=[]
             for j in range(ic):
-                o=s.io+io+j*32 if io<s.io else io+j*32
-                bank,iid,al,ao,lo=struct.unpack_from('<iiqqq',d,s.io+(io//1)+j*32) if False else struct.unpack_from('<iiqqq',d,o)
+                o=s.io+io+j*32  # instruction and parameter offsets are relative to their tables
+                bank,iid,al,ao,lo=struct.unpack_from('<iiqqq',d,o)
                 ins.append(dict(off=o,bank=bank,id=iid,args=d[s.argo+ao:s.argo+ao+al],argoff=s.argo+ao,layer=lo))
             pars=[]
             for j in range(pc):
-                pars.append(struct.unpack_from('<qqqii',d,po+j*32 if po>=s.paro else s.paro+po+j*32))
+                pars.append(struct.unpack_from('<qqqii',d,s.paro+po+j*32))
             s.events.append(dict(id=eid,ins=ins,pars=pars,rest=rest,off=s.eo+k*48))
 
 
@@ -57,15 +56,75 @@ def insert_instruction(d, event_index, position, bank, iid, args):
     return bytes(out)
 
 
-DOOR_FLAG = 18000510
+DOOR_FLAGS = (18000510, 18000511)  # the door's open state, and "opened" (set when it was pulled open)
+DOOR_EVENT = 18002990  # new map event, free in m18
+
+
+def _flag_off(flag):
+    return {"bank": 2003, "id": 66, "args": struct.pack("<BxxxIBxxx", 0, flag, 0), "layer": -1}
 
 
 def close_graveyard_door(d):
+    """The Stranded Graveyard exit door (asset 18001510) closed on every load and every rest at a grace.
+
+    Vanilla starts its two common events from event 0 (90005501: shows the saved state) and event 18002510 (90005500:
+    the pull-open interaction). Both move into a new event that restarts on rest and first clears the door flags; the
+    old calls are replaced in place (no lines removed, so no skip counts change)."""
     e = Emevd(d)
-    event0 = e.events[0]
-    at = next(k for k, i in enumerate(event0["ins"])
-              if (i["bank"], i["id"]) == (2000, 6) and struct.unpack_from("<i", i["args"], 8)[0] == DOOR_FLAG)
-    return insert_instruction(d, 0, at, 2003, 66, struct.pack("<BxxxIBxxx", 0, DOOR_FLAG, 0))
+    events = events_of(e)
+    by_id = {ev["id"]: ev for ev in events}
+
+    def take(event_id, common_event, replacement):
+        ins = by_id[event_id]["ins"]
+        k = next(k for k, i in enumerate(ins) if (i["bank"], i["id"]) == (2000, 6)
+                 and struct.unpack_from("<iI", i["args"], 4) == (common_event, DOOR_FLAGS[0]))
+        original, ins[k] = ins[k], replacement
+        return original
+
+    start_ours = {"bank": 2000, "id": 0, "args": struct.pack("<iIi", 0, DOOR_EVENT, 0), "layer": -1}
+    show_state = take(0, 90005501, start_ours)
+    interact = take(18002510, 90005500, _flag_off(DOOR_FLAGS[0]))
+    body = [_flag_off(f) for f in DOOR_FLAGS] + [show_state, interact]
+    events.append({"id": DOOR_EVENT, "rest": 1, "pars": [], "ins": body})  # rest 1 = restart when resting
+    return build(e, events)
+
+
+def build(e, events):
+    """EMEVD bytes from `events` [{id, rest, ins: [{bank, id, args, layer}], pars: [(index, target, source, size, unk)]}]
+    with the header flags, linked files and strings of the parsed file `e` (no layers)."""
+    d = e.d
+    h = list(struct.unpack_from("<16q", d, 0x10))
+    linked, strings = d[h[11]:h[11] + 8 * h[10]], d[h[15]:h[15] + h[14]]
+    n_ins = sum(len(ev["ins"]) for ev in events)
+    events_at = 0x90
+    ins_at = events_at + 48 * len(events)
+    args_at = ins_at + 32 * n_ins
+    table, instr, args, params = bytearray(), bytearray(), bytearray(), bytearray()
+    for ev in events:
+        table += struct.pack("<qqqqqII", ev["id"], len(ev["ins"]), len(instr), len(ev["pars"]),
+                             len(params) if ev["pars"] else -1, ev["rest"], 0)
+        for i in ev["ins"]:
+            instr += struct.pack("<iiqqq", i["bank"], i["id"], len(i["args"]), len(args) if i["args"] else -1, i["layer"])
+            args += i["args"] + b"\0" * ((-len(i["args"])) % 4)
+        for p in ev["pars"]:
+            params += struct.pack("<qqqii", *p)
+    args += b"\0" * ((-len(args)) % 16)
+    args_len = len(args)  # the game's own files count the padding
+    params_at = args_at + len(args)
+    linked_at = params_at + len(params)
+    strings_at = linked_at + len(linked)
+    out = bytearray(d[:0x90]) + table + instr + args + params + linked + strings
+    h[0:4] = [len(events), events_at, n_ins, ins_at]
+    h[5] = h[7] = h[13] = args_at
+    h[8], h[9], h[11], h[12], h[15] = sum(len(ev["pars"]) for ev in events), params_at, linked_at, args_len, strings_at
+    struct.pack_into("<16q", out, 0x10, *h)
+    struct.pack_into("<I", out, 0x0C, len(out))
+    return bytes(out)
+
+
+def events_of(e):
+    return [{"id": ev["id"], "rest": ev["rest"], "pars": [tuple(p) for p in ev["pars"]],
+             "ins": [{k: i[k] for k in ("bank", "id", "args", "layer")} for i in ev["ins"]]} for ev in e.events]
 
 
 if __name__ == "__main__":
