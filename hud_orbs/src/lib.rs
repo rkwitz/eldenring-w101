@@ -2,8 +2,9 @@
 //!
 //! Loaded by Mod Engine 2 (`external_dlls`). Next to the DLL it expects a `w101_orbs` folder with the globe art
 //! (made by tools/w101_hud_art.py) and optionally `w101_orbs.ini` to move or resize the globes.
-//! The layout is Wizard101's own HUDWindow.gui, in its pixels: the health globe's glass is 128x128 with the liquid
-//! at (15,13)-(104,101); the mana globe is the same art at 62/89 size, offset (72,48) from the health globe.
+//! The layout is Wizard101's own HUDWindow.gui, in its pixels on a 768-pixel-tall screen: each globe's glass is
+//! Health_Back stretched over the globe's window, with the liquid, its surface and the number at fixed spots inside
+//! it. Like Wizard101, the globes sit in the bottom-left corner.
 
 mod game;
 
@@ -14,12 +15,34 @@ use hudhook::hooks::dx12::ImguiDx12Hooks;
 use hudhook::imgui::{self, DrawListMut, FontConfig, FontSource, ImColor32, TextureId};
 use hudhook::{ImguiRenderLoop, RenderContext};
 
-const LIQUID: [f32; 4] = [15.0, 13.0, 104.0, 101.0];
-const CHOP_WIDTH: f32 = 86.0;
-const CHOP_HEIGHT: f32 = 9.0;
-const MANA_SCALE: f32 = 62.0 / 89.0;
-const MANA_OFFSET: [f32; 2] = [72.0, 48.0];
 const FRAMES_PER_SECOND: f32 = 12.0;
+/// Bottom edge of the lower (mana) globe on Wizard101's 768-pixel-tall screen.
+const BOTTOM: f32 = 722.0;
+
+/// One globe from HUDWindow.gui. `window` is in screen pixels, the rest is relative to it.
+struct Layout {
+    window: [f32; 4],
+    liquid: [f32; 4],
+    chop: [f32; 2],
+    text: [f32; 2],
+    text_size: f32,
+}
+
+const HEALTH: Layout = Layout {
+    window: [0.0, 570.0, 118.0, 718.0],    // spriteHealthBkg
+    liquid: [15.0, 13.0, 104.0, 101.0],    // progressHealthSolid
+    chop: [86.0, 9.0],                     // spriteHealthChop (16,52)-(102,61), moved to the surface
+    text: [59.5, 57.0],                    // textHealth, centred in HealthGlobeRect
+    text_size: 24.0,                       // WizardFancy at 0.7
+};
+
+const MANA: Layout = Layout {
+    window: [72.0, 618.0, 156.0, 722.0],   // spriteManaBkg
+    liquid: [11.0, 9.0, 73.0, 71.0],       // progressManaSolid
+    chop: [60.0, 7.0],                     // spriteManaChop (12,36)-(72,43)
+    text: [42.0, 40.0],                    // textMana, centred in ManaGlobeRect
+    text_size: 24.0 * 0.642857 / 0.7,      // WizardFancy at 0.642857
+};
 
 struct Art {
     back: TextureId,
@@ -30,8 +53,8 @@ struct Art {
 }
 
 struct Settings {
-    x: f32,
-    y: f32,
+    left: f32,
+    bottom: f32,
     scale: f32,
     debug: bool,
 }
@@ -102,8 +125,10 @@ impl ImguiRenderLoop for Orbs {
         let (Some(art), Some(Some(game))) = (&self.art, &self.game) else { return };
         let Some(stats) = game.stats() else { return };
 
-        let s = self.settings.scale * ui.io().display_size[1] / 768.0;
-        let origin = [self.settings.x, self.settings.y];
+        let height = ui.io().display_size[1];
+        let s = self.settings.scale * height / 768.0;
+        // Screen position of Wizard101's (0, 0), so that its bottom-left corner lands `left`, `bottom` from ours.
+        let origin = [self.settings.left * s, height - (BOTTOM + self.settings.bottom) * s];
         let frame = (self.start.elapsed().as_secs_f32() * FRAMES_PER_SECOND) as usize % 9;
         let target = [fraction(stats.hp, stats.max_hp), fraction(stats.fp, stats.max_fp)];
         // Ease toward the new value so hits drain the globe instead of snapping.
@@ -113,11 +138,11 @@ impl ImguiRenderLoop for Orbs {
                 *shown = target;
             }
         }
-        let mana_origin = [origin[0] + MANA_OFFSET[0] * s, origin[1] + MANA_OFFSET[1] * s];
-        globe(&draw, art.back, art.mana, art.mana_chop, mana_origin, s * MANA_SCALE, self.shown[1], frame);
-        globe(&draw, art.back, art.health, art.health_chop, origin, s, self.shown[0], frame);
-        number(stats.hp, [origin[0] + 59.5 * s, origin[1] + 57.0 * s], s);
-        number(stats.fp, [mana_origin[0] + 59.5 * s * MANA_SCALE, mana_origin[1] + 57.0 * s * MANA_SCALE], s * MANA_SCALE);
+        // Same order as HUDWindow.gui, so the mana globe sits in front of the health globe.
+        globe(&draw, &HEALTH, art.back, art.health, art.health_chop, origin, s, self.shown[0], frame);
+        globe(&draw, &MANA, art.back, art.mana, art.mana_chop, origin, s, self.shown[1], frame);
+        number(stats.hp, &HEALTH, origin, s);
+        number(stats.fp, &MANA, origin, s);
         if self.settings.debug {
             draw.add_text([20.0, 50.0], ImColor32::WHITE, format!("{stats:?}"));
         }
@@ -134,15 +159,19 @@ fn tile(frame: usize) -> ([f32; 2], [f32; 2]) {
     ([u, v], [u + 1.0 / 3.0, v + 1.0 / 3.0])
 }
 
-/// One globe: the glass, the liquid filled from the bottom to `fill`, and the sloshing surface on top of it.
+/// One globe: the glass, the liquid filled from the bottom to `fill` (Wizard101's PROGRESS_UV: the bottom of the
+/// frame is shown, not squashed), and the sloshing surface on top of it.
 #[allow(clippy::too_many_arguments)]
-fn globe(draw: &DrawListMut, back: TextureId, liquid: TextureId, chop: TextureId, at: [f32; 2], s: f32, fill: f32, frame: usize) {
-    let p = |x: f32, y: f32| [at[0] + x * s, at[1] + y * s];
-    draw.add_image(back, p(0.0, 0.0), p(128.0, 128.0)).build();
+fn globe(draw: &DrawListMut, layout: &Layout, back: TextureId, liquid: TextureId, chop: TextureId, origin: [f32; 2],
+         s: f32, fill: f32, frame: usize) {
+    let [x0, y0, x1, y1] = layout.window;
+    let p = |x: f32, y: f32| [origin[0] + (x0 + x) * s, origin[1] + (y0 + y) * s];
+    draw.add_image(back, p(0.0, 0.0), p(x1 - x0, y1 - y0)).build();
     if fill <= 0.0 {
         return;
     }
-    let [left, top, right, bottom] = LIQUID;
+    let [left, top, right, bottom] = layout.liquid;
+    let [chop_width, chop_height] = layout.chop;
     let surface = bottom - (bottom - top) * fill;
     let (uv0, uv1) = tile(frame);
     let v = uv1[1] - (uv1[1] - uv0[1]) * fill;
@@ -150,16 +179,19 @@ fn globe(draw: &DrawListMut, back: TextureId, liquid: TextureId, chop: TextureId
     if fill < 0.98 {
         let (c0, c1) = tile(frame);
         let middle = (left + right) / 2.0;
-        draw.add_image(chop, p(middle - CHOP_WIDTH / 2.0, surface - CHOP_HEIGHT / 2.0),
-                       p(middle + CHOP_WIDTH / 2.0, surface + CHOP_HEIGHT / 2.0)).uv_min(c0).uv_max(c1).build();
+        // The liquid is a sphere, so the surface narrows toward the top and bottom.
+        let chop_width = chop_width * (1.0 - (2.0 * fill - 1.0).powi(2)).sqrt().max(0.25);
+        draw.add_image(chop, p(middle - chop_width / 2.0, surface - chop_height / 2.0),
+                       p(middle + chop_width / 2.0, surface + chop_height / 2.0)).uv_min(c0).uv_max(c1).build();
     }
 }
 
 /// The value in the middle of a globe, white with a dark outline like Wizard101's.
-fn number(value: i32, centre: [f32; 2], s: f32) {
+fn number(value: i32, layout: &Layout, origin: [f32; 2], s: f32) {
     use hudhook::imgui::sys;
     let text = value.to_string();
-    let size = 24.0 * s;
+    let size = layout.text_size * s;
+    let centre = [origin[0] + (layout.window[0] + layout.text[0]) * s, origin[1] + (layout.window[1] + layout.text[1]) * s];
     unsafe {
         let draw = sys::igGetBackgroundDrawList();
         let font = sys::igGetFont();
@@ -196,16 +228,17 @@ fn dll_folder() -> PathBuf {
     }
 }
 
-/// `key = value` lines: x and y (screen pixels of the health globe's top-left), scale (1 = Wizard101's size on a
-/// 768-pixel-tall screen) and debug (1 shows the raw numbers).
+/// `key = value` lines: left and bottom (extra gap from the screen's bottom-left corner, in Wizard101 pixels; 0 is
+/// exactly where Wizard101 puts the globes), scale (1 = Wizard101's size on a 768-pixel-tall screen) and debug (1
+/// shows the raw numbers).
 fn load_settings(path: &Path) -> Settings {
-    let mut settings = Settings { x: 40.0, y: 130.0, scale: 1.0, debug: false };
+    let mut settings = Settings { left: 0.0, bottom: 0.0, scale: 1.0, debug: false };
     for line in std::fs::read_to_string(path).unwrap_or_default().lines() {
         let Some((key, value)) = line.split_once('=') else { continue };
         let value = value.trim();
         match key.trim() {
-            "x" => settings.x = value.parse().unwrap_or(settings.x),
-            "y" => settings.y = value.parse().unwrap_or(settings.y),
+            "left" => settings.left = value.parse().unwrap_or(settings.left),
+            "bottom" => settings.bottom = value.parse().unwrap_or(settings.bottom),
             "scale" => settings.scale = value.parse().unwrap_or(settings.scale),
             "debug" => settings.debug = value == "1",
             _ => {}

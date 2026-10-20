@@ -2,7 +2,7 @@
 //!
 //! The game's globals are found by byte pattern (the same patterns community tools use), so small patches don't
 //! break them. The live values come from the player character (WorldChrMan -> player -> stat module); the save's
-//! copy in PlayerGameData is the fallback when those offsets look wrong.
+//! copy in PlayerGameData is the fallback when those offsets look wrong. Without a player character there are none.
 
 use std::mem::size_of;
 
@@ -44,8 +44,21 @@ impl Game {
         })
     }
 
-    /// Current stats, or None while no character is loaded (title screen, loading screens).
+    /// Current stats, or None while no character is loaded (title screen, loading screens): the player character
+    /// has to exist in the world. Its own stat module gives the live values; the save's copy is the fallback if
+    /// those offsets ever look wrong.
     pub fn stats(&self) -> Option<Stats> {
+        let player = read::<usize>(self.world_chr_man).and_then(|wcm| read::<usize>(wcm + PLAYER))?;
+        let live = read::<usize>(player + MODULES)
+            .and_then(|modules| read::<usize>(modules))
+            .and_then(|stat| {
+                Some(Stats {
+                    hp: read(stat + STAT_HP)?,
+                    max_hp: read(stat + STAT_HP + 4)?,
+                    fp: read(stat + STAT_FP)?,
+                    max_fp: read(stat + STAT_FP + 4)?,
+                })
+            });
         let saved = read::<usize>(self.game_data_man)
             .and_then(|gdm| read::<usize>(gdm + PLAYER_GAME_DATA))
             .and_then(|pgd| {
@@ -56,24 +69,7 @@ impl Game {
                     max_fp: read(pgd + 0x20)?,
                 })
             });
-        let live = read::<usize>(self.world_chr_man)
-            .and_then(|wcm| read::<usize>(wcm + PLAYER))
-            .and_then(|player| read::<usize>(player + MODULES))
-            .and_then(|modules| read::<usize>(modules))
-            .and_then(|stat| {
-                Some(Stats {
-                    hp: read(stat + STAT_HP)?,
-                    max_hp: read(stat + STAT_HP + 4)?,
-                    fp: read(stat + STAT_FP)?,
-                    max_fp: read(stat + STAT_FP + 4)?,
-                })
-            });
-        match (live, saved) {
-            (Some(live), Some(saved)) if live.max_hp == saved.max_hp && plausible(&live) => Some(live),
-            (Some(live), None) if plausible(&live) => Some(live),
-            (_, Some(saved)) if plausible(&saved) => Some(saved),
-            _ => None,
-        }
+        live.filter(plausible).or(saved.filter(plausible))
     }
 }
 
