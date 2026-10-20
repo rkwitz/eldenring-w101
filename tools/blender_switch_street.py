@@ -45,8 +45,11 @@ VANILLA = GAME / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx"
 GAME_COLLISION = GAME / "aeg" / "aeg030" / COLLISION.name
 AET_TEMPLATE = GAME / "aet" / "aet030" / "aet030_000.tpf.dcx"  # for its DCX type
 CLASSIC = ROOT / "reference" / "w101" / "converted_classic"
-OBJ = CLASSIC / "WC_Z06_Unicorn_Way_Classic.obj"
-MTL = CLASSIC / "WC_Z06_Unicorn_Way_Classic.mtl"
+# Your own edit of the classic street, exported from Blender (File > Export > Wavefront OBJ, default axes, with UVs
+# and materials) under this name, is used instead of the converted original when it exists.
+EDITED = CLASSIC / "WC_Z06_Unicorn_Way_Classic_edited.obj"
+OBJ = EDITED if EDITED.exists() else CLASSIC / "WC_Z06_Unicorn_Way_Classic.obj"
+MTL = OBJ.with_suffix(".mtl")
 OUTPUTS = [GEOMBND, COLLISION, *TEXTURES]
 
 
@@ -71,6 +74,7 @@ def build_classic():
 
     template = flver_fix.flver_in_binder(SINGLE_MESH)
     vanilla = flver_fix.flver_in_binder(VANILLA)
+    print(f"Building from {OBJ.name}")
     positions, uvs, faces = flver_build.parse_obj(OBJ)
     walls = [f for f in faces if backdrop(positions, f)]
     faces = [f for f in faces if not backdrop(positions, f)]
