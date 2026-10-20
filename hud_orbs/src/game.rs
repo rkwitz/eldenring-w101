@@ -6,7 +6,9 @@
 
 use std::mem::size_of;
 
+use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::Win32::System::Memory::{
     VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_GUARD, PAGE_NOACCESS,
 };
@@ -84,25 +86,38 @@ pub fn hud_shown() -> bool {
         == Some(DEFAULT)
 }
 
+/// How far the game has faded the screen out (0 = clear, 1 = covered), the most opaque of its fade plates. Loading
+/// screens and cutscene transitions fade out first, so the globes go with them.
+pub fn faded() -> f32 {
+    let Some(fade) = from_singleton::static_of::<eldenring::cs::CSFade>() else { return 0.0 };
+    let Some(fade) = read::<usize>(fade.as_ptr() as usize) else { return 0.0 };
+    let plates = fade + std::mem::offset_of!(eldenring::cs::CSFade, fade_plates);
+    let alpha = std::mem::offset_of!(eldenring::cs::CSFD4FadePlate, current_color) + 12;
+    (0..9)
+        .filter_map(|i| read::<usize>(plates + 8 * i).and_then(|plate| read::<f32>(plate + alpha)))
+        .filter(|a| a.is_finite())
+        .fold(0.0, f32::max)
+        .clamp(0.0, 1.0)
+}
+
 fn plausible(s: &Stats) -> bool {
     (1..100_000).contains(&s.max_hp) && (0..=s.max_hp).contains(&s.hp) && (0..100_000).contains(&s.max_fp)
         && (0..=s.max_fp.max(0)).contains(&s.fp)
 }
 
-/// Reads a value only if its memory is committed and readable, so a stale pointer can't crash the game.
+/// Reads a value without crashing on a stale pointer: ReadProcessMemory on our own process fails cleanly when the
+/// memory isn't readable. (VirtualQuery did the same job but walks the page tables of the whole region, which in
+/// Elden Ring's multi-gigabyte heaps took several milliseconds per call and dropped the game to a few fps.)
 fn read<T: Copy>(address: usize) -> Option<T> {
     if address < 0x10000 {
         return None;
     }
-    let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
-    let got = unsafe { VirtualQuery(address as _, &mut info, size_of::<MEMORY_BASIC_INFORMATION>()) };
-    let end = info.BaseAddress as usize + info.RegionSize;
-    if got == 0 || info.State != MEM_COMMIT || info.Protect & (PAGE_NOACCESS | PAGE_GUARD) != 0
-        || address + size_of::<T>() > end
-    {
-        return None;
-    }
-    Some(unsafe { std::ptr::read_unaligned(address as *const T) })
+    let mut value = std::mem::MaybeUninit::<T>::uninit();
+    let mut got = 0;
+    let ok = unsafe {
+        ReadProcessMemory(GetCurrentProcess(), address as _, value.as_mut_ptr().cast(), size_of::<T>(), &mut got)
+    };
+    (ok != 0 && got == size_of::<T>()).then(|| unsafe { value.assume_init() })
 }
 
 /// (start, length) of each executable section of the module at `base`.
