@@ -12,6 +12,7 @@ Console. Building the collision takes about a minute. Relaunch the game afterwar
 """
 
 import importlib
+import re
 import shutil
 import sys
 import time
@@ -93,6 +94,16 @@ def build_classic():
     print(f"Left out {len(walls)} triangles of the zone's backdrop walls and {len(tunnel)} inside the Commons archway")
     single, materials = flver_build.build_single_mesh(template, positions, uvs, faces)
     texture_of_material = flver_textures.parse_mtl(MTL)
+    if OBJ == EDITED:
+        # Blender may drop a texture it couldn't load or rename a material "name.001"; the original MTL fills in.
+        original = flver_textures.parse_mtl(CLASSIC / "WC_Z06_Unicorn_Way_Classic.mtl")
+        for name in {m for m, _ in faces} - set(texture_of_material):
+            base = re.sub(r"\.\d+$", "", name or "")
+            if base in original:
+                texture_of_material[name] = original[base]
+        missing = {m for m, _ in faces} - set(texture_of_material)
+        if missing:
+            print(f"No texture for {len(missing)} materials of your edit: {sorted(m or '' for m in missing)[:5]}")
     stems = sorted(set(texture_of_material.values()))
     dds = [(CLASSIC / "textures" / f"{stem}.dds").read_bytes() for stem in stems]
     alpha = {i for i, data in enumerate(dds) if tpf.has_alpha(data)}
