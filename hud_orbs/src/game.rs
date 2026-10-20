@@ -73,6 +73,17 @@ impl Game {
     }
 }
 
+/// Whether Elden Ring is showing its own HP/FP bars right now. The front-end manager (CSFeMan, found by name through
+/// the game's reflection data, so patches don't move it) switches its HUD state away from "default" while a menu,
+/// the map or a loading screen is up. If CSFeMan can't be found at all, the globes stay on.
+pub fn hud_shown() -> bool {
+    const DEFAULT: u8 = 3; // CSFeManHudState::Default
+    let Some(fe_man) = from_singleton::static_of::<eldenring::cs::CSFeManImp>() else { return true };
+    read::<usize>(fe_man.as_ptr() as usize)
+        .and_then(|fe| read::<u8>(fe + std::mem::offset_of!(eldenring::cs::CSFeManImp, hud_state)))
+        == Some(DEFAULT)
+}
+
 fn plausible(s: &Stats) -> bool {
     (1..100_000).contains(&s.max_hp) && (0..=s.max_hp).contains(&s.hp) && (0..100_000).contains(&s.max_fp)
         && (0..=s.max_fp.max(0)).contains(&s.fp)

@@ -123,6 +123,9 @@ impl ImguiRenderLoop for Orbs {
             draw.add_text([20.0, 20.0], ImColor32::from_rgb(255, 80, 80), format!("w101_orbs: {error}"));
         }
         let (Some(art), Some(Some(game))) = (&self.art, &self.game) else { return };
+        if !game::hud_shown() {
+            return;
+        }
         let Some(stats) = game.stats() else { return };
 
         let height = ui.io().display_size[1];

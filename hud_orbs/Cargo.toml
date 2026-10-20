@@ -7,6 +7,8 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
+eldenring = "0.14.0"
+from-singleton = "3.0.1"
 hudhook = "0.9.3"
 image = { version = "0.25", default-features = false, features = ["png"] }
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Memory"] }
