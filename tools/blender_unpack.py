@@ -19,6 +19,10 @@ FILES = [
     "map/mapstudio/m60_42_35_00.msb.dcx",
     "map/mapstudio/m60_43_36_00.msb.dcx",
     "map/mapstudio/m18_00_00_00.msb.dcx",
+    # Elden Ring sky domes, as templates for the Wizard101 sky
+    "asset/aeg/aeg096/aeg096_000.geombnd.dcx",
+    "asset/aeg/aeg096/aeg096_010.geombnd.dcx",
+    "asset/aeg/aeg096/aeg096_101.geombnd.dcx",
 ]
 
 for name in FILES:

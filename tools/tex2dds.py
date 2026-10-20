@@ -46,7 +46,7 @@ def dds_header(pixel_format, bpp, mips):
         pitch = max(1, (width + 3) // 4) * max(1, (height + 3) // 4) * block
         pf = struct.pack("<II4sIIIII", 32, 0x4, FOURCC[pixel_format], 0, 0, 0, 0, 0)
         flags |= 0x80000
-    elif pixel_format == 1 and bpp in (0, 32):
+    elif pixel_format == 1 and bpp in (0, 4, 32):  # bits or bytes per pixel, depending on the exporter
         pitch = width * 4
         pf = struct.pack("<II4sIIIII", 32, 0x41, b"\0\0\0\0", 32, 0xFF, 0xFF00, 0xFF0000, 0xFF000000)
         flags |= 0x8
