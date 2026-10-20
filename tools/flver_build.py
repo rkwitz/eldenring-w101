@@ -86,9 +86,10 @@ def _encoder(template):
     return encode, size
 
 
-def build_single_mesh(template, positions, uvs, faces):
+def build_single_mesh(template, positions, uvs, faces, fixed_normal=None):
     """(FLVER bytes, [material of each triangle]) for OBJ data from parse_obj. `template` is a single-mesh FLVER
-    in the layout above; its header, sections, material and bone are kept, its vertices and indices replaced."""
+    in the layout above; its header, sections, material and bone are kept, its vertices and indices replaced.
+    `fixed_normal` gives every vertex that normal instead of its face's (the sky dome is lit evenly that way)."""
     encode, vertex_size = _encoder(template)
     vertices, materials = bytearray(), []
     lo, hi = [math.inf] * 3, [-math.inf] * 3
@@ -101,6 +102,7 @@ def build_single_mesh(template, positions, uvs, faces):
         normal = _normalize(tuple(-x for x in cross))
         if normal is None:
             continue  # degenerate triangle
+        normal = fixed_normal or normal
         tex = [(uvs[t][0], 1.0 - uvs[t][1]) if t is not None else (0.0, 0.0) for _, t in corners]
         # Shorts only reach +-16: move each triangle's UVs by whole tiles, which repeating textures don't notice.
         shift = [math.floor(sum(uv[k] for uv in tex) / 3) for k in range(2)]
