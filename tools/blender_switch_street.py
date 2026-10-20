@@ -50,6 +50,15 @@ MTL = CLASSIC / "WC_Z06_Unicorn_Way_Classic.mtl"
 OUTPUTS = [GEOMBND, COLLISION, *TEXTURES]
 
 
+def backdrop(positions, face):
+    """The classic zone hides its edges behind flat, untextured boards that run from y -5 to 22.27 (27 m tall): in
+    Elden Ring they show as grey walls around the street, and their collision blocks the way, so they are left out."""
+    points = [positions[v] for v, _ in face[1]]
+    ys = [p[1] for p in points]
+    flat = len({round(p[0], 2) for p in points}) == 1 or len({round(p[2], 2) for p in points}) == 1
+    return flat and min(ys) < -4.9 and max(ys) > 22.2
+
+
 def hd_copy(path):
     return path.with_name(path.name + ".hd")
 
@@ -63,6 +72,9 @@ def build_classic():
     template = flver_fix.flver_in_binder(SINGLE_MESH)
     vanilla = flver_fix.flver_in_binder(VANILLA)
     positions, uvs, faces = flver_build.parse_obj(OBJ)
+    walls = [f for f in faces if backdrop(positions, f)]
+    faces = [f for f in faces if not backdrop(positions, f)]
+    print(f"Left out {len(walls)} triangles of the zone's backdrop walls")
     single, materials = flver_build.build_single_mesh(template, positions, uvs, faces)
     texture_of_material = flver_textures.parse_mtl(MTL)
     stems = sorted(set(texture_of_material.values()))
