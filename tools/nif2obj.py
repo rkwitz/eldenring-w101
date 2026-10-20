@@ -60,6 +60,17 @@ def read_stream(ref):
     return values
 
 
+def tri_shape(shape):
+    """(positions, [(index,)...], uvs) of a NiTriShape, in the same form read_stream gives for NiMesh."""
+    data = shape.data
+    if data is None or not data.has_vertices:
+        return None, None, None
+    pos = [(v.x, v.y, v.z) for v in data.vertices]
+    idx = [(i,) for t in data.triangles for i in (t.v_1, t.v_2, t.v_3)]
+    uv = [(c.u, c.v) for c in data.uv_sets[0]] if data.num_uv_sets or getattr(data, "has_uv", False) else None
+    return pos, idx, uv
+
+
 def texture_name(mesh):
     for prop in list(getattr(mesh, "properties", [])):
         if isinstance(prop, NifFormat.NiTexturingProperty) and prop.has_base_texture:
@@ -71,7 +82,7 @@ def texture_name(mesh):
 
 def walk(node, parent_matrix, out):
     matrix = mat_mul(local_matrix(node), parent_matrix)
-    if isinstance(node, NifFormat.NiMesh):
+    if isinstance(node, (NifFormat.NiMesh, NifFormat.NiTriShape)):
         out.append((node, matrix))
     for child in getattr(node, "children", []) or []:
         if child is not None:
@@ -95,18 +106,20 @@ def convert(src, dst, scale=0.01):
         obj.write(f"mtllib {mtl_path.name}\n")
         v_base = vt_base = 1
         for mesh, matrix in meshes:
-            if int(mesh.primitive_type) != 0:  # triangles only
+            if isinstance(mesh, NifFormat.NiTriShape):  # older Gamebryo geometry (Classic Mode zones)
+                pos, idx, uv = tri_shape(mesh)
+            elif int(mesh.primitive_type) != 0:  # triangles only
                 skipped += 1
                 continue
-            streams = {}
-            for ref in mesh.datas:
-                sem = ref.component_semantics[0].name.decode()
-                streams.setdefault(sem, read_stream(ref))
-            pos, idx = streams.get("POSITION"), streams.get("INDEX")
+            else:
+                streams = {}
+                for ref in mesh.datas:
+                    sem = ref.component_semantics[0].name.decode()
+                    streams.setdefault(sem, read_stream(ref))
+                pos, idx, uv = streams.get("POSITION"), streams.get("INDEX"), streams.get("TEXCOORD")
             if not pos or not idx:
                 skipped += 1
                 continue
-            uv = streams.get("TEXCOORD")
             name = mesh.name.decode(errors="replace") or f"mesh{exported}"
             obj.write(f"o {name}\n")
             for p in pos:
