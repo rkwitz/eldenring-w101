@@ -86,8 +86,10 @@ def build_classic():
     print(f"Building from {OBJ.name}")
     positions, uvs, faces = flver_build.parse_obj(OBJ)
     walls = [f for f in faces if backdrop(positions, f)]
-    tunnel = [f for f in faces if tunnel_inside(positions, f)]
-    faces = [f for f in faces if not backdrop(positions, f) and not tunnel_inside(positions, f)]
+    # Your own edit decides for itself what's left of the archway; only the converted original gets it cut.
+    cut = (lambda f: False) if OBJ == EDITED else (lambda f: tunnel_inside(positions, f))
+    tunnel = [f for f in faces if cut(f)]
+    faces = [f for f in faces if not backdrop(positions, f) and not cut(f)]
     print(f"Left out {len(walls)} triangles of the zone's backdrop walls and {len(tunnel)} inside the Commons archway")
     single, materials = flver_build.build_single_mesh(template, positions, uvs, faces)
     texture_of_material = flver_textures.parse_mtl(MTL)
