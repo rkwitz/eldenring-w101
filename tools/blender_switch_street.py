@@ -23,6 +23,7 @@ from soulstruct.dcx import compress, decompress
 
 ROOT = Path.home() / "Documents" / "game_modding"
 sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
+import dds_color  # noqa: E402
 import flver_build  # noqa: E402
 import flver_fix  # noqa: E402
 import flver_floor  # noqa: E402
@@ -31,10 +32,14 @@ import hkx_collision  # noqa: E402
 import hkx_tag  # noqa: E402
 import tpf  # noqa: E402
 
-for module in (flver_fix, flver_build, flver_floor, flver_textures, hkx_tag, hkx_collision, tpf):
+for module in (dds_color, flver_fix, flver_build, flver_floor, flver_textures, hkx_tag, hkx_collision, tpf):
     importlib.reload(module)
 
 STYLE = "classic"  # "classic" or "hd"
+# W101's colours look muted under Elden Ring's lighting: the classic textures are made this much more saturated and
+# brighter (1.0 and 1.0 keep them as they are). See dds_color.py.
+SATURATION = 1.3
+BRIGHTNESS = 1.1
 
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset"
 GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset")
@@ -105,7 +110,8 @@ def build_classic():
         if missing:
             print(f"No texture for {len(missing)} materials of your edit: {sorted(m or '' for m in missing)[:5]}")
     stems = sorted(set(texture_of_material.values()))
-    dds = [(CLASSIC / "textures" / f"{stem}.dds").read_bytes() for stem in stems]
+    dds = [dds_color.boost((CLASSIC / "textures" / f"{stem}.dds").read_bytes(), SATURATION, BRIGHTNESS)
+           for stem in stems]
     alpha = {i for i, data in enumerate(dds) if tpf.has_alpha(data)}
     face_textures = [stems.index(texture_of_material[m]) if m in texture_of_material else None for m in materials]
     split = flver_textures.split_materials(single, vanilla, face_textures, stems, alpha)
