@@ -89,6 +89,18 @@ def close_graveyard_door(d):
     return build(e, events)
 
 
+def reset_flags_on_load(d, event_id, flags):
+    """A new event `event_id` that turns `flags` off on every map load and every rest at a grace (restart on rest),
+    started from the top of event 0 so no skip counts change. Used for the Stranded Graveyard exit door: the lift-up
+    door AEG110_064_1000 in m60_42_36_00 is an ObjAct whose opened state is event flag 1042368540."""
+    e = Emevd(d)
+    events = events_of(e)
+    start = {"bank": 2000, "id": 0, "args": struct.pack("<iIi", 0, event_id, 0), "layer": -1}
+    next(ev for ev in events if ev["id"] == 0)["ins"].insert(0, start)
+    events.append({"id": event_id, "rest": 1, "pars": [], "ins": [_flag_off(f) for f in flags]})
+    return build(e, events)
+
+
 def build(e, events):
     """EMEVD bytes from `events` [{id, rest, ins: [{bank, id, args, layer}], pars: [(index, target, source, size, unk)]}]
     with the header flags, linked files and strings of the parsed file `e` (no layers)."""
