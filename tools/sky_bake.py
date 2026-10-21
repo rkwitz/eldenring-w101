@@ -12,9 +12,8 @@ How Wizard101 draws it (zone gamedata.bin lists Skyboxes/HD_WC_Hub_Skybox_01_Lay
 
 Elden Ring can't attach an asset to the camera, and our lit asset material can't scroll UVs, so `bake` renders what
 the Wizard101 camera sees in every direction (layer 1, then layer 2's clouds over it, frozen at time 0) into one opaque
-texture indexed by direction (U = azimuth, V = elevation), and `dome` builds a big smooth ellipsoid whose UVs are its
-own directions from its centre. From the centre it looks exactly like Wizard101's sky; elsewhere the 12 flat panels no
-longer show, because the dome is smooth and far away.
+texture indexed by direction (U = azimuth, V = elevation), and `dome` builds a closed surface (shaped by `hull` to wrap the zone tightly) whose UVs are its
+own directions from its centre. From the centre it looks exactly like Wizard101's sky, and the 12 flat panels are gone.
 """
 
 import math
@@ -22,12 +21,12 @@ import struct
 
 import numpy as np
 
-# Dome size and place, in the classic street OBJ's coordinates (WC_Z06_Unicorn_Way_Classic.obj, metres, y up), from
-# `dome_placement`: centred on the middle of the zone (5-95 percentile box of its vertices) at eye height, big enough to
-# hold every vertex of the zone, including the giant backdrop trees and towers up to ~560 m away.
+# Dome centre in the street OBJ's coordinates (metres, y up): the middle of the zone (5-95 percentile box of the classic
+# OBJ's vertices) at eye height. The dome's shape comes from `hull`: in each direction it sits just beyond the farthest
+# Wizard101 geometry, so it hides Elden Ring's land outside the zone but keeps the backdrop trees and towers.
 CENTRE = (-115.9, 2.0, -105.8)
-RADIUS = 650.0  # horizontal
-HEIGHT = 390.0  # vertical half axis (a flattened dome keeps the overhead sky nearer, so Elden Ring's fog tints it less)
+SEGMENTS, RINGS = 120, 72  # dome grid: 3 degrees around, 2.5 degrees up
+MINIMUM = (150.0, 450.0)  # dome radius where no Wizard101 geometry is near: at/below 5 degrees up, at/above 35 degrees
 
 WIDTH, ROWS = 1024, 512  # baked texture: 1024 = the Wizard101 sky texture's own width for the full turn
 ELEV_TOP, ELEV_BOTTOM = 90.0, -30.0  # elevations covered by the texture's rows; the dome below uses the last row
@@ -224,10 +223,68 @@ def dxt1_dds(rgb):
     return header + pixel_format + struct.pack("<5I", 0x401008, 0, 0, 0, 0) + bytes(data)
 
 
-def dome(centre=CENTRE, radius=RADIUS, height=HEIGHT, segments=96, rings=48):
-    """(positions, uvs, faces) of the sky dome in OBJ conventions, as flver_build.parse_obj returns them: an
-    ellipsoid around `centre` with each vertex's UV taken from its direction from the centre (see `directions`), and
-    every triangle facing the centre. Material None."""
+def zone_points(obj_path, spacing=4.0):
+    """Points (n, 3) covering a zone OBJ's surface: its vertices plus a grid on every triangle bigger than `spacing`."""
+    positions, faces = [], []
+    with open(obj_path) as f:
+        for line in f:
+            if line.startswith("v "):
+                positions.append([float(x) for x in line.split()[1:4]])
+            elif line.startswith("f "):
+                corners = [int(c.split("/")[0]) for c in line.split()[1:]]
+                corners = [c - 1 if c > 0 else len(positions) + c for c in corners]
+                for k in range(1, len(corners) - 1):
+                    faces.append((corners[0], corners[k], corners[k + 1]))
+    positions = np.array(positions)
+    triangles = positions[np.array(faces)]
+    edge = np.linalg.norm(triangles - np.roll(triangles, 1, axis=1), axis=2).max(1)
+    points = [positions]
+    for n in (2, 4, 8, 16, 32, 64, 128):
+        pick = triangles[(edge > spacing * n / 2) & (edge <= spacing * n)] if n < 128 else triangles[edge > spacing * 32]
+        for i in range(n + 1):
+            for j in range(n + 1 - i):
+                a, b = i / n, j / n
+                points.append(pick[:, 0] * (1 - a - b) + pick[:, 1] * a + pick[:, 2] * b)
+    return np.concatenate(points)
+
+
+def hull(points, centre=CENTRE, segments=SEGMENTS, rings=RINGS, grow=2, margin=1.05, pad=10.0, minimum=MINIMUM):
+    """Dome radius (rings + 1, segments + 1) at each vertex direction of `dome`: just beyond the farthest zone point
+    near that direction (within `grow` grid steps), at least `minimum` (low, high: ramped from 5 to 35 degrees up, so
+    the sky overhead is farther away and shifts less as you walk; Elden Ring land doesn't rise that high nearby). Below the horizon it keeps the horizon's
+    radius, so the dome closes under the street instead of cutting through it."""
+    d = points - np.array(centre)
+    distance = np.linalg.norm(d, axis=1)
+    keep = distance > 1e-6
+    d, distance = d[keep], distance[keep]
+    elevation = np.degrees(np.arcsin(np.clip(d[:, 1] / distance, -1, 1)))
+    azimuth = np.degrees(np.arctan2(d[:, 2], d[:, 0])) % 360
+    ring = np.clip(np.rint((90 - elevation) / 180 * rings).astype(int), 0, rings)
+    segment = np.rint(azimuth / 360 * segments).astype(int) % segments
+    need = np.zeros((rings + 1, segments))
+    np.maximum.at(need, (ring, segment), distance)
+    grown = need.copy()
+    for dr in range(-grow, grow + 1):
+        for ds in range(-grow, grow + 1):
+            shifted = np.roll(need, ds, axis=1)
+            if dr > 0:
+                shifted = np.vstack([np.zeros((dr, segments)), shifted[:-dr]])
+            elif dr < 0:
+                shifted = np.vstack([shifted[-dr:], np.zeros((-dr, segments))])
+            grown = np.maximum(grown, shifted)
+    horizon = rings // 2
+    grown[horizon:] = np.maximum(grown[horizon:], grown[horizon])
+    ring_elevation = 90 - 180 * np.arange(rings + 1) / rings
+    floor = np.interp(ring_elevation, [5.0, 35.0], minimum)[:, None]
+    radius = np.maximum(grown * margin + pad, floor)
+    radius[0], radius[-1] = radius[0].max(), radius[-1].max()  # one point at each pole
+    return np.hstack([radius, radius[:, :1]])  # the seam column repeats the first
+
+
+def dome(radii, centre=(0.0, 0.0, 0.0), segments=SEGMENTS, rings=RINGS):
+    """(positions, uvs, faces) of the sky dome in OBJ conventions, as flver_build.parse_obj returns them: a closed
+    surface around `centre` with radius radii[ring][segment] (from `hull`) in each direction, each vertex's UV taken
+    from its direction (see `directions`), and every triangle facing the centre. Material None."""
     positions, uvs, faces = [], [], []
     span = ELEV_TOP - ELEV_BOTTOM
     for ring in range(rings + 1):
@@ -238,7 +295,7 @@ def dome(centre=CENTRE, radius=RADIUS, height=HEIGHT, segments=96, rings=48):
         for segment in range(segments + 1):
             azimuth = 2 * math.pi * segment / segments
             d = (ce * math.cos(azimuth), se, ce * math.sin(azimuth))
-            reach = 1.0 / math.hypot(ce / radius, se / height)
+            reach = float(radii[ring][segment])
             positions.append(tuple(c + reach * k for c, k in zip(centre, d)))
             u = segment / segments
             if ring in (0, rings):
@@ -254,20 +311,3 @@ def dome(centre=CENTRE, radius=RADIUS, height=HEIGHT, segments=96, rings=48):
                 if len({positions[i] for i in tri}) == 3:
                     faces.append((None, tuple((i, i) for i in tri)))
     return positions, uvs, faces
-
-
-def dome_placement(obj_path, eye_height=2.0, flatten=HEIGHT / RADIUS, margin=1.1):
-    """(centre, radius, height) of a dome around a zone OBJ: centred on the 5-95 percentile box of its vertices at
-    `eye_height` above its ground (y 0), holding every vertex with `margin` to spare."""
-    points = []
-    with open(obj_path) as f:
-        for line in f:
-            if line.startswith("v "):
-                points.append([float(x) for x in line.split()[1:4]])
-    points = np.array(points)
-    lo, hi = np.percentile(points, 5, axis=0), np.percentile(points, 95, axis=0)
-    centre = ((lo[0] + hi[0]) / 2, eye_height, (lo[2] + hi[2]) / 2)
-    d = np.hypot(points[:, 0] - centre[0], points[:, 2] - centre[2])
-    h = (points[:, 1] - centre[1]) / flatten
-    radius = margin * float(np.sqrt(d * d + h * h).max())
-    return centre, radius, radius * flatten

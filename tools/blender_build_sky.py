@@ -2,13 +2,14 @@
 
 Wizard101 draws the sky camera-attached: a 12-sided prism of the swirl sky (layer 1, flat purple cap overhead) and a
 band of scrolling clouds (layer 2), unlit (see sky_bake.py). Elden Ring can't attach an asset to the camera this way,
-so this bakes what the Wizard101 camera sees in every direction into one texture and wraps it on a big smooth dome
-(650 m radius, 390 m high) centred on the zone, large enough to hold all of Unicorn Way's backdrop. The 12 flat
-panels and the open top of the old dome are gone; the clouds are frozen (no UV scrolling in our material).
+so this bakes what the Wizard101 camera sees in every direction into one texture and wraps it on a closed dome centred
+on the zone. In each direction the dome sits just beyond the farthest Wizard101 geometry (sky_bake.hull: 150 m overhead,
+up to ~700 m behind the giant backdrop trees), so it hides Elden Ring's land and sky outside the zone. The clouds are
+frozen (no UV scrolling in our material).
 
 The dome uses the street's plain lit material with every normal pointing up, so the sun lights it evenly. Elden Ring
 has no unlit material we can point at our own texture (the aeg096 sky domes use Field_Skysphere matbins with their own
-sky textures), and its distance fog still tints the dome somewhat.
+sky textures). Distance fog would wash it out: gparam_fog.py turns the fog off.
 
 Writes, in the Smithbox project:
   asset/aeg/aeg030/aeg030_523.geombnd.dcx      the dome FLVER, centred on its own origin; part AEG030_523_9000 sits
@@ -57,16 +58,17 @@ STREET_OBJ = ROOT / "reference" / "w101" / "converted_classic" / "WC_Z06_Unicorn
 
 
 def build_sky():
-    centre, radius, height = sky_bake.dome_placement(STREET_OBJ)
-    print(f"Zone needs a dome of radius {radius:.0f} m, height {height:.0f} m around ({centre[0]:.1f}, {centre[2]:.1f})"
-          f"; building {sky_bake.RADIUS:.0f} x {sky_bake.HEIGHT:.0f} m around {sky_bake.CENTRE}")
+    street = STREET_OBJ.with_name(STREET_OBJ.stem + "_edited.obj")
+    street = street if street.exists() else STREET_OBJ  # the OBJ the game's street was built from
+    radii = sky_bake.hull(sky_bake.zone_points(street))
+    print(f"Sky dome around {street.name}: {radii.min():.0f}..{radii.max():.0f} m from {sky_bake.CENTRE}")
     assert "#vc" in (SKY / "layer2.obj").read_text(), "layer2.obj has no vertex colours: convert it again (nif2obj.py)"
     image = sky_bake.bake(SKY / "layer1.obj", (SKY / "textures" / f"{SKY_TEXTURE}.dds").read_bytes(),
                           SKY / "layer2.obj", (SKY / "textures" / f"{CLOUD_TEXTURE}.dds").read_bytes())
     dds = sky_bake.dxt1_dds(image)
     (SKY / "sky_baked.dds").write_bytes(dds)
 
-    positions, uvs, faces = sky_bake.dome(centre=(0.0, 0.0, 0.0))
+    positions, uvs, faces = sky_bake.dome(radii)
     template = flver_fix.flver_in_binder(STREET_GEOMBND)
     vanilla = flver_fix.flver_in_binder(VANILLA)
     single, materials = flver_build.build_single_mesh(template, positions, uvs, faces, fixed_normal=(0.0, 1.0, 0.0))
