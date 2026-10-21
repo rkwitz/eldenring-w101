@@ -1,24 +1,27 @@
 """Build the classic Wizard101 sky as an asset around Unicorn Way: aeg030_523, a dome placed on the street.
 
-Elden Ring draws its own sky from sky-sphere assets with special materials that the whole open world shares, so instead
-of changing those, this wraps the street in W101's classic skybox (Commons skybox layer 1, reference/w101/
-converted_sky_classic/layer1.obj) scaled up to a dome that encloses the whole zone. It also covers the far Limgrave
-landscape. Vanilla aeg030_523 has no collision and isn't placed anywhere near The First Step, so it's free to reuse.
+Wizard101 draws the sky camera-attached: a 12-sided prism of the swirl sky (layer 1, flat purple cap overhead) and a
+band of scrolling clouds (layer 2), unlit (see sky_bake.py). Elden Ring can't attach an asset to the camera this way,
+so this bakes what the Wizard101 camera sees in every direction into one texture and wraps it on a big smooth dome
+(650 m radius, 390 m high) centred on the zone, large enough to hold all of Unicorn Way's backdrop. The 12 flat
+panels and the open top of the old dome are gone; the clouds are frozen (no UV scrolling in our material).
 
-The dome uses the street's plain lit material with every normal pointing up, so the sun lights it evenly instead of
-shading its sides; distance fog still tints it a little.
+The dome uses the street's plain lit material with every normal pointing up, so the sun lights it evenly. Elden Ring
+has no unlit material we can point at our own texture (the aeg096 sky domes use Field_Skysphere matbins with their own
+sky textures), and its distance fog still tints the dome somewhat.
 
 Writes, in the Smithbox project:
-  asset/aeg/aeg030/aeg030_523.geombnd.dcx      the dome FLVER (in the street's coordinates, so it is placed with the
-                                                street's own transform by part AEG030_523_9000, see msb_add_sky.py)
-  asset/aet/aet030/aet030_523.tpf.dcx (and _l)  the sky texture
+  asset/aeg/aeg030/aeg030_523.geombnd.dcx      the dome FLVER, centred on its own origin; part AEG030_523_9000 sits
+                                                at the dome centre on the street (msb_add_sky.py computes it)
+  asset/aet/aet030/aet030_523.tpf.dcx (and _l)  the baked sky texture (DXT1 1024x512, U = azimuth, V = elevation)
+and reference/w101/converted_sky_classic/sky_baked.dds (the same texture, to look at).
 
+Needs converted_sky_classic/layer1.obj and layer2.obj from nif2obj.py with vertex colours (#vc lines).
 Run in Blender's Scripting tab like blender_switch_street.py (it only uses Soulstruct for the game's compression and
-binder), then relaunch the game.
+binder, and Blender's numpy), then relaunch the game.
 """
 
 import importlib
-import math
 import re
 import sys
 from pathlib import Path
@@ -31,9 +34,10 @@ sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
 import flver_build  # noqa: E402
 import flver_fix  # noqa: E402
 import flver_textures  # noqa: E402
+import sky_bake  # noqa: E402
 import tpf  # noqa: E402
 
-for module in (flver_fix, flver_build, flver_textures, tpf):
+for module in (flver_fix, flver_build, flver_textures, sky_bake, tpf):
     importlib.reload(module)
 
 ASSET = "aeg030_523"
@@ -48,39 +52,25 @@ AET_TEMPLATE = GAME / "aet" / "aet030" / "aet030_000.tpf.dcx"  # for its DCX typ
 GEOMBND = PROJECT / "aeg" / "aeg030" / f"{ASSET}.geombnd.dcx"
 TEXTURES = [PROJECT / "aet" / "aet030" / f"{ASSET.replace('aeg', 'aet')}{suffix}.tpf.dcx" for suffix in ("", "_l")]
 SKY = ROOT / "reference" / "w101" / "converted_sky_classic"
+SKY_TEXTURE, CLOUD_TEXTURE = "WC_Skybox01_KH__19706315", "WC_Skybox_Clouds_KH__d376b071"
 STREET_OBJ = ROOT / "reference" / "w101" / "converted_classic" / "WC_Z06_Unicorn_Way_Classic.obj"
-MARGIN = 1.6  # dome radius over the distance from the zone's centre to its furthest corner
-
-
-def zone_bounds():
-    lo, hi = [math.inf] * 3, [-math.inf] * 3
-    with open(STREET_OBJ) as f:
-        for line in f:
-            if line.startswith("v "):
-                p = [float(x) for x in line.split()[1:4]]
-                lo = [min(a, b) for a, b in zip(lo, p)]
-                hi = [max(a, b) for a, b in zip(hi, p)]
-    return lo, hi
 
 
 def build_sky():
-    lo, hi = zone_bounds()
-    centre = ((lo[0] + hi[0]) / 2, 0.0, (lo[2] + hi[2]) / 2)  # on the street's ground level
-    reach = math.hypot(hi[0] - lo[0], hi[2] - lo[2]) / 2
-    positions, uvs, faces = flver_build.parse_obj(SKY / "layer1.obj")
-    radius = max(math.hypot(x, z) for x, _, z in positions)
-    scale = MARGIN * reach / radius
-    positions = [(centre[0] + x * scale, centre[1] + y * scale, centre[2] + z * scale) for x, y, z in positions]
-    print(f"Sky dome: radius {radius * scale:.0f} m around ({centre[0]:.0f}, {centre[2]:.0f}) of the street")
+    centre, radius, height = sky_bake.dome_placement(STREET_OBJ)
+    print(f"Zone needs a dome of radius {radius:.0f} m, height {height:.0f} m around ({centre[0]:.1f}, {centre[2]:.1f})"
+          f"; building {sky_bake.RADIUS:.0f} x {sky_bake.HEIGHT:.0f} m around {sky_bake.CENTRE}")
+    assert "#vc" in (SKY / "layer2.obj").read_text(), "layer2.obj has no vertex colours: convert it again (nif2obj.py)"
+    image = sky_bake.bake(SKY / "layer1.obj", (SKY / "textures" / f"{SKY_TEXTURE}.dds").read_bytes(),
+                          SKY / "layer2.obj", (SKY / "textures" / f"{CLOUD_TEXTURE}.dds").read_bytes())
+    dds = sky_bake.dxt1_dds(image)
+    (SKY / "sky_baked.dds").write_bytes(dds)
 
+    positions, uvs, faces = sky_bake.dome(centre=(0.0, 0.0, 0.0))
     template = flver_fix.flver_in_binder(STREET_GEOMBND)
     vanilla = flver_fix.flver_in_binder(VANILLA)
     single, materials = flver_build.build_single_mesh(template, positions, uvs, faces, fixed_normal=(0.0, 1.0, 0.0))
-    texture_of_material = flver_textures.parse_mtl(SKY / "layer1.mtl")
-    stems = sorted(set(texture_of_material.values()))
-    dds = [(SKY / "textures" / f"{stem}.dds").read_bytes() for stem in stems]
-    face_textures = [stems.index(texture_of_material[m]) if m in texture_of_material else 0 for m in materials]
-    flver = flver_textures.split_materials(single, vanilla, face_textures, stems, alpha=set())
+    flver = flver_textures.split_materials(single, vanilla, [0] * len(materials), [SKY_TEXTURE], alpha=set())
 
     binder = Binder.from_path(STREET_GEOMBND)
     for entry in binder.entries:
@@ -90,13 +80,13 @@ def build_sky():
     binder.write(GEOMBND)
     print(f"Wrote {GEOMBND}: {len(materials)} triangles")
 
-    textures = [(flver_textures.texture_name(i), data) for i, data in enumerate(dds)]
-    textures.append((flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, 64)))
+    textures = [(flver_textures.texture_name(0), dds), (flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, 64))]
     _, dcx_type = decompress(AET_TEMPLATE)
     packed = compress(tpf.build_tpf(textures), dcx_type)
     for path in TEXTURES:
         path.write_bytes(packed)
-    print(f"Wrote the sky texture to {TEXTURES[0]} (and _l). Relaunch the game.")
+    print(f"Wrote the sky texture to {TEXTURES[0]} (and _l). Place part AEG030_523_9000 with msb_add_sky.py, then "
+          "relaunch the game.")
 
 
 build_sky()

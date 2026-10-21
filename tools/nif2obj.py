@@ -3,7 +3,9 @@
 Usage: python nif2obj.py input.nif output.obj [scale]
 
 scale defaults to 0.01 (Wizard101 units to meters). Output is Y-up, matching
-Blender's default OBJ import settings.
+Blender's default OBJ import settings. Vertex colours, when a mesh has them, follow
+each vertex as a comment line "#vc r g b a" (0..1), which OBJ readers ignore and
+sky_bake.py reads (the sky's cloud layer fades its edges with vertex alpha).
 
 Needs pyffi (pip install pyffi). Only static triangle meshes are exported;
 particles, animation and skinning are skipped.
@@ -61,14 +63,15 @@ def read_stream(ref):
 
 
 def tri_shape(shape):
-    """(positions, [(index,)...], uvs) of a NiTriShape, in the same form read_stream gives for NiMesh."""
+    """(positions, [(index,)...], uvs, colours) of a NiTriShape, in the same form read_stream gives for NiMesh."""
     data = shape.data
     if data is None or not data.has_vertices:
-        return None, None, None
+        return None, None, None, None
     pos = [(v.x, v.y, v.z) for v in data.vertices]
     idx = [(i,) for t in data.triangles for i in (t.v_1, t.v_2, t.v_3)]
     uv = [(c.u, c.v) for c in data.uv_sets[0]] if data.num_uv_sets or getattr(data, "has_uv", False) else None
-    return pos, idx, uv
+    colours = [(c.r, c.g, c.b, c.a) for c in data.vertex_colors] if data.has_vertex_colors else None
+    return pos, idx, uv, colours
 
 
 def texture_name(mesh):
@@ -107,7 +110,7 @@ def convert(src, dst, scale=0.01):
         v_base = vt_base = 1
         for mesh, matrix in meshes:
             if isinstance(mesh, NifFormat.NiTriShape):  # older Gamebryo geometry (Classic Mode zones)
-                pos, idx, uv = tri_shape(mesh)
+                pos, idx, uv, colours = tri_shape(mesh)
             elif int(mesh.primitive_type) != 0:  # triangles only
                 skipped += 1
                 continue
@@ -117,14 +120,17 @@ def convert(src, dst, scale=0.01):
                     sem = ref.component_semantics[0].name.decode()
                     streams.setdefault(sem, read_stream(ref))
                 pos, idx, uv = streams.get("POSITION"), streams.get("INDEX"), streams.get("TEXCOORD")
+                colours = streams.get("COLOR")
             if not pos or not idx:
                 skipped += 1
                 continue
             name = mesh.name.decode(errors="replace") or f"mesh{exported}"
             obj.write(f"o {name}\n")
-            for p in pos:
+            for k, p in enumerate(pos):
                 x, y, z = (c * scale for c in apply(matrix, p))
                 obj.write(f"v {x:.5f} {z:.5f} {-y:.5f}\n")  # Gamebryo Z-up -> OBJ Y-up
+                if colours and k < len(colours):
+                    obj.write("#vc " + " ".join(f"{c:.4f}" for c in (tuple(colours[k]) + (1.0,) * 4)[:4]) + "\n")
             if uv:
                 for u, v in uv:
                     obj.write(f"vt {u:.5f} {1.0 - v:.5f}\n")
