@@ -1,4 +1,5 @@
-"""Copy Wizard101's health and mana globe art and its HUD number font out of Root.wad for the hud_orbs add-on.
+"""Copy Wizard101's HUD art (health and mana globes, experience bar, spellbook button) and its HUD number font out
+of Root.wad and _Shared-WorldData.wad for the hud_orbs add-on.
 
 The globe numbers use the Glyphis bitmap font WizardFancy (HUDWindow.gui textHealth/textMana): its glyph table
 WizardFancy.xml is copied as is and its A8 DDS atlas pages become white PNGs with the glyphs in the alpha channel.
@@ -16,24 +17,33 @@ from pathlib import Path
 
 from PIL import Image
 
-FILES = ["Health_Back", "Health_Liquid", "Health_Chop_Anim", "Mana_Liquid", "Mana_Chop_Anim"]
+# (WAD, entry); each becomes <file stem>.png.
+ART = [("Root.wad", f"GUI/HUD/{stem}.dds")
+       for stem in ["Health_Back", "Health_Liquid", "Health_Chop_Anim", "Mana_Liquid", "Mana_Chop_Anim"]] + [
+    ("Root.wad", "GUI/Bar/Bar_Exp01.dds"),               # XPBar progressXPSolid
+    ("Root.wad", "GUI/Art/Art_Bar_Exp.dds"),             # XPBar foreground
+    ("_Shared-WorldData.wad", "GUI/HUD/Button_Spellbook3.dds"),  # btnSpellbook
+]
 FONT = "WizardFancy"
 
 
 def wad_files(path, wanted):
     """{name: bytes} for the WAD entries whose names are in `wanted`."""
-    data = Path(path).read_bytes()
-    assert data[:5] == b"KIWAD", f"{path} is not a Wizard101 WAD"
-    version, count = struct.unpack_from("<II", data, 5)
-    pos = 13 + (1 if version >= 2 else 0)
     found = {}
-    for _ in range(count):
-        offset, size, zsize, compressed, _crc, name_len = struct.unpack_from("<IIIBII", data, pos)
-        pos += 21
-        name = data[pos:pos + name_len - 1].decode()
-        pos += name_len
-        if name in wanted:
-            raw = data[offset:offset + (zsize if compressed else size)]
+    with open(path, "rb") as wad:
+        head = wad.read(14)
+        assert head[:5] == b"KIWAD", f"{path} is not a Wizard101 WAD"
+        version, count = struct.unpack_from("<II", head, 5)
+        wad.seek(13 + (1 if version >= 2 else 0))
+        entries = []
+        for _ in range(count):
+            offset, size, zsize, compressed, _crc, name_len = struct.unpack("<IIIBII", wad.read(21))
+            name = wad.read(name_len)[:-1].decode()
+            if name in wanted:
+                entries.append((name, offset, zsize if compressed else size, compressed))
+        for name, offset, length, compressed in entries:
+            wad.seek(offset)
+            raw = wad.read(length)
             found[name] = zlib.decompress(raw) if compressed else raw
     return found
 
@@ -41,14 +51,16 @@ def wad_files(path, wanted):
 def main():
     game_data, out = Path(sys.argv[1]), Path(sys.argv[2])
     out.mkdir(parents=True, exist_ok=True)
-    names = {f"GUI/HUD/{stem}.dds": stem for stem in FILES}
-    found = wad_files(game_data / "Root.wad", names)
-    for name, stem in names.items():
-        if name not in found:
-            sys.exit(f"{name} is missing from Root.wad")
-        image = Image.open(BytesIO(found[name])).convert("RGBA")
-        image.save(out / f"{stem}.png")
-        print(f"{stem}.png {image.size[0]}x{image.size[1]}")
+    for wad in sorted({wad for wad, _ in ART}):
+        names = {name for w, name in ART if w == wad}
+        found = wad_files(game_data / wad, names)
+        for name in sorted(names):
+            if name not in found:
+                sys.exit(f"{name} is missing from {wad}")
+            stem = Path(name).stem
+            image = Image.open(BytesIO(found[name])).convert("RGBA")
+            image.save(out / f"{stem}.png")
+            print(f"{stem}.png {image.size[0]}x{image.size[1]}")
     font_xml = f"Fonts/{FONT}.xml"
     xml = wad_files(game_data / "Root.wad", {font_xml}).get(font_xml)
     if xml is None:

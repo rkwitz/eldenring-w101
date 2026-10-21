@@ -4,7 +4,8 @@
 //! (made by tools/w101_hud_art.py) and optionally `w101_orbs.ini` to move or resize the globes.
 //! The layout is Wizard101's own HUDWindow.gui, in its pixels on a 768-pixel-tall screen: each globe's glass is
 //! Health_Back stretched over the globe's window, with the liquid, its surface and the number at fixed spots inside
-//! it. Like Wizard101, the globes sit in the bottom-left corner.
+//! it. Like Wizard101, the globes sit in the bottom-left corner, the experience bar (here: progress through the
+//! current Elden Ring level, runes held / level-up cost) centred along the bottom and the spellbook in the bottom-right.
 //! The numbers use Wizard101's HUD font, the WizardFancy bitmap font (`w101_orbs/WizardFancy.xml` and its atlas PNGs,
 //! also made by tools/w101_hud_art.py); without those files they fall back to imgui's default font.
 
@@ -21,6 +22,18 @@ use hudhook::{ImguiRenderLoop, RenderContext};
 const FRAMES_PER_SECOND: f32 = 12.0;
 /// Bottom edge of the lower (mana) globe on Wizard101's 768-pixel-tall screen.
 const BOTTOM: f32 = 722.0;
+/// HUDWindow.gui's windowHUD is 1156 wide; right-hand controls keep their gap to that right edge.
+const HUD_WIDTH: f32 = 1156.0;
+const HUD_HEIGHT: f32 = 768.0;
+/// XPBar (centred horizontally) and its progressXPSolid inside it.
+const XP_BAR: [f32; 4] = [326.0, 733.0, 830.0, 752.0];
+const XP_FILL: [f32; 4] = [18.0, 1.0, 486.0, 18.0];
+/// btnSpellbook; Button_Spellbook3 is two tiles side by side and the normal state shows the first.
+const SPELLBOOK: [f32; 4] = [948.0, 571.0, 1076.0, 699.0];
+/// Text colour of the globe numbers: WindowStyle m_Color FF00FFFF (Wizard101 colours are AABBGGRR), yellow.
+const TEXT_COLOUR: ImColor32 = ImColor32::from_rgb(255, 255, 0);
+/// Size of the level number next to the experience bar, as a WizardFancy scale.
+const LEVEL_SCALE: f32 = 0.6;
 
 /// One globe from HUDWindow.gui. `window` is in screen pixels, the rest is relative to it.
 struct Layout {
@@ -54,6 +67,9 @@ struct Art {
     health_chop: TextureId,
     mana: TextureId,
     mana_chop: TextureId,
+    xp_fill: TextureId,
+    xp_frame: TextureId,
+    spellbook: TextureId,
 }
 
 /// A Glyphis bitmap font (Wizard101's Fonts/*.xml): glyph cells in atlas pages, with Windows ABC spacing.
@@ -78,6 +94,7 @@ struct Settings {
     bottom: f32,
     scale: f32,
     debug: bool,
+    level: bool,
 }
 
 struct Orbs {
@@ -86,7 +103,7 @@ struct Orbs {
     art: Option<Art>,
     font: Option<BitmapFont>,
     game: Option<Option<game::Game>>,
-    shown: [f32; 2],
+    shown: [f32; 3],
     start: Instant,
     error: Option<String>,
     perf: Perf,
@@ -140,7 +157,7 @@ impl Orbs {
             art: None,
             font: None,
             game: None,
-            shown: [1.0, 1.0],
+            shown: [1.0, 1.0, 0.0],
             start: Instant::now(),
             error: None,
             perf: Perf::new(),
@@ -160,6 +177,9 @@ impl Orbs {
             health_chop: load("Health_Chop_Anim")?,
             mana: load("Mana_Liquid")?,
             mana_chop: load("Mana_Chop_Anim")?,
+            xp_fill: load("Bar_Exp01")?,
+            xp_frame: load("Art_Bar_Exp")?,
+            spellbook: load("Button_Spellbook3")?,
         })
     }
 
@@ -216,9 +236,14 @@ impl BitmapFont {
     }
 
     /// `text` centred on `centre`, `scale` screen pixels per font pixel.
+    /// Width of `text` in font pixels.
+    fn width(&self, text: &str) -> f32 {
+        self.advances(text).iter().map(|(_, a)| a).sum()
+    }
+
     fn draw(&self, draw: &DrawListMut, text: &str, centre: [f32; 2], scale: f32, colour: ImColor32) {
         let advances = self.advances(text);
-        let width: f32 = advances.iter().map(|(_, a)| a).sum();
+        let width = self.width(text);
         let mut pen = centre[0] - width * scale / 2.0;
         let top = centre[1] - self.line_height * scale / 2.0;
         for (c, advance) in advances {
@@ -283,7 +308,8 @@ impl Orbs {
         // Screen position of Wizard101's (0, 0), so that its bottom-left corner lands `left`, `bottom` from ours.
         let origin = [self.settings.left * s, height - (BOTTOM + self.settings.bottom) * s];
         let frame = (self.start.elapsed().as_secs_f32() * FRAMES_PER_SECOND) as usize % 9;
-        let target = [fraction(stats.hp, stats.max_hp), fraction(stats.fp, stats.max_fp)];
+        let xp = stats.level.map_or(0.0, |(level, runes)| game::level_progress(level, runes));
+        let target = [fraction(stats.hp, stats.max_hp), fraction(stats.fp, stats.max_fp), xp];
         // Ease toward the new value so hits drain the globe instead of snapping.
         for (shown, target) in self.shown.iter_mut().zip(target) {
             *shown += (target - *shown) * 0.2;
@@ -296,6 +322,32 @@ impl Orbs {
         globe(&draw, &MANA, art.back, art.mana, art.mana_chop, origin, s, self.shown[1], frame);
         number(&draw, self.font.as_ref(), stats.hp, &HEALTH, origin, s);
         number(&draw, self.font.as_ref(), stats.fp, &MANA, origin, s);
+
+        // Experience bar, centred along the bottom; spellbook in the bottom-right corner.
+        let s = self.settings.scale * height / HUD_HEIGHT;
+        let width = ui.io().display_size[0];
+        let bar = [(width - (XP_BAR[2] - XP_BAR[0]) * s) / 2.0, height - (HUD_HEIGHT - XP_BAR[1]) * s];
+        let p = |at: [f32; 2], x: f32, y: f32| [at[0] + x * s, at[1] + y * s];
+        if stats.level.is_some() {
+            let [l, t, r, b] = XP_FILL;
+            let fill = self.shown[2];
+            if fill > 0.0 {
+                // PROGRESS_UV: the left part of the bar texture is shown, not squashed.
+                draw.add_image(art.xp_fill, p(bar, l, t), p(bar, l + (r - l) * fill, b)).uv_max([fill, 1.0]).build();
+            }
+        }
+        draw.add_image(art.xp_frame, bar, p(bar, XP_BAR[2] - XP_BAR[0], XP_BAR[3] - XP_BAR[1])).build();
+        if let (true, Some((level, _)), Some(font)) = (self.settings.level, stats.level, self.font.as_ref()) {
+            let text = level.to_string();
+            let scale = LEVEL_SCALE * s;
+            let w = font.width(&text) * scale;
+            let centre = [bar[0] - 6.0 * s - w / 2.0, bar[1] + (XP_BAR[3] - XP_BAR[1]) * s / 2.0];
+            outlined(&draw, font, &text, centre, scale, s);
+        }
+        let book = [width - (HUD_WIDTH - SPELLBOOK[0]) * s, height - (HUD_HEIGHT - SPELLBOOK[1]) * s];
+        draw.add_image(art.spellbook, book, p(book, SPELLBOOK[2] - SPELLBOOK[0], SPELLBOOK[3] - SPELLBOOK[1]))
+            .uv_max([0.5, 1.0])
+            .build();
         if self.settings.debug {
             draw.add_text([20.0, 50.0], ImColor32::WHITE, format!("{stats:?}"));
         }
@@ -339,19 +391,24 @@ fn globe(draw: &DrawListMut, layout: &Layout, back: TextureId, liquid: TextureId
     }
 }
 
-/// The value in the middle of a globe, white with a dark outline, in WizardFancy when it loaded.
+/// Yellow WizardFancy text with a dark outline, centred on `centre`.
+fn outlined(draw: &DrawListMut, font: &BitmapFont, text: &str, centre: [f32; 2], scale: f32, s: f32) {
+    let outline = ImColor32::from_rgba(0, 0, 0, 220);
+    let o = 1.5 * s.max(1.0);
+    for (dx, dy) in [(-o, 0.0), (o, 0.0), (0.0, -o), (0.0, o), (o, o)] {
+        font.draw(draw, text, [centre[0] + dx, centre[1] + dy], scale, outline);
+    }
+    font.draw(draw, text, centre, scale, TEXT_COLOUR);
+}
+
+/// The value in the middle of a globe, yellow with a dark outline, in WizardFancy when it loaded.
 fn number(draw: &DrawListMut, font: Option<&BitmapFont>, value: i32, layout: &Layout, origin: [f32; 2], s: f32) {
     use hudhook::imgui::sys;
     let text = value.to_string();
     let centre = [origin[0] + (layout.window[0] + layout.text[0]) * s, origin[1] + (layout.window[1] + layout.text[1]) * s];
     let outline = ImColor32::from_rgba(0, 0, 0, 220);
     if let Some(font) = font {
-        let scale = layout.font_scale * s;
-        let o = 1.5 * s.max(1.0);
-        for (dx, dy) in [(-o, 0.0), (o, 0.0), (0.0, -o), (0.0, o), (o, o)] {
-            font.draw(draw, &text, [centre[0] + dx, centre[1] + dy], scale, outline);
-        }
-        font.draw(draw, &text, centre, scale, ImColor32::WHITE);
+        outlined(draw, font, &text, centre, layout.font_scale * s, s);
         return;
     }
     // imgui's default font: about the height WizardFancy would have.
@@ -369,7 +426,7 @@ fn number(draw: &DrawListMut, font: Option<&BitmapFont>, value: i32, layout: &La
             sys::ImDrawList_AddText_FontPtr(draw, font, size, pos, outline, begin, end, 0.0, std::ptr::null());
         }
         let pos = sys::ImVec2 { x: at[0], y: at[1] };
-        sys::ImDrawList_AddText_FontPtr(draw, font, size, pos, u32::from(ImColor32::WHITE), begin, end, 0.0, std::ptr::null());
+        sys::ImDrawList_AddText_FontPtr(draw, font, size, pos, u32::from(TEXT_COLOUR), begin, end, 0.0, std::ptr::null());
     }
 }
 
@@ -404,9 +461,9 @@ fn dll_folder() -> PathBuf {
 
 /// `key = value` lines: left and bottom (extra gap from the screen's bottom-left corner, in Wizard101 pixels; 0 is
 /// exactly where Wizard101 puts the globes), scale (1 = Wizard101's size on a 768-pixel-tall screen) and debug (1
-/// shows the raw numbers).
+/// shows the raw numbers) and level (0 hides the level number beside the experience bar).
 fn load_settings(path: &Path) -> Settings {
-    let mut settings = Settings { left: 0.0, bottom: 0.0, scale: 1.0, debug: false };
+    let mut settings = Settings { left: 0.0, bottom: 0.0, scale: 1.0, debug: false, level: true };
     for line in std::fs::read_to_string(path).unwrap_or_default().lines() {
         let Some((key, value)) = line.split_once('=') else { continue };
         let value = value.trim();
@@ -415,6 +472,7 @@ fn load_settings(path: &Path) -> Settings {
             "bottom" => settings.bottom = value.parse().unwrap_or(settings.bottom),
             "scale" => settings.scale = value.parse().unwrap_or(settings.scale),
             "debug" => settings.debug = value == "1",
+            "level" => settings.level = value != "0",
             _ => {}
         }
     }

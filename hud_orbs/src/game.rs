@@ -3,6 +3,7 @@
 //! The game's globals are found by byte pattern (the same patterns community tools use), so small patches don't
 //! break them. The live values come from the player character (WorldChrMan -> player -> stat module); the save's
 //! copy in PlayerGameData is the fallback when those offsets look wrong. Without a player character there are none.
+//! Level and runes held come from PlayerGameData (offsets from the eldenring crate's struct).
 
 use std::mem::size_of;
 
@@ -28,6 +29,20 @@ pub struct Stats {
     pub max_hp: i32,
     pub fp: i32,
     pub max_fp: i32,
+    /// Rune level and runes held; None if PlayerGameData couldn't be read.
+    pub level: Option<(u32, u32)>,
+}
+
+/// Runes needed to go from `level` to the next one (Elden Ring's level-up cost formula).
+pub fn level_up_cost(level: u32) -> u32 {
+    let x = level as f64 + 81.0;
+    let extra = ((x - 92.0) * 0.02).max(0.0);
+    ((extra + 0.1) * x * x + 1.0).floor() as u32
+}
+
+/// How far the runes held are toward the next level, 0 to 1 (full at the level cap).
+pub fn level_progress(level: u32, runes: u32) -> f32 {
+    if level >= 713 { 1.0 } else { (runes as f32 / level_up_cost(level) as f32).clamp(0.0, 1.0) }
 }
 
 pub struct Game {
@@ -59,19 +74,27 @@ impl Game {
                     max_hp: read(stat + STAT_HP + 4)?,
                     fp: read(stat + STAT_FP)?,
                     max_fp: read(stat + STAT_FP + 4)?,
+                    level: None,
                 })
             });
-        let saved = read::<usize>(self.game_data_man)
-            .and_then(|gdm| read::<usize>(gdm + PLAYER_GAME_DATA))
-            .and_then(|pgd| {
-                Some(Stats {
-                    hp: read(pgd + 0x10)?,
-                    max_hp: read(pgd + 0x14)?,
-                    fp: read(pgd + 0x1C)?,
-                    max_fp: read(pgd + 0x20)?,
-                })
-            });
-        live.filter(plausible).or(saved.filter(plausible))
+        let pgd = read::<usize>(self.game_data_man).and_then(|gdm| read::<usize>(gdm + PLAYER_GAME_DATA));
+        let saved = pgd.and_then(|pgd| {
+            Some(Stats {
+                hp: read(pgd + 0x10)?,
+                max_hp: read(pgd + 0x14)?,
+                fp: read(pgd + 0x1C)?,
+                max_fp: read(pgd + 0x20)?,
+                level: None,
+            })
+        });
+        let level = pgd.and_then(|pgd| {
+            use eldenring::cs::PlayerGameData;
+            let level = read::<u32>(pgd + std::mem::offset_of!(PlayerGameData, level))?;
+            let runes = read::<u32>(pgd + std::mem::offset_of!(PlayerGameData, rune_count))?;
+            (1..=713).contains(&level).then_some((level, runes))
+        });
+        let stats = live.filter(plausible).or(saved.filter(plausible))?;
+        Some(Stats { level, ..stats })
     }
 }
 
