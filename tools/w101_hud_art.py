@@ -1,9 +1,13 @@
-"""Copy Wizard101's health and mana globe art out of Root.wad as PNGs for the hud_orbs add-on.
+"""Copy Wizard101's health and mana globe art and its HUD number font out of Root.wad for the hud_orbs add-on.
+
+The globe numbers use the Glyphis bitmap font WizardFancy (HUDWindow.gui textHealth/textMana): its glyph table
+WizardFancy.xml is copied as is and its A8 DDS atlas pages become white PNGs with the glyphs in the alpha channel.
 
 Usage: python w101_hud_art.py path\\to\\Wizard101\\Data\\GameData output_dir
 
 Needs Pillow (pip install pillow) to turn the DDS files into PNG.
 """
+import re
 import struct
 import sys
 import zlib
@@ -13,6 +17,7 @@ from pathlib import Path
 from PIL import Image
 
 FILES = ["Health_Back", "Health_Liquid", "Health_Chop_Anim", "Mana_Liquid", "Mana_Chop_Anim"]
+FONT = "WizardFancy"
 
 
 def wad_files(path, wanted):
@@ -44,6 +49,31 @@ def main():
         image = Image.open(BytesIO(found[name])).convert("RGBA")
         image.save(out / f"{stem}.png")
         print(f"{stem}.png {image.size[0]}x{image.size[1]}")
+    font_xml = f"Fonts/{FONT}.xml"
+    xml = wad_files(game_data / "Root.wad", {font_xml}).get(font_xml)
+    if xml is None:
+        sys.exit(f"{font_xml} is missing from Root.wad")
+    (out / f"{FONT}.xml").write_bytes(xml)
+    pages = {f"Fonts/{page}": page for page in re.findall(r'FileName="([^"]+)"', xml.decode())}
+    found = wad_files(game_data / "Root.wad", pages)
+    for name, page in pages.items():
+        if name not in found:
+            sys.exit(f"{name} is missing from Root.wad")
+        alpha = a8_dds(found[name])
+        image = Image.new("L", alpha.size, 255).convert("RGBA")
+        image.putalpha(alpha)
+        stem = Path(page).stem
+        image.save(out / f"{stem}.png")
+        print(f"{stem}.png {image.size[0]}x{image.size[1]}")
+
+
+def a8_dds(data):
+    """The alpha image of an uncompressed 8-bit alpha-only DDS (Glyphis DDS_A8 font pages)."""
+    assert data[:4] == b"DDS ", "not a DDS file"
+    height, width = struct.unpack_from("<II", data, 12)
+    flags, _fourcc, bits = struct.unpack_from("<III", data, 80)
+    assert bits == 8 and not flags & 4, "font page is not uncompressed A8"
+    return Image.frombytes("L", (width, height), data[128:128 + width * height])
 
 
 if __name__ == "__main__":

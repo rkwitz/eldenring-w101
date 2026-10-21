@@ -5,9 +5,12 @@
 //! The layout is Wizard101's own HUDWindow.gui, in its pixels on a 768-pixel-tall screen: each globe's glass is
 //! Health_Back stretched over the globe's window, with the liquid, its surface and the number at fixed spots inside
 //! it. Like Wizard101, the globes sit in the bottom-left corner.
+//! The numbers use Wizard101's HUD font, the WizardFancy bitmap font (`w101_orbs/WizardFancy.xml` and its atlas PNGs,
+//! also made by tools/w101_hud_art.py); without those files they fall back to imgui's default font.
 
 mod game;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -25,7 +28,8 @@ struct Layout {
     liquid: [f32; 4],
     chop: [f32; 2],
     text: [f32; 2],
-    text_size: f32,
+    /// WizardFancy's scale in HUDWindow.gui.
+    font_scale: f32,
 }
 
 const HEALTH: Layout = Layout {
@@ -33,7 +37,7 @@ const HEALTH: Layout = Layout {
     liquid: [15.0, 13.0, 104.0, 101.0],    // progressHealthSolid
     chop: [86.0, 9.0],                     // spriteHealthChop (16,52)-(102,61), moved to the surface
     text: [59.5, 57.0],                    // textHealth, centred in HealthGlobeRect
-    text_size: 24.0,                       // WizardFancy at 0.7
+    font_scale: 0.7,
 };
 
 const MANA: Layout = Layout {
@@ -41,7 +45,7 @@ const MANA: Layout = Layout {
     liquid: [11.0, 9.0, 73.0, 71.0],       // progressManaSolid
     chop: [60.0, 7.0],                     // spriteManaChop (12,36)-(72,43)
     text: [42.0, 40.0],                    // textMana, centred in ManaGlobeRect
-    text_size: 24.0 * 0.642857 / 0.7,      // WizardFancy at 0.642857
+    font_scale: 0.642857,
 };
 
 struct Art {
@@ -50,6 +54,23 @@ struct Art {
     health_chop: TextureId,
     mana: TextureId,
     mana_chop: TextureId,
+}
+
+/// A Glyphis bitmap font (Wizard101's Fonts/*.xml): glyph cells in atlas pages, with Windows ABC spacing.
+struct BitmapFont {
+    pages: Vec<(TextureId, [f32; 2])>,
+    glyphs: HashMap<u32, Glyph>,
+    kerning: HashMap<(u32, u32), f32>,
+    line_height: f32,
+}
+
+struct Glyph {
+    page: usize,
+    /// Left, top, right (exclusive) and bottom (inclusive) of the cell in its page, with a 1-pixel margin each side.
+    cell: [f32; 4],
+    a: f32,
+    b: f32,
+    c: f32,
 }
 
 struct Settings {
@@ -63,6 +84,7 @@ struct Orbs {
     folder: PathBuf,
     settings: Settings,
     art: Option<Art>,
+    font: Option<BitmapFont>,
     game: Option<Option<game::Game>>,
     shown: [f32; 2],
     start: Instant,
@@ -116,6 +138,7 @@ impl Orbs {
             settings: load_settings(&folder.join("w101_orbs.ini")),
             folder,
             art: None,
+            font: None,
             game: None,
             shown: [1.0, 1.0],
             start: Instant::now(),
@@ -139,6 +162,78 @@ impl Orbs {
             mana_chop: load("Mana_Chop_Anim")?,
         })
     }
+
+    fn load_font(&self, render: &mut dyn RenderContext) -> Result<BitmapFont, String> {
+        let folder = self.folder.join("w101_orbs");
+        let path = folder.join("WizardFancy.xml");
+        let xml = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut font = BitmapFont { pages: Vec::new(), glyphs: HashMap::new(), kerning: HashMap::new(), line_height: 0.0 };
+        for tag in xml.split('<') {
+            let number = |key: &str| attribute(tag, key).and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
+            if tag.starts_with("Page ") {
+                let name = attribute(tag, "FileName").ok_or("WizardFancy.xml: page without FileName")?;
+                let png = folder.join(Path::new(name).with_extension("png"));
+                let image = image::open(&png).map_err(|e| format!("{}: {e}", png.display()))?.into_rgba8();
+                let texture = render.load_texture(&image, image.width(), image.height())
+                    .map_err(|e| format!("{name}: {e:?}"))?;
+                font.pages.push((texture, [image.width() as f32, image.height() as f32]));
+            } else if tag.starts_with("Glyph ") {
+                let cell = [number("Left"), number("Top"), number("Right"), number("Bottom") + 1].map(|v| v as f32);
+                font.line_height = font.line_height.max(cell[3] - cell[1]);
+                font.glyphs.insert(number("ID") as u32, Glyph {
+                    page: number("Page") as usize,
+                    cell,
+                    a: number("A") as f32,
+                    b: number("B") as f32,
+                    c: number("C") as f32,
+                });
+            } else if tag.starts_with("KerningPair ") {
+                font.kerning.insert((number("First") as u32, number("Second") as u32), number("Amount") as f32);
+            }
+        }
+        if font.glyphs.values().any(|g| g.page >= font.pages.len()) || !('0'..='9').all(|d| font.glyphs.contains_key(&(d as u32))) {
+            return Err("WizardFancy.xml: digits or pages missing".into());
+        }
+        Ok(font)
+    }
+}
+
+/// The value of `key="..."` in an XML tag.
+fn attribute<'a>(tag: &'a str, key: &str) -> Option<&'a str> {
+    let start = tag.find(&format!(" {key}=\""))? + key.len() + 3;
+    tag[start..].split('"').next()
+}
+
+impl BitmapFont {
+    /// Pen advance of each character (ABC width plus kerning with the next one), in font pixels.
+    fn advances(&self, text: &str) -> Vec<(u32, f32)> {
+        let chars: Vec<u32> = text.chars().map(|c| c as u32).filter(|c| self.glyphs.contains_key(c)).collect();
+        chars.iter().enumerate().map(|(i, c)| {
+            let g = &self.glyphs[c];
+            let kern = chars.get(i + 1).and_then(|next| self.kerning.get(&(*c, *next))).copied().unwrap_or(0.0);
+            (*c, g.a + g.b + g.c + kern)
+        }).collect()
+    }
+
+    /// `text` centred on `centre`, `scale` screen pixels per font pixel.
+    fn draw(&self, draw: &DrawListMut, text: &str, centre: [f32; 2], scale: f32, colour: ImColor32) {
+        let advances = self.advances(text);
+        let width: f32 = advances.iter().map(|(_, a)| a).sum();
+        let mut pen = centre[0] - width * scale / 2.0;
+        let top = centre[1] - self.line_height * scale / 2.0;
+        for (c, advance) in advances {
+            let g = &self.glyphs[&c];
+            let (texture, [w, h]) = self.pages[g.page];
+            let [left, cell_top, right, bottom] = g.cell;
+            let x = pen + (g.a - 1.0) * scale;
+            draw.add_image(texture, [x, top], [x + (right - left) * scale, top + (bottom - cell_top) * scale])
+                .uv_min([left / w, cell_top / h])
+                .uv_max([right / w, bottom / h])
+                .col(colour)
+                .build();
+            pen += advance * scale;
+        }
+    }
 }
 
 impl ImguiRenderLoop for Orbs {
@@ -152,6 +247,10 @@ impl ImguiRenderLoop for Orbs {
         match self.load_art(render) {
             Ok(art) => self.art = Some(art),
             Err(e) => self.error = Some(e),
+        }
+        match self.load_font(render) {
+            Ok(font) => self.font = Some(font),
+            Err(e) => tracing::warn!("WizardFancy font not loaded, using imgui's default font: {e}"),
         }
     }
 
@@ -195,8 +294,8 @@ impl Orbs {
         // Same order as HUDWindow.gui, so the mana globe sits in front of the health globe.
         globe(&draw, &HEALTH, art.back, art.health, art.health_chop, origin, s, self.shown[0], frame);
         globe(&draw, &MANA, art.back, art.mana, art.mana_chop, origin, s, self.shown[1], frame);
-        number(stats.hp, &HEALTH, origin, s);
-        number(stats.fp, &MANA, origin, s);
+        number(&draw, self.font.as_ref(), stats.hp, &HEALTH, origin, s);
+        number(&draw, self.font.as_ref(), stats.fp, &MANA, origin, s);
         if self.settings.debug {
             draw.add_text([20.0, 50.0], ImColor32::WHITE, format!("{stats:?}"));
         }
@@ -240,12 +339,23 @@ fn globe(draw: &DrawListMut, layout: &Layout, back: TextureId, liquid: TextureId
     }
 }
 
-/// The value in the middle of a globe, white with a dark outline like Wizard101's.
-fn number(value: i32, layout: &Layout, origin: [f32; 2], s: f32) {
+/// The value in the middle of a globe, white with a dark outline, in WizardFancy when it loaded.
+fn number(draw: &DrawListMut, font: Option<&BitmapFont>, value: i32, layout: &Layout, origin: [f32; 2], s: f32) {
     use hudhook::imgui::sys;
     let text = value.to_string();
-    let size = layout.text_size * s;
     let centre = [origin[0] + (layout.window[0] + layout.text[0]) * s, origin[1] + (layout.window[1] + layout.text[1]) * s];
+    let outline = ImColor32::from_rgba(0, 0, 0, 220);
+    if let Some(font) = font {
+        let scale = layout.font_scale * s;
+        let o = 1.5 * s.max(1.0);
+        for (dx, dy) in [(-o, 0.0), (o, 0.0), (0.0, -o), (0.0, o), (o, o)] {
+            font.draw(draw, &text, [centre[0] + dx, centre[1] + dy], scale, outline);
+        }
+        font.draw(draw, &text, centre, scale, ImColor32::WHITE);
+        return;
+    }
+    // imgui's default font: about the height WizardFancy would have.
+    let size = 24.0 / 0.7 * layout.font_scale * s;
     unsafe {
         let draw = sys::igGetBackgroundDrawList();
         let font = sys::igGetFont();
@@ -253,7 +363,7 @@ fn number(value: i32, layout: &Layout, origin: [f32; 2], s: f32) {
         let mut extent = sys::ImVec2 { x: 0.0, y: 0.0 };
         sys::ImFont_CalcTextSizeA(&mut extent, font, size, f32::MAX, 0.0, begin, end, std::ptr::null_mut());
         let at = [centre[0] - extent.x / 2.0, centre[1] - extent.y / 2.0];
-        let outline = u32::from(ImColor32::from_rgba(0, 0, 0, 220));
+        let outline = u32::from(outline);
         for (dx, dy) in [(-1.5, 0.0), (1.5, 0.0), (0.0, -1.5), (0.0, 1.5)] {
             let pos = sys::ImVec2 { x: at[0] + dx, y: at[1] + dy };
             sys::ImDrawList_AddText_FontPtr(draw, font, size, pos, outline, begin, end, 0.0, std::ptr::null());
