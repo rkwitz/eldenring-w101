@@ -1,40 +1,79 @@
-"""Add two MapNameOverride regions (type 51) over the Unicorn Way plaza in m60_42_36_00: TextID 610900 (shown on map load)
-and -610900 (on entering), as boxes copied from region hitset_h423601. Edit the paths below before running.
+"""Put the "Unicorn Way" area name (PlaceName 610900) over the street in m60_42_36_00, starting at the graveyard exit door.
+
+How Elden Ring picks the title card: outside legacy dungeons the current place name comes from the world's map-name
+texture (MapNameTexParam row 11 -> PlaceName 61000 "Limgrave" around The First Step). An MSB MapNameOverride region
+(type 51, shape box, type data = PlaceName id) replaces it while the player stands inside, also while the player is still
+in the Stranded Graveyard (m18). The title card appears whenever that name changes, so:
+  - stepping out of an override box onto Limgrave ground shows "Limgrave";
+  - the box must start at the outer face of the lift-up door AEG110_064_1000, or the card shows behind it (the old
+    90x90 box reached the top of the m18 elevator, 17 m behind the door).
+No map event (m60_42_36_00, m18_00_00_00, common_func) shows a welcome message here; it is all map-name driven.
+
+This edits the regions named UnicornWay_name_* in place (same entries, indices and type indices), making each a box in
+the door's own frame: local z from DOOR_GAP (just outside the door) to FAR, local x from LEFT to RIGHT, bottom BELOW m
+under the door, HEIGHT tall. Box regions have their origin at the bottom centre; size = (width x, depth z, height y).
+If none exist it appends one (type index = number of type-51 regions so far).
+
+Usage: python msb_name_region.py in.msb.dcx out.msb.dcx   (DFLT DCX as Smithbox saves, or an uncompressed .msb)
 """
-import sys,struct,zlib,math
-sys.path.insert(0,'/home/claude/eldenring-w101/tools')
-from msb_floor import read_msb,write_msb,entry_name,_list
-TEXT_ID=610900
-d=open('/tmp/claude-0/t.dcx','rb').read(); raw=zlib.decompress(d[0x4c:])
-h,L=read_msb(raw); R=_list(L,'POINT_PARAM_ST')
-tmpl=next(e for e in R.entries if entry_name(e)=='hitset_h423601')
-ids=[struct.unpack_from('<i',e,0x2C)[0] for e in R.entries]; print('region ids',min(ids),max(ids))
-def R4(v,deg):
-    c,s=math.cos(math.radians(deg)),math.sin(math.radians(deg)); x,y,z=v; return (x*c+z*s,y,-x*s+z*c)
-P=(6.1348,89.59,-86.6426); DEG=4.0
-off=R4((0,0,17.0),DEG); centre=(P[0]+off[0],P[1]-5,P[2]+off[2])
-def region(name,text_id,type_index,region_id):
-    e=bytearray(tmpl)
-    nm=(name+'\0').encode('utf-16-le'); nm+=b'\0'*((-(0x68+len(nm)))%8)
-    head=bytearray(e[:0x68]); after_name=e[0x88:0xb0]  # base data, shape, entity data (relative layout kept)
-    shift=0x68+len(nm)-0x88
-    body=bytearray(head)+nm+after_name
-    td=len(body); body+=struct.pack('<ii',text_id,0)
-    u4=len(body); body+=tmpl[0xb4:]
-    struct.pack_into('<I',body,0x08,51); struct.pack_into('<i',body,0x0C,type_index)
-    struct.pack_into('<3f',body,0x14,*centre); struct.pack_into('<3f',body,0x20,0.0,DEG,0.0)
-    struct.pack_into('<i',body,0x2C,region_id)
-    for f in (0x30,0x38,0x48,0x50):
-        struct.pack_into('<q',body,f,struct.unpack_from('<q',tmpl,f)[0]+shift)
-    struct.pack_into('<q',body,0x58,td); struct.pack_into('<q',body,0x60,u4)
-    so=struct.unpack_from('<q',body,0x48)[0]; struct.pack_into('<3f',body,so,90.0,90.0,40.0)
-    body+=b"\0"*((-len(body))%8)
-    return bytes(body)
-new=[region('UnicornWay_name_load',TEXT_ID,0,max(ids)+1), region('UnicornWay_name_enter',-TEXT_ID,1,max(ids)+2)]
-R.entries+=new
-out=write_msb(h,L)
-for e in new:
-    print(entry_name(e), struct.unpack_from('<qIiI3f3fiqqiIqqqq',e,0), e[struct.unpack_from('<q',e,0x58)[0]:][:8].hex())
-c=zlib.compress(out,9); hd=bytearray(d[:0x4c]); struct.pack_into('>II',hd,0x1c,len(out),len(c))
-open('/mnt/project-files/tmp_msg/m60_42_36_00.msb.dcx','wb').write(bytes(hd)+c)
-h2,L2=read_msb(zlib.decompress((bytes(hd)+c)[0x4c:])); print(len(_list(L2,'POINT_PARAM_ST').entries))
+import math
+import struct
+import sys
+import zlib
+
+sys.path.insert(0, __file__.rsplit("/", 1)[0] if "/" in __file__ else ".")
+from msb_floor import _list, entry_name, read_msb, write_msb  # noqa: E402
+
+TEXT_ID = 610900  # PlaceName "Unicorn Way" (msg item.msgbnd, tools/er_text.py); positive like the game's own overrides
+MAP_NAME_OVERRIDE = 51
+BOX = 5
+DOOR = "AEG110_064_1000"  # the lift-up exit door (ObjAct 1042363540); its local +z points out of the graveyard
+PREFIX = "UnicornWay_name"
+# Street ground (classic OBJ, verts within a few m of floor height) spans about x -320..160, z -11..255 in the street's
+# frame, which matches the door's frame to within a degree; a 10 m margin covers the difference.
+DOOR_GAP, FAR, LEFT, RIGHT, BELOW, HEIGHT = 0.15, 276.0, -330.0, 170.0, 10.0, 160.0
+
+
+def door_box(lists, door=DOOR, text_id=TEXT_ID):
+    parts = _list(lists, "PARTS_PARAM_ST").entries
+    d = next(e for e in parts if entry_name(e) == door)
+    (px, py, pz), (_, ry, _) = struct.unpack_from("<3f", d, 0x20), struct.unpack_from("<3f", d, 0x2C)
+    c, s = math.cos(math.radians(ry)), math.sin(math.radians(ry))
+    lx, lz = (LEFT + RIGHT) / 2, (DOOR_GAP + FAR) / 2
+    centre = (px + lx * c + lz * s, py - BELOW, pz - lx * s + lz * c)
+    size = (RIGHT - LEFT, FAR - DOOR_GAP, HEIGHT)
+    regions = _list(lists, "POINT_PARAM_ST").entries
+    ours = [k for k, e in enumerate(regions) if entry_name(e).startswith(PREFIX)]
+    assert ours, "no UnicornWay_name regions to edit"
+    for k in ours:
+        e = bytearray(regions[k])
+        assert struct.unpack_from("<II", e, 0x08)[0] == MAP_NAME_OVERRIDE and struct.unpack_from("<I", e, 0x10)[0] == BOX
+        struct.pack_into("<3f", e, 0x14, *centre)
+        struct.pack_into("<3f", e, 0x20, 0.0, ry, 0.0)
+        struct.pack_into("<3f", e, struct.unpack_from("<q", e, 0x48)[0], *size)
+        struct.pack_into("<i", e, struct.unpack_from("<q", e, 0x58)[0], text_id)
+        regions[k] = bytes(e)
+        print(f"{entry_name(e)} (region {k}): centre {tuple(round(v, 2) for v in centre)} rot {ry} box {size} "
+              f"text {text_id}")
+    return ours
+
+
+def main():
+    src, dst = sys.argv[1], sys.argv[2]
+    data = open(src, "rb").read()
+    dcx = data[:4] == b"DCX\0"
+    raw = zlib.decompress(data[0x4C:]) if dcx else data
+    header, lists = read_msb(raw)
+    assert write_msb(header, lists) == raw, "map does not round-trip"
+    door_box(lists)
+    out = write_msb(header, lists)
+    if dcx:
+        packed = zlib.compress(out, 9)
+        head = bytearray(data[:0x4C])
+        struct.pack_into(">II", head, 0x1C, len(out), len(packed))
+        out = bytes(head) + packed
+    open(dst, "wb").write(out)
+
+
+if __name__ == "__main__":
+    main()
