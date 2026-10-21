@@ -22,14 +22,14 @@ use hudhook::{ImguiRenderLoop, RenderContext};
 const FRAMES_PER_SECOND: f32 = 12.0;
 /// Bottom edge of the lower (mana) globe on Wizard101's 768-pixel-tall screen.
 const BOTTOM: f32 = 722.0;
-/// HUDWindow.gui's windowHUD is 1156 wide; right-hand controls keep their gap to that right edge.
-const HUD_WIDTH: f32 = 1156.0;
 const HUD_HEIGHT: f32 = 768.0;
 /// XPBar (centred horizontally) and its progressXPSolid inside it.
 const XP_BAR: [f32; 4] = [326.0, 733.0, 830.0, 752.0];
 const XP_FILL: [f32; 4] = [18.0, 1.0, 486.0, 18.0];
-/// btnSpellbook; Button_Spellbook3 is two tiles side by side and the normal state shows the first.
-const SPELLBOOK: [f32; 4] = [948.0, 571.0, 1076.0, 699.0];
+/// btnSpellbook is 128x128 (948,571-1076,699 in HUDWindow.gui, which has no docking flags for it); Wizard101 puts it
+/// flush in the bottom-right corner: TutorialSpellbook.lua moves it to (GetScreenWidth() - 128,
+/// GetScreenHeight() - 128). Button_Spellbook3 is two tiles side by side and the normal state shows the first.
+const SPELLBOOK_SIZE: f32 = 128.0;
 /// Text colour of the globe numbers: WindowStyle m_Color FF00FFFF (Wizard101 colours are AABBGGRR), yellow.
 const TEXT_COLOUR: ImColor32 = ImColor32::from_rgb(255, 255, 0);
 /// Size of the level number next to the experience bar, as a WizardFancy scale.
@@ -107,6 +107,7 @@ struct Orbs {
     start: Instant,
     error: Option<String>,
     perf: Perf,
+    logged_size: [f32; 2],
 }
 
 /// Frame timing written to w101_orbs.log every few seconds, to see what the overlay costs the game.
@@ -161,6 +162,7 @@ impl Orbs {
             start: Instant::now(),
             error: None,
             perf: Perf::new(),
+            logged_size: [0.0, 0.0],
         }
     }
 
@@ -344,8 +346,12 @@ impl Orbs {
             let centre = [bar[0] - 6.0 * s - w / 2.0, bar[1] + (XP_BAR[3] - XP_BAR[1]) * s / 2.0];
             outlined(&draw, font, &text, centre, scale, s);
         }
-        let book = [width - (HUD_WIDTH - SPELLBOOK[0]) * s, height - (HUD_HEIGHT - SPELLBOOK[1]) * s];
-        draw.add_image(art.spellbook, book, p(book, SPELLBOOK[2] - SPELLBOOK[0], SPELLBOOK[3] - SPELLBOOK[1]))
+        let book = [width - SPELLBOOK_SIZE * s, height - SPELLBOOK_SIZE * s];
+        if self.logged_size != [width, height] {
+            self.logged_size = [width, height];
+            tracing::info!("screen {width}x{height}, HUD scale {s:.3}, xp bar at {bar:?}, spellbook at {book:?}");
+        }
+        draw.add_image(art.spellbook, book, [width, height])
             .uv_max([0.5, 1.0])
             .build();
         if self.settings.debug {
