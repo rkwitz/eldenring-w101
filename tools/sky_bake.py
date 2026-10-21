@@ -30,6 +30,11 @@ MINIMUM = (150.0, 450.0)  # dome radius where no Wizard101 geometry is near: at/
 
 WIDTH, ROWS = 1024, 512  # baked texture: 1024 = the Wizard101 sky texture's own width for the full turn
 ELEV_TOP, ELEV_BOTTOM = 90.0, -30.0  # elevations covered by the texture's rows; the dome below uses the last row
+# Wizard101's swirl band only reaches ~35 degrees up; above it the cap is one flat purple, which on a big dome reads as a
+# plain disc cut out of the sky. The bake stretches the band's upper part over the whole dome instead: a dome direction
+# at elevation STRETCH[0][k] shows what Wizard101 shows at STRETCH[1][k] (unchanged up to 5 degrees, the band's top
+# reaching just short of the zenith, which fades into the cap's purple).
+STRETCH = ((-90.0, 5.0, 86.0, 90.0), (-90.0, 5.0, 33.0, 40.0))
 
 
 def read_dds(dds):
@@ -97,6 +102,18 @@ def directions(width=WIDTH, rows=ROWS):
     return np.stack([np.cos(el) * np.cos(az), np.sin(el), np.cos(el) * np.sin(az)], -1)
 
 
+def stretched(rays):
+    """The Wizard101 directions (same shape) whose sky the dome shows in the directions `rays` (see STRETCH)."""
+    elevation = np.degrees(np.arcsin(np.clip(rays[..., 1], -1, 1)))
+    seen = np.radians(np.interp(elevation, *STRETCH))
+    flat = np.linalg.norm(rays[..., [0, 2]], axis=-1, keepdims=True)
+    horizontal = rays[..., [0, 2]] / np.maximum(flat, 1e-9)
+    out = np.empty_like(rays)
+    out[..., [0, 2]] = horizontal * np.cos(seen)[..., None]
+    out[..., 1] = np.sin(seen)
+    return out
+
+
 def raycast(rays, triangles):
     """(hit triangle or -1, barycentric b1, b2) of rays (n, 3) from the origin against triangles (T, 3, 3), nearest
     hit, both faces."""
@@ -147,8 +164,9 @@ def _layer_hits(layer, rays):
 
 
 def bake(sky_obj, sky_dds, cloud_obj=None, cloud_dds=None, width=WIDTH, rows=ROWS):
-    """RGB float image (rows, width, 3) of the Wizard101 sky seen from its centre, by direction (see `directions`)."""
-    rays = directions(width, rows).reshape(-1, 3)
+    """RGB float image (rows, width, 3) of the Wizard101 sky seen from its centre, by direction (see `directions`), with
+    the band stretched up over the sky (see STRETCH)."""
+    rays = stretched(directions(width, rows)).reshape(-1, 3)
     sky = read_layer(sky_obj)
     found, hit, uv, _ = _layer_hits(sky, rays)
     assert found.all(), "the sky's first layer should enclose its centre"

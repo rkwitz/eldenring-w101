@@ -9,7 +9,8 @@ frozen (no UV scrolling in our material).
 
 The dome uses the street's plain lit material with every normal pointing up, so the sun lights it evenly. Elden Ring
 has no unlit material we can point at our own texture (the aeg096 sky domes use Field_Skysphere matbins with their own
-sky textures). Distance fog would wash it out: gparam_fog.py turns the fog off.
+sky textures). Its MSB part must not receive shadows or point lights (msb_add_sky.py). Distance fog would wash it
+out, so this also writes fogless gparams (gparam_fog.py) to the project, for the whole overworld.
 
 Writes, in the Smithbox project:
   asset/aeg/aeg030/aeg030_523.geombnd.dcx      the dome FLVER, centred on its own origin; part AEG030_523_9000 sits
@@ -35,10 +36,11 @@ sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
 import flver_build  # noqa: E402
 import flver_fix  # noqa: E402
 import flver_textures  # noqa: E402
+import gparam_fog  # noqa: E402
 import sky_bake  # noqa: E402
 import tpf  # noqa: E402
 
-for module in (flver_fix, flver_build, flver_textures, sky_bake, tpf):
+for module in (flver_fix, flver_build, flver_textures, gparam_fog, sky_bake, tpf):
     importlib.reload(module)
 
 ASSET = "aeg030_523"
@@ -55,6 +57,24 @@ TEXTURES = [PROJECT / "aet" / "aet030" / f"{ASSET.replace('aeg', 'aet')}{suffix}
 SKY = ROOT / "reference" / "w101" / "converted_sky_classic"
 SKY_TEXTURE, CLOUD_TEXTURE = "WC_Skybox01_KH__19706315", "WC_Skybox_Clouds_KH__d376b071"
 STREET_OBJ = ROOT / "reference" / "w101" / "converted_classic" / "WC_Z06_Unicorn_Way_Classic.obj"
+GAME_GPARAMS = GAME.parent / "param" / "drawparam"
+PROJECT_GPARAMS = PROJECT.parent / "param" / "drawparam"
+
+
+def remove_fog():
+    """Write fogless copies of the overworld's light-set and weather gparams (gparam_fog.py) to the project, in the
+    game's own compression (an earlier DFLT copy from gparam_fog.py's command line may not load)."""
+    PROJECT_GPARAMS.mkdir(parents=True, exist_ok=True)
+    names = sorted(GAME_GPARAMS.glob("m00_00_*_weatheroutdoor.gparam.dcx"))
+    names += [GAME_GPARAMS / f"m60_00_{light_set}.gparam.dcx" for light_set in ("0000", "0100")]
+    written = 0
+    for path in names:
+        data, dcx_type = decompress(path)
+        new, changed = gparam_fog.remove_fog(data)
+        if changed:
+            (PROJECT_GPARAMS / path.name).write_bytes(compress(new, dcx_type))
+            written += 1
+    print(f"Wrote {written} fogless gparams to {PROJECT_GPARAMS} (delete that folder to get the fog back)")
 
 
 def build_sky():
@@ -92,3 +112,4 @@ def build_sky():
 
 
 build_sky()
+remove_fog()

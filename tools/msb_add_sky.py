@@ -3,7 +3,10 @@
 The dome is modelled around its own origin, so its part AEG030_523_9000 sits at the dome's centre on the street
 (sky_bake.CENTRE in street coordinates, carried through the street part's transform) and turns with the street. Its
 PartsDrawParam override is row 845 (vanilla: never fades, 9999 m draw distance, casts and receives no shadows). The
-street's row 36 would let the closed dome cast sun shadows over the whole street. If you move the street in Smithbox,
+street's row 36 would let the closed dome cast sun shadows over the whole street. The part's own entity flags matter
+too: IsShadowDest (entity data +0x11, 1 on the street part it was copied from) let the street's trees and towers cast
+sun shadows across the dome in game, so it is cleared, and DisablePointLightEffect (+0x16) is set so the street's
+lamps don't light patches of it. If you move the street in Smithbox,
 run this again (it updates the part in place).
 
 Usage: python msb_add_sky.py map.msb.dcx out.msb.dcx
@@ -23,6 +26,8 @@ from sky_bake import CENTRE  # noqa: E402
 STREET, STREET_MODEL = "AEG030_518_9000", "AEG030_518"
 SKY, SKY_MODEL = "AEG030_523_9000", "AEG030_523"
 DRAW_PARAM = 845
+SHADOW_SOURCES = (0x0A, 0x0C, 0x0D, 0x0E)  # entity data flags: point light / sun / static / cascade shadow source
+SHADOW_DEST, NO_POINT_LIGHTS = 0x11, 0x16
 
 
 def sky_position(street_position, street_rotation):
@@ -53,6 +58,9 @@ def place_sky(raw):
     struct.pack_into("<i", e, entity, 0)  # no entity id
     e[entity + 4] = 1  # use the PartsDrawParam override below
     struct.pack_into("<h", e, entity + 8, DRAW_PARAM)
+    for flag in SHADOW_SOURCES + (SHADOW_DEST,):
+        e[entity + flag] = 0
+    e[entity + NO_POINT_LIGHTS] = 1
     position, rotation = transform(street)
     e = set_transform(bytes(e), sky_position(position, rotation), rotation)
     if k is None:
@@ -60,7 +68,7 @@ def place_sky(raw):
     else:
         parts.entries[k] = e
     print(f"{SKY}: position {tuple(round(c, 3) for c in transform(e)[0])}, rotation {transform(e)[1]}, "
-          f"PartsDrawParam {DRAW_PARAM}")
+          f"PartsDrawParam {DRAW_PARAM}, no shadows, no point lights")
     return write_msb(header, lists)
 
 
