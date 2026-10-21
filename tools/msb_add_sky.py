@@ -26,6 +26,7 @@ def add_sky(raw):
     model = add_model(lists, SKY_MODEL, STREET_MODEL)
     e = bytearray(parts.entries[find(parts, STREET)])
     _set_name(e, SKY)
+    struct.pack_into("<i", e, 0x10, sum(1 for x in parts.entries if x[0x0C:0x10] == e[0x0C:0x10]))  # index in its type
     struct.pack_into("<i", e, 0x14, model)
     struct.pack_into("<i", e, struct.unpack_from("<q", e, ENTITY_DATA_FIELD)[0], 0)
     parts.entries.append(bytes(e))

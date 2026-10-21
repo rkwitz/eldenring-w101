@@ -29,7 +29,7 @@ REGION_TEMPLATE = "walk_route_c4200_9008_19_61"
 EVENT_TEMPLATE_TYPE_INDEX = 1  # a looping patrol route with points
 EVENT_NAME = "ghost_walk"
 THINK_ID, NPC_ID = 43000000, 43009000  # Wandering Noble AI, Wandering Noble (Stranded Soul)
-REGION_ID, EVENT_ID = 9100, 9100
+REGION_ID = 9100
 
 PART_TYPE, PATROL_EVENT, PATROL_POINT = 0x0C, 20, 32
 TYPE_DATA = 0x68  # part header field: offset of the enemy type data
@@ -82,7 +82,8 @@ def add_ghost(raw, zone):
     route_index = len(patrols)
     e = bytearray(next(e for e in patrols if struct.unpack_from("<i", e, 0x10)[0] == EVENT_TEMPLATE_TYPE_INDEX))
     _set_name(e, EVENT_NAME)
-    struct.pack_into("<ii", e, 0x08, EVENT_ID, PATROL_EVENT)
+    # 0x08 is the event's ordinal among all events (small, unique), not a free id.
+    struct.pack_into("<ii", e, 0x08, 1 + max(struct.unpack_from("<i", x, 0x08)[0] for x in events.entries), PATROL_EVENT)
     struct.pack_into("<i", e, 0x10, route_index)
     type_data = struct.unpack_from("<q", e, 0x20)[0]
     e[type_data] = 0  # patrol type 0: back to the first point after the route, i.e. loop
@@ -94,6 +95,7 @@ def add_ghost(raw, zone):
     e = bytearray(parts.entries[find(parts, PART_TEMPLATE)])
     _set_name(e, PART)
     struct.pack_into("<i", e, 0x08, int(PART.split("_")[1]))
+    struct.pack_into("<i", e, 0x10, sum(1 for x in parts.entries if x[0x0C:0x10] == e[0x0C:0x10]))  # index in its type
     struct.pack_into("<i", e, 0x14, model)
     struct.pack_into("<3f", e, 0x20, *points[0])
     struct.pack_into("<3f", e, 0x2C, 0.0, 0.0, 0.0)
