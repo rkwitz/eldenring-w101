@@ -3,6 +3,8 @@
 Usage: python emevd.py m18_00_00_00.emevd out.emevd
   closes the Stranded Graveyard exit door on every map load and every rest (see close_graveyard_door). The output still
   needs DCX compression (DFLT, as Smithbox saves) to go in the project's event folder.
+python emevd.py --no-guidance m60_42_36_00.emevd out.emevd
+  removes the Guidance of Grace light wisps at The First Step and Church of Elleh (see no_guidance_wisps).
 """
 import struct
 class Emevd:
@@ -125,6 +127,27 @@ def title_on_door_exit(d, event_id=1042362991, door_flag=1042368540, area=104236
     return build(e, events)
 
 
+GUIDANCE_GRACES = (1042361981, 1042361980)  # AEG099_090 grace markers of The First Step (76101) and Church of Elleh (76100)
+NO_ENTITY = 1042361989  # unused entity id in this tile (not in m60_42_36_00 or m60_10_09_02)
+
+
+def no_guidance_wisps(d, markers=GUIDANCE_GRACES, dummy=NO_ENTITY):
+    """Event 0's calls of common event 90005100 (grace with Guidance of Grace) for the grace `markers` get entity
+    `dummy` instead. 90005100 uses that argument (X8) only for the golden guidance-light SFX 6400, which it attaches to
+    the marker's dummy poly 100 when the grace is lit (2006[04]) and removes with 2006[05]; the guidance flags 78100..
+    (WorldMapPointParam 95100/95101: the golden line on the world map), the grace itself and the first-rest tutorial
+    keep working. SFX are not saved, so this needs no flag reset."""
+    e = Emevd(d)
+    events = events_of(e)
+    hits = 0
+    for i in next(ev for ev in events if ev["id"] == 0)["ins"]:
+        if (i["bank"], i["id"]) == (2000, 6) and struct.unpack_from("<i", i["args"], 4)[0] == 90005100:
+            if struct.unpack_from("<I", i["args"], 16)[0] in markers:
+                a = bytearray(i["args"]); struct.pack_into("<I", a, 16, dummy); i["args"] = bytes(a); hits += 1
+    assert hits == len(markers), f"found {hits} of {len(markers)} 90005100 calls"
+    return build(e, events)
+
+
 def build(e, events):
     """EMEVD bytes from `events` [{id, rest, ins: [{bank, id, args, layer}], pars: [(index, target, source, size, unk)]}]
     with the header flags, linked files and strings of the parsed file `e` (no layers)."""
@@ -165,5 +188,8 @@ def events_of(e):
 
 if __name__ == "__main__":
     import sys
+    if sys.argv[1] == "--no-guidance":  # emevd.py --no-guidance m60_42_36_00.emevd out.emevd
+        open(sys.argv[3], "wb").write(no_guidance_wisps(open(sys.argv[2], "rb").read()))
+        sys.exit()
     data = open(sys.argv[1], "rb").read()
     open(sys.argv[2], "wb").write(close_graveyard_door(data))
