@@ -101,6 +101,30 @@ def reset_flags_on_load(d, event_id, flags):
     return build(e, events)
 
 
+def title_on_door_exit(d, event_id=1042362991, door_flag=1042368540, area=1042362700, place_name=610900):
+    """A new event `event_id` (restart on rest) that waits until the door's open flag is on while the player (10000) is
+    inside region `area` (both at once, condition group 1, so a flag left on from the save before the reset event clears
+    it can't count), then shows PlaceName `place_name` as the area welcome card (2007[14], as m11_05 does for Leyndell).
+    Started from event 0 right after the door reset event 1042362990 (or at the top if that is absent). For the Unicorn Way card on walking out of the First Step lift-up door: the
+    MapNameOverride box alone showed it only after a warp/load."""
+    e = Emevd(d)
+    events = events_of(e)
+    assert all(ev["id"] != event_id for ev in events), f"event {event_id} already exists"
+    start = {"bank": 2000, "id": 0, "args": struct.pack("<iIi", 0, event_id, 0), "layer": -1}
+    ins0 = next(ev for ev in events if ev["id"] == 0)["ins"]
+    reset = [k for k, i in enumerate(ins0) if (i["bank"], i["id"]) == (2000, 0)
+             and struct.unpack_from("<I", i["args"], 4)[0] == 1042362990]
+    ins0.insert(reset[0] + 1 if reset else 0, start)
+    body = [
+        {"bank": 3, "id": 0, "args": struct.pack("<bBBxI", 1, 1, 0, door_flag), "layer": -1},  # IF Event Flag ON
+        {"bank": 3, "id": 2, "args": struct.pack("<bBxxIIi", 1, 1, 10000, area, 1), "layer": -1},  # IF player in area
+        {"bank": 0, "id": 0, "args": struct.pack("<bBbx", 0, 1, 1), "layer": -1},  # IF Condition Group 1
+        {"bank": 2007, "id": 14, "args": struct.pack("<i", place_name), "layer": -1},  # Display Area Welcome Message
+    ]
+    events.append({"id": event_id, "rest": 1, "pars": [], "ins": body})
+    return build(e, events)
+
+
 def build(e, events):
     """EMEVD bytes from `events` [{id, rest, ins: [{bank, id, args, layer}], pars: [(index, target, source, size, unk)]}]
     with the header flags, linked files and strings of the parsed file `e` (no layers)."""
