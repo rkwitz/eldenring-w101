@@ -64,24 +64,21 @@ impl Game {
         })
     }
 
-    /// Current stats, or None while no character is loaded (title screen, loading screens): the player character
-    /// has to exist in the world. Its own stat module gives the live values; the save's copy is the fallback if
-    /// those offsets ever look wrong.
-    pub fn stats(&self) -> Option<Stats> {
-        let player = read::<usize>(self.world_chr_man).and_then(|wcm| read::<usize>(wcm + PLAYER))?;
-        let live = read::<usize>(player + MODULES)
-            .and_then(|modules| read::<usize>(modules))
-            .and_then(|stat| {
-                Some(Stats {
-                    hp: read(stat + STAT_HP)?,
-                    max_hp: read(stat + STAT_HP + 4)?,
-                    fp: read(stat + STAT_FP)?,
-                    max_fp: read(stat + STAT_FP + 4)?,
-                    sp: read(stat + STAT_SP)?,
-                    max_sp: read(stat + STAT_SP + 4)?,
-                    level: None,
-                })
-            });
+    /// Every candidate value, for `stats` and for the debug log.
+    pub fn probe(&self) -> Probe {
+        let player = read::<usize>(self.world_chr_man).and_then(|wcm| read::<usize>(wcm + PLAYER));
+        let stat = player.and_then(|p| read::<usize>(p + MODULES)).and_then(|modules| read::<usize>(modules));
+        let live = stat.and_then(|stat| {
+            Some(Stats {
+                hp: read(stat + STAT_HP)?,
+                max_hp: read(stat + STAT_HP + 4)?,
+                fp: read(stat + STAT_FP)?,
+                max_fp: read(stat + STAT_FP + 4)?,
+                sp: read(stat + STAT_SP)?,
+                max_sp: read(stat + STAT_SP + 4)?,
+                level: None,
+            })
+        });
         let pgd = read::<usize>(self.game_data_man).and_then(|gdm| read::<usize>(gdm + PLAYER_GAME_DATA));
         let saved = pgd.and_then(|pgd| {
             Some(Stats {
@@ -100,9 +97,58 @@ impl Game {
             let runes = read::<u32>(pgd + std::mem::offset_of!(PlayerGameData, rune_count))?;
             (1..=713).contains(&level).then_some((level, runes))
         });
-        let stats = live.filter(plausible).or(saved.filter(plausible))?;
-        Some(Stats { level, ..stats })
+        Probe { player, stat, live, saved, hud: hud_values(), level }
     }
+}
+
+/// The candidates `Game::probe` found.
+#[derive(Debug)]
+pub struct Probe {
+    pub player: Option<usize>,
+    /// The stat module's address; only shown in the debug log.
+    #[allow(dead_code)]
+    pub stat: Option<usize>,
+    pub live: Option<Stats>,
+    pub saved: Option<Stats>,
+    /// (hp, fp, max fp, stamina, max stamina) from the HUD's FrontEndViewValues.
+    pub hud: Option<[i32; 5]>,
+    pub level: Option<(u32, u32)>,
+}
+
+impl Probe {
+    /// Current stats, or None while no character is loaded (title screen, loading screens): the player character
+    /// has to exist in the world. Its own stat module gives the live values; the save's copy is the fallback if
+    /// those offsets ever look wrong. Stamina comes from the values Elden Ring's own HUD shows (CSFeMan's
+    /// FrontEndViewValues), else the stat module, never from the save's copy, which isn't updated while you run.
+    pub fn stats(&self) -> Option<Stats> {
+        self.player?;
+        let live = self.live.filter(plausible);
+        let mut stats = live.or(self.saved.filter(plausible))?;
+        // Stamina: what Elden Ring's own (hidden) bar shows, which is live by definition; then the stat module.
+        match self.hud {
+            Some([_, _, _, sp, max_sp]) if (1..100_000).contains(&max_sp) && (0..=max_sp).contains(&sp) => {
+                (stats.sp, stats.max_sp) = (sp, max_sp);
+            }
+            _ if live.is_none() => stats.sp = stats.max_sp,
+            _ => {}
+        }
+        Some(Stats { level: self.level, ..stats })
+    }
+}
+
+/// What Elden Ring's own HUD is showing: CSFeMan copies hp, fp and stamina into FrontEndViewValues every frame.
+fn hud_values() -> Option<[i32; 5]> {
+    use eldenring::cs::{CSFeManImp, FrontEndViewValues};
+    use std::mem::offset_of;
+    let fe_man = from_singleton::static_of::<CSFeManImp>()?;
+    let values = read::<usize>(fe_man.as_ptr() as usize)? + offset_of!(CSFeManImp, frontend_values);
+    Some([
+        read(values + offset_of!(FrontEndViewValues, player_hp))?,
+        read(values + offset_of!(FrontEndViewValues, fp))?,
+        read(values + offset_of!(FrontEndViewValues, fp_max))?,
+        read(values + offset_of!(FrontEndViewValues, stamina))?,
+        read(values + offset_of!(FrontEndViewValues, stamina_max))?,
+    ])
 }
 
 /// Whether Elden Ring is showing its own HP/FP bars right now. The front-end manager (CSFeMan, found by name through

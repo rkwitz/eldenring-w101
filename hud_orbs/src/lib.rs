@@ -120,6 +120,7 @@ struct Orbs {
     error: Option<String>,
     perf: Perf,
     logged_size: [f32; 2],
+    last_probe_log: Instant,
 }
 
 /// Frame timing written to w101_orbs.log every few seconds, to see what the overlay costs the game.
@@ -175,6 +176,7 @@ impl Orbs {
             error: None,
             perf: Perf::new(),
             logged_size: [0.0, 0.0],
+            last_probe_log: Instant::now(),
         }
     }
 
@@ -318,7 +320,12 @@ impl Orbs {
         if !game::hud_shown() || game::faded() > 0.3 {
             return;
         }
-        let Some(stats) = game.stats() else { return };
+        let probe = game.probe();
+        if self.settings.debug && self.last_probe_log.elapsed().as_secs_f32() >= 1.0 {
+            self.last_probe_log = Instant::now();
+            tracing::info!("probe {probe:x?}");
+        }
+        let Some(stats) = probe.stats() else { return };
 
         let height = ui.io().display_size[1];
         let s = self.settings.scale * height / 768.0;
@@ -485,7 +492,7 @@ fn dll_folder() -> PathBuf {
 
 /// `key = value` lines: left and bottom (extra gap from the screen's bottom-left corner, in Wizard101 pixels; 0 is
 /// exactly where Wizard101 puts the globes), scale (1 = Wizard101's size on a 768-pixel-tall screen) and debug (1
-/// shows the raw numbers) and level (0 hides the level number beside the experience bar).
+/// shows the raw numbers and logs every candidate stat value once a second) and level (0 hides the level number beside the experience bar).
 fn load_settings(path: &Path) -> Settings {
     let mut settings = Settings { left: 0.0, bottom: 0.0, scale: 1.0, debug: false, level: true };
     for line in std::fs::read_to_string(path).unwrap_or_default().lines() {
