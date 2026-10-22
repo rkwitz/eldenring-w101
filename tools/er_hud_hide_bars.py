@@ -1,4 +1,5 @@
-"""Hide Elden Ring's own HP, FP and stamina bars and rune counter, which the hud_orbs W101 globes replace.
+"""Hide Elden Ring's own HP, FP and stamina bars and rune counter, which the hud_orbs W101 globes replace, and move
+the quick-slot (equipment) panel right so it doesn't sit behind the globes.
 
 Usage: python er_hud_hide_bars.py path\\to\\ELDEN RING\\Game\\menu path\\to\\mod\\menu
 
@@ -8,16 +9,25 @@ script still updates them but they are drawn invisibly:
 - 01_000_fe.gfx, PlayerHUD > Gauge: HP, MP (FP), HPRegain (the recoverable-HP sliver) and SP (stamina). Enemy and
   ally tags also have placements named HP, so only the sprite that places SP is touched.
 - 01_001_fe_soul.gfx: the root's Soul clip (rune counter).
+The quick slots are PlayerHUD's ItemPanel and ItemPanel2 (pouch); in the 1920x1080 movie their icons start at x 28,
+and the mana globe's right edge (156 of Wizard101's 768-pixel height, at hud_orbs scale 1) is at x 219, so both move
+right by ITEM_SHIFT. The movie scales with the screen like the globes, so this holds at any 16:9 resolution.
 """
 import struct
 import sys
 import zlib
 from pathlib import Path
 
-# movie: (a name that marks the right sprite or root timeline, names to hide there, how many placements to expect)
+HIDE = "hide"
+ITEM_SHIFT = 200.0  # movie pixels; icons then start at x 228
+# movie: [(a name that marks the right sprite or root timeline, {placement name: edit}, placements to expect)];
+# an edit is HIDE or (dx, dy) in movie pixels.
 TARGETS = {
-    "01_000_fe.gfx": (b"SP", {b"HP", b"MP", b"HPRegain", b"SP"}, 4),
-    "01_001_fe_soul.gfx": (b"Soul", {b"Soul"}, 2),  # root Soul and the Soul inside it
+    "01_000_fe.gfx": [
+        (b"SP", {b"HP": HIDE, b"MP": HIDE, b"HPRegain": HIDE, b"SP": HIDE}, 4),
+        (b"ItemPanel", {b"ItemPanel": (ITEM_SHIFT, 0.0), b"ItemPanel2": (ITEM_SHIFT, 0.0)}, 2),
+    ],
+    "01_001_fe_soul.gfx": [(b"Soul", {b"Soul": HIDE}, 2)],  # root Soul and the Soul inside it
 }
 
 
@@ -60,6 +70,52 @@ def matrix_end(data, pos):
     return bits.end()
 
 
+def read_matrix(data, pos):
+    """[scale x, scale y] or None, [rotate 0, rotate 1] or None, [translate x, y] in twips."""
+    bits = Bits(data, pos)
+
+    def signed(n):
+        value = bits.read(n)
+        return value - (1 << n) if n and value >> (n - 1) else value
+    parts = []
+    for _ in range(2):
+        if bits.read(1):
+            n = bits.read(5)
+            parts.append([signed(n), signed(n)])
+        else:
+            parts.append(None)
+    n = bits.read(5)
+    parts.append([signed(n), signed(n)])
+    return parts
+
+
+def write_matrix(scale, rotate, translate):
+    """MATRIX record bytes."""
+    out, count = 0, 0
+
+    def put(value, n):
+        nonlocal out, count
+        out = (out << n) | (value & ((1 << n) - 1))
+        count += n
+
+    def width(values):
+        return max(max(v.bit_length() + 1 for v in values), 1)
+    for pair in (scale, rotate):
+        put(pair is not None, 1)
+        if pair is not None:
+            n = width(pair)
+            put(n, 5)
+            put(pair[0], n)
+            put(pair[1], n)
+    n = width(translate) if any(translate) else 0
+    put(n, 5)
+    if n:
+        put(translate[0], n)
+        put(translate[1], n)
+    pad = -count % 8
+    return (out << pad).to_bytes((count + pad) // 8, "big")
+
+
 def cxform_end(data, pos):
     bits = Bits(data, pos)
     has_add, has_mult, n = bits.read(1), bits.read(1), bits.read(4)
@@ -89,8 +145,8 @@ def placed_name(body):
     return body[pos:body.index(b"\0", pos)] if flags & 0x20 else None
 
 
-def hide(body, names):
-    """A PlaceObject2 body with its colour transform replaced by INVISIBLE, if its name is in `names`."""
+def edit(body, edits):
+    """A PlaceObject2 body with its edit from `edits` applied (by instance name), or None."""
     flags = body[0]
     pos = 3  # flags, depth
     if flags & 0x02:
@@ -106,75 +162,81 @@ def hide(body, names):
     if not flags & 0x20:
         return None
     name = body[pos:body.index(b"\0", pos)]
-    if name not in names:
+    change = edits.get(name)
+    if change is None:
         return None
-    return bytes([flags | 0x08]) + body[1:cx_start] + INVISIBLE + body[rest:]
+    if change == HIDE:
+        return bytes([flags | 0x08]) + body[1:cx_start] + INVISIBLE + body[rest:]
+    if not flags & 0x04:
+        sys.exit(f"{name.decode()} has no matrix to move")
+    at = 5 if flags & 0x02 else 3
+    scale, rotate, (x, y) = read_matrix(body, at)
+    moved = write_matrix(scale, rotate, [x + round(change[0] * 20), y + round(change[1] * 20)])
+    return body[:at] + moved + body[cx_start:]
 
 
 def tag_bytes(code, body):
     return struct.pack("<HI", code << 6 | 0x3F, len(body)) + body
 
 
-def hide_in(tag_list, data, marker, names, hidden):
-    """Bytes of the tags with matching placements hidden, if `marker` is placed among them, else None."""
+def edit_in(tag_list, data, marker, edits, done):
+    """Bytes of the tags with matching placements edited, if `marker` is placed among them, else None."""
     placed = {placed_name(data[p + h:p + h + l]) for c, p, h, l in tag_list if c == 26}
     if marker not in placed:
         return None
     out = bytearray()
     for code, pos, header, length in tag_list:
-        changed = hide(data[pos + header:pos + header + length], names) if code == 26 else None
+        changed = edit(data[pos + header:pos + header + length], edits) if code == 26 else None
         if changed:
-            hidden.append(placed_name(changed).decode())
+            done.append(placed_name(changed).decode())
         out += tag_bytes(code, changed) if changed else data[pos:pos + header + length]
     return bytes(out)
 
 
-def patch(source, target, marker, names, expected):
-    data = source.read_bytes()
-    if data[:3] in (b"CFX", b"CWS"):
-        data = data[:8] + zlib.decompress(data[8:])
-    assert data[:3] in (b"GFX", b"FWS"), f"{source} is not a GFX/SWF movie"
+def patch(data, marker, edits, expected, movie):
+    """`data` (an uncompressed movie) with `edits` applied in the sprite or root timeline that places `marker`."""
     rect_bits = data[8] >> 3
     start = 8 + (5 + 4 * rect_bits + 7) // 8 + 4
-    hidden = []
-    top = list(tags(data, start, len(data)))
-    # Sprites first, each on its own; then the root timeline (top-level placements) as a whole.
+    done = []
     pieces = []
-    for code, pos, header, length in top:
+    for code, pos, header, length in tags(data, start, len(data)):
         tag = data[pos:pos + header + length]
         if code == 39:  # DefineSprite
             body = data[pos + header:pos + header + length]
-            inner = hide_in(list(tags(body, 4, len(body))), body, marker, names, hidden)
+            inner = edit_in(list(tags(body, 4, len(body))), body, marker, edits, done)
             if inner is not None:
                 tag = tag_bytes(39, body[:4] + inner)
         pieces.append((code, pos, header, length, tag))
     root = [(c, p, h, l) for c, p, h, l, _ in pieces if c != 39]
-    rooted = hide_in(root, data, marker, names, hidden)
+    rooted = edit_in(root, data, marker, edits, done)
     out = bytearray(data[:start])
-    if rooted is None:
-        for *_, tag in pieces:
+    rebuilt = iter(list(tags(rooted, 0, len(rooted)))) if rooted is not None else None
+    for code, *_, tag in pieces:
+        if code == 39 or rebuilt is None:
             out += tag
-    else:
-        # hide_in rebuilt the non-sprite tags in order; splice them back between the sprites.
-        rebuilt = iter(list(tags(rooted, 0, len(rooted))))
-        for code, *_, tag in pieces:
-            if code == 39:
-                out += tag
-            else:
-                c, p, h, l = next(rebuilt)
-                out += rooted[p:p + h + l]
-    if len(hidden) != expected:
-        sys.exit(f"{source.name}: expected to hide {expected} placements, hid {hidden}")
+        else:
+            c, p, h, l = next(rebuilt)
+            out += rooted[p:p + h + l]
+    if len(done) != expected:
+        sys.exit(f"{movie}: expected to edit {expected} placements, edited {done}")
     struct.pack_into("<I", out, 4, len(out))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(bytes(out))
-    print(f"{target}: hid {', '.join(hidden)} ({len(out)} bytes)")
+    print(f"{movie}: {', '.join(f'{n} {edits[n.encode()]}' for n in done)}")
+    return bytes(out)
 
 
 def main():
     game_menu, mod_menu = Path(sys.argv[1]), Path(sys.argv[2])
-    for movie, (marker, names, expected) in TARGETS.items():
-        patch(game_menu / movie, mod_menu / movie, marker, names, expected)
+    for movie, rules in TARGETS.items():
+        data = (game_menu / movie).read_bytes()
+        if data[:3] in (b"CFX", b"CWS"):
+            data = data[:8] + zlib.decompress(data[8:])
+        assert data[:3] in (b"GFX", b"FWS"), f"{movie} is not a GFX/SWF movie"
+        for marker, edits, expected in rules:
+            data = patch(data, marker, edits, expected, movie)
+        target = mod_menu / movie
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        print(f"wrote {target} ({len(data)} bytes)")
 
 
 if __name__ == "__main__":
