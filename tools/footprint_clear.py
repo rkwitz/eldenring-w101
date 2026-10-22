@@ -10,7 +10,7 @@ What it does, for every tile of the three sizes that overlaps the street:
     MARGIN) are moved 1000 m down;
   - ground map pieces and their collision (m.../h... parts) of every 256 m tile the footprint touches, and their
     far-view copies (m14XXZZ.., m24XXZZ..), are moved 1000 m down too.
-SFX/WindSFX regions (embers, ash) over the footprint go down too. Our own parts (street, sky, grace, exit door)
+Dummy assets and dummy enemies (corpses, skulls) over the footprint, and SFX/WindSFX regions (embers, ash) over the footprint go down too. Our own parts (street, sky, grace, exit door)
 and all characters are left alone. Moving rather than deleting keeps
 every index the same, so it is safe to rerun, and parts already moved are not moved again.
 
@@ -39,6 +39,7 @@ SINK = 1000.0
 CELL = 1.0
 KEEP = ("AEG030_518", "AEG030_523", "AEG099_060", "AEG099_090", "AEG110_064", "AEG008_262_1000", "AEG092_102_1000")
 MAP_PIECE, COLLISION, ASSET = 0, 5, 13
+DUMMY_ASSET, DUMMY_ENEMY = 9, 10  # corpses, skulls and other set dressing placed as dummies
 SFX_REGIONS = (5, 6)  # SFX and WindSFX regions (embers, ash, mist)
 SIZE = {"00": 256, "01": 512, "02": 1024}
 DIVIDE = {"00": 1, "01": 2, "02": 4}
@@ -137,9 +138,9 @@ def clear(name, raw, footprint, small):
         kind = struct.unpack_from("<i", e, 0x0C)[0]
         part = entry_name(e)
         x, y, z = struct.unpack_from("<3f", e, 0x20)
-        if kind not in (MAP_PIECE, COLLISION, ASSET) or y < -SINK / 2 or any(s in part for s in KEEP):
+        if kind not in (MAP_PIECE, COLLISION, ASSET, DUMMY_ASSET, DUMMY_ENEMY) or y < -SINK / 2 or any(s in part for s in KEEP):
             continue
-        if kind == ASSET:
+        if kind in (ASSET, DUMMY_ASSET, DUMMY_ENEMY):
             hx, hz = to_home(name, x, z)
             hit = footprint.covers(hx, hz)
         else:
