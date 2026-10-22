@@ -1,19 +1,24 @@
-"""Hide Elden Ring's own HP and FP bars (top-left HUD) but keep the stamina bar, for the hud_orbs W101 globes.
+"""Hide Elden Ring's own HP, FP and stamina bars and rune counter, which the hud_orbs W101 globes replace.
 
-Usage: python er_hud_hide_bars.py path\\to\\ELDEN RING\\Game\\menu\\01_000_fe.gfx path\\to\\mod\\menu\\01_000_fe.gfx
+Usage: python er_hud_hide_bars.py path\\to\\ELDEN RING\\Game\\menu path\\to\\mod\\menu
 
-Reads the unpacked HUD movie (UXM) and writes a copy for the Mod Engine mod folder; the game's file is not changed,
-so deleting the copy undoes it. In 01_000_fe.gfx, PlayerHUD > Gauge places the bars as MP, HP and HPRegain (the
-recoverable-HP sliver) next to SP; this gives those three placements a colour transform with alpha 0, so they are
-still updated by the game's script but drawn invisibly.
+Reads the unpacked HUD movies (UXM) and writes copies for the Mod Engine mod folder; the game's files are not
+changed, so deleting the copies undoes it. The hidden placements get a colour transform with alpha 0, so the game's
+script still updates them but they are drawn invisibly:
+- 01_000_fe.gfx, PlayerHUD > Gauge: HP, MP (FP), HPRegain (the recoverable-HP sliver) and SP (stamina). Enemy and
+  ally tags also have placements named HP, so only the sprite that places SP is touched.
+- 01_001_fe_soul.gfx: the root's Soul clip (rune counter).
 """
 import struct
 import sys
 import zlib
 from pathlib import Path
 
-HIDE = {b"HP", b"MP", b"HPRegain"}
-KEEP = b"SP"  # the sprite that also places SP is the gauge sprite
+# movie: (a name that marks the right sprite or root timeline, names to hide there, how many placements to expect)
+TARGETS = {
+    "01_000_fe.gfx": (b"SP", {b"HP", b"MP", b"HPRegain", b"SP"}, 4),
+    "01_001_fe_soul.gfx": (b"Soul", {b"Soul"}, 2),  # root Soul and the Soul inside it
+}
 
 
 def tags(data, pos, end):
@@ -69,8 +74,23 @@ for value, width in [(0, 1), (1, 1), (10, 4), (256, 10), (256, 10), (256, 10), (
 INVISIBLE = (INVISIBLE << 2).to_bytes(6, "big")  # 46 bits, padded to 48
 
 
-def hide(body):
-    """A PlaceObject2 body with its colour transform replaced by INVISIBLE, if its name is in HIDE."""
+def placed_name(body):
+    """Instance name of a PlaceObject2 body, or None."""
+    flags = body[0]
+    pos = 3
+    if flags & 0x02:
+        pos += 2
+    if flags & 0x04:
+        pos = matrix_end(body, pos)
+    if flags & 0x08:
+        pos = cxform_end(body, pos)
+    if flags & 0x10:
+        pos += 2
+    return body[pos:body.index(b"\0", pos)] if flags & 0x20 else None
+
+
+def hide(body, names):
+    """A PlaceObject2 body with its colour transform replaced by INVISIBLE, if its name is in `names`."""
     flags = body[0]
     pos = 3  # flags, depth
     if flags & 0x02:
@@ -86,7 +106,7 @@ def hide(body):
     if not flags & 0x20:
         return None
     name = body[pos:body.index(b"\0", pos)]
-    if name not in HIDE:
+    if name not in names:
         return None
     return bytes([flags | 0x08]) + body[1:cx_start] + INVISIBLE + body[rest:]
 
@@ -95,38 +115,66 @@ def tag_bytes(code, body):
     return struct.pack("<HI", code << 6 | 0x3F, len(body)) + body
 
 
-def main():
-    source, target = Path(sys.argv[1]), Path(sys.argv[2])
+def hide_in(tag_list, data, marker, names, hidden):
+    """Bytes of the tags with matching placements hidden, if `marker` is placed among them, else None."""
+    placed = {placed_name(data[p + h:p + h + l]) for c, p, h, l in tag_list if c == 26}
+    if marker not in placed:
+        return None
+    out = bytearray()
+    for code, pos, header, length in tag_list:
+        changed = hide(data[pos + header:pos + header + length], names) if code == 26 else None
+        if changed:
+            hidden.append(placed_name(changed).decode())
+        out += tag_bytes(code, changed) if changed else data[pos:pos + header + length]
+    return bytes(out)
+
+
+def patch(source, target, marker, names, expected):
     data = source.read_bytes()
     if data[:3] in (b"CFX", b"CWS"):
         data = data[:8] + zlib.decompress(data[8:])
     assert data[:3] in (b"GFX", b"FWS"), f"{source} is not a GFX/SWF movie"
     rect_bits = data[8] >> 3
     start = 8 + (5 + 4 * rect_bits + 7) // 8 + 4
-    out = bytearray(data[:start])
     hidden = []
-    for code, pos, header, length in tags(data, start, len(data)):
+    top = list(tags(data, start, len(data)))
+    # Sprites first, each on its own; then the root timeline (top-level placements) as a whole.
+    pieces = []
+    for code, pos, header, length in top:
         tag = data[pos:pos + header + length]
         if code == 39:  # DefineSprite
             body = data[pos + header:pos + header + length]
-            inner = list(tags(body, 4, len(body)))
-            names = [body[p + h:p + h + l] for c, p, h, l in inner if c == 26]
-            if any(KEEP + b"\0" in n for n in names) and any(hide(n) for n in names):
-                new = bytearray(body[:4])
-                for c, p, h, l in inner:
-                    piece = body[p + h:p + h + l]
-                    changed = hide(piece) if c == 26 else None
-                    if changed:
-                        hidden.append(piece)
-                    new += tag_bytes(c, changed) if changed else body[p:p + h + l]
-                tag = tag_bytes(39, bytes(new))
-        out += tag
-    if len(hidden) != len(HIDE):
-        sys.exit(f"expected to hide {len(HIDE)} bars, found {len(hidden)}; is this Elden Ring's 01_000_fe.gfx?")
+            inner = hide_in(list(tags(body, 4, len(body))), body, marker, names, hidden)
+            if inner is not None:
+                tag = tag_bytes(39, body[:4] + inner)
+        pieces.append((code, pos, header, length, tag))
+    root = [(c, p, h, l) for c, p, h, l, _ in pieces if c != 39]
+    rooted = hide_in(root, data, marker, names, hidden)
+    out = bytearray(data[:start])
+    if rooted is None:
+        for *_, tag in pieces:
+            out += tag
+    else:
+        # hide_in rebuilt the non-sprite tags in order; splice them back between the sprites.
+        rebuilt = iter(list(tags(rooted, 0, len(rooted))))
+        for code, *_, tag in pieces:
+            if code == 39:
+                out += tag
+            else:
+                c, p, h, l = next(rebuilt)
+                out += rooted[p:p + h + l]
+    if len(hidden) != expected:
+        sys.exit(f"{source.name}: expected to hide {expected} placements, hid {hidden}")
     struct.pack_into("<I", out, 4, len(out))
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(bytes(out))
-    print(f"hid {len(hidden)} bars, wrote {target} ({len(out)} bytes)")
+    print(f"{target}: hid {', '.join(hidden)} ({len(out)} bytes)")
+
+
+def main():
+    game_menu, mod_menu = Path(sys.argv[1]), Path(sys.argv[2])
+    for movie, (marker, names, expected) in TARGETS.items():
+        patch(game_menu / movie, mod_menu / movie, marker, names, expected)
 
 
 if __name__ == "__main__":

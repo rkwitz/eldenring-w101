@@ -1,9 +1,9 @@
-//! Wizard101 health and mana globes for Elden Ring, drawn over the game with hudhook (Dear ImGui on DirectX 12).
+//! Wizard101 health, mana and energy (stamina) globes for Elden Ring, drawn over the game with hudhook (Dear ImGui on DirectX 12).
 //!
 //! Loaded by Mod Engine 2 (`external_dlls`). Next to the DLL it expects a `w101_orbs` folder with the globe art
 //! (made by tools/w101_hud_art.py) and optionally `w101_orbs.ini` to move or resize the globes.
 //! The layout is Wizard101's own HUDWindow.gui, in its pixels on a 768-pixel-tall screen: each globe's glass is
-//! Health_Back stretched over the globe's window, with the liquid, its surface and the number at fixed spots inside
+//! Health_Back (Energy_Back for energy) stretched over the globe's window, with the liquid, its surface and the number at fixed spots inside
 //! it. Like Wizard101, the globes sit in the bottom-left corner, the experience bar (here: progress through the
 //! current Elden Ring level, runes held / level-up cost) centred along the bottom and the spellbook in the bottom-right.
 //! The numbers use Wizard101's HUD font, the WizardFancy bitmap font (`w101_orbs/WizardFancy.xml` and its atlas PNGs,
@@ -20,8 +20,8 @@ use hudhook::imgui::{self, DrawListMut, FontConfig, FontSource, ImColor32, Textu
 use hudhook::{ImguiRenderLoop, RenderContext};
 
 const FRAMES_PER_SECOND: f32 = 12.0;
-/// Bottom edge of the lower (mana) globe on Wizard101's 768-pixel-tall screen.
-const BOTTOM: f32 = 722.0;
+/// Bottom edge of the lowest (energy) globe on Wizard101's 768-pixel-tall screen.
+const BOTTOM: f32 = 723.0;
 const HUD_HEIGHT: f32 = 768.0;
 /// XPBar (centred horizontally) and its progressXPSolid inside it.
 const XP_BAR: [f32; 4] = [326.0, 733.0, 830.0, 752.0];
@@ -61,12 +61,24 @@ const MANA: Layout = Layout {
     font_scale: 0.642857,
 };
 
+/// Wizard101's energy globe (spriteEnergyBkg, drawn after the mana globe) shows Elden Ring's stamina.
+const ENERGY: Layout = Layout {
+    window: [29.0, 646.0, 95.0, 723.0],    // spriteEnergyBkg, glass Energy_Back
+    liquid: [11.0, 6.0, 55.0, 50.0],       // progressEnergySolid
+    chop: [44.0, 7.0],                     // spriteEnergyChop (11,22)-(55,29)
+    text: [33.0, 28.0],                    // textEnergy, centred in EnergyGlobeRect (5,0)-(61,56)
+    font_scale: 0.502857,
+};
+
 struct Art {
     back: TextureId,
     health: TextureId,
     health_chop: TextureId,
     mana: TextureId,
     mana_chop: TextureId,
+    energy_back: TextureId,
+    energy: TextureId,
+    energy_chop: TextureId,
     xp_fill: TextureId,
     xp_frame: TextureId,
     spellbook: TextureId,
@@ -103,7 +115,7 @@ struct Orbs {
     art: Option<Art>,
     font: Option<BitmapFont>,
     game: Option<Option<game::Game>>,
-    shown: [f32; 3],
+    shown: [f32; 4],
     start: Instant,
     error: Option<String>,
     perf: Perf,
@@ -158,7 +170,7 @@ impl Orbs {
             art: None,
             font: None,
             game: None,
-            shown: [1.0, 1.0, 0.0],
+            shown: [1.0, 1.0, 0.0, 1.0],
             start: Instant::now(),
             error: None,
             perf: Perf::new(),
@@ -179,6 +191,9 @@ impl Orbs {
             health_chop: load("Health_Chop_Anim")?,
             mana: load("Mana_Liquid")?,
             mana_chop: load("Mana_Chop_Anim")?,
+            energy_back: load("Energy_Back")?,
+            energy: load("Energy_Liquid")?,
+            energy_chop: load("Energy_Chop_Anim")?,
             xp_fill: load("Bar_Exp01")?,
             xp_frame: load("Art_Bar_Exp")?,
             spellbook: load("Button_Spellbook3")?,
@@ -311,7 +326,8 @@ impl Orbs {
         let origin = [self.settings.left * s, height - (BOTTOM + self.settings.bottom) * s];
         let frame = (self.start.elapsed().as_secs_f32() * FRAMES_PER_SECOND) as usize % 9;
         let xp = stats.level.map_or(0.0, |(level, runes)| game::level_progress(level, runes));
-        let target = [fraction(stats.hp, stats.max_hp), fraction(stats.fp, stats.max_fp), xp];
+        let target = [fraction(stats.hp, stats.max_hp), fraction(stats.fp, stats.max_fp), xp,
+                      fraction(stats.sp, stats.max_sp)];
         // Ease toward the new value so hits drain the globe instead of snapping.
         for (shown, target) in self.shown.iter_mut().zip(target) {
             *shown += (target - *shown) * 0.2;
@@ -323,7 +339,9 @@ impl Orbs {
         globe(&draw, &HEALTH, art.back, art.health, art.health_chop, origin, s, self.shown[0], frame);
         globe(&draw, &MANA, art.back, art.mana, art.mana_chop, origin, s, self.shown[1], frame);
         number(&draw, self.font.as_ref(), stats.hp, &HEALTH, origin, s);
+        globe(&draw, &ENERGY, art.energy_back, art.energy, art.energy_chop, origin, s, self.shown[3], frame);
         number(&draw, self.font.as_ref(), stats.fp, &MANA, origin, s);
+        number(&draw, self.font.as_ref(), stats.sp, &ENERGY, origin, s);
 
         // Experience bar, centred along the bottom; spellbook in the bottom-right corner.
         let s = self.settings.scale * height / HUD_HEIGHT;

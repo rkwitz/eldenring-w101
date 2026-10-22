@@ -21,7 +21,8 @@ const PLAYER: usize = 0x1E508; // WorldChrMan -> main player ChrIns (checked aga
 const MODULES: usize = 0x190; // ChrIns -> module bag; its first entry is the stat module
 const STAT_HP: usize = 0x138; // hp, max hp, (base max hp), _, fp, max fp
 const STAT_FP: usize = 0x148;
-const PLAYER_GAME_DATA: usize = 0x8; // GameDataMan -> PlayerGameData: hp 0x10, max 0x14, fp 0x1C, max 0x20
+const STAT_SP: usize = 0x154; // stamina, max stamina (CSChrDataModule in the eldenring crate)
+const PLAYER_GAME_DATA: usize = 0x8; // GameDataMan -> PlayerGameData: hp 0x10, max 0x14, fp 0x1C, max 0x20, sp 0x2C, max 0x30
 
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Stats {
@@ -29,6 +30,8 @@ pub struct Stats {
     pub max_hp: i32,
     pub fp: i32,
     pub max_fp: i32,
+    pub sp: i32,
+    pub max_sp: i32,
     /// Rune level and runes held; None if PlayerGameData couldn't be read.
     pub level: Option<(u32, u32)>,
 }
@@ -74,6 +77,8 @@ impl Game {
                     max_hp: read(stat + STAT_HP + 4)?,
                     fp: read(stat + STAT_FP)?,
                     max_fp: read(stat + STAT_FP + 4)?,
+                    sp: read(stat + STAT_SP)?,
+                    max_sp: read(stat + STAT_SP + 4)?,
                     level: None,
                 })
             });
@@ -84,6 +89,8 @@ impl Game {
                 max_hp: read(pgd + 0x14)?,
                 fp: read(pgd + 0x1C)?,
                 max_fp: read(pgd + 0x20)?,
+                sp: read(pgd + 0x2C)?,
+                max_sp: read(pgd + 0x30)?,
                 level: None,
             })
         });
@@ -125,7 +132,8 @@ pub fn faded() -> f32 {
 
 fn plausible(s: &Stats) -> bool {
     (1..100_000).contains(&s.max_hp) && (0..=s.max_hp).contains(&s.hp) && (0..100_000).contains(&s.max_fp)
-        && (0..=s.max_fp.max(0)).contains(&s.fp)
+        && (0..=s.max_fp.max(0)).contains(&s.fp) && (0..100_000).contains(&s.max_sp)
+        && (0..=s.max_sp.max(0)).contains(&s.sp)
 }
 
 /// Reads a value without crashing on a stale pointer: ReadProcessMemory on our own process fails cleanly when the
@@ -198,3 +206,15 @@ fn rip_target(sections: &[(usize, usize)], pattern: &str) -> Option<usize> {
     }
     None
 }
+
+// The hand-written offsets above must agree with the eldenring crate's struct layouts.
+const _: () = {
+    use eldenring::cs::{CSChrDataModule, PlayerGameData};
+    use std::mem::offset_of;
+    assert!(offset_of!(CSChrDataModule, hp) == STAT_HP);
+    assert!(offset_of!(CSChrDataModule, fp) == STAT_FP);
+    assert!(offset_of!(CSChrDataModule, stamina) == STAT_SP);
+    assert!(offset_of!(PlayerGameData, current_hp) == 0x10);
+    assert!(offset_of!(PlayerGameData, current_fp) == 0x1C);
+    assert!(offset_of!(PlayerGameData, current_stamina) == 0x2C);
+};

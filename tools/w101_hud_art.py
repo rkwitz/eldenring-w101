@@ -1,5 +1,5 @@
-"""Copy Wizard101's HUD art (health and mana globes, experience bar, spellbook button) and its HUD number font out
-of Root.wad and _Shared-WorldData.wad for the hud_orbs add-on.
+"""Copy Wizard101's HUD art (health, mana and energy globes, experience bar, spellbook button) and its HUD number
+font out of Root.wad and _Shared-WorldData.wad for the hud_orbs add-on.
 
 The globe numbers use the Glyphis bitmap font WizardFancy (HUDWindow.gui textHealth/textMana): its glyph table
 WizardFancy.xml is copied as is and its A8 DDS atlas pages become white PNGs with the glyphs in the alpha channel.
@@ -19,7 +19,8 @@ from PIL import Image
 
 # (WAD, entry); each becomes <file stem>.png.
 ART = [("Root.wad", f"GUI/HUD/{stem}.dds")
-       for stem in ["Health_Back", "Health_Liquid", "Health_Chop_Anim", "Mana_Liquid", "Mana_Chop_Anim"]] + [
+       for stem in ["Health_Back", "Health_Liquid", "Health_Chop_Anim", "Mana_Liquid", "Mana_Chop_Anim",
+                    "Energy_Back", "Energy_Liquid", "Energy_Chop_Anim"]] + [
     ("Root.wad", "GUI/Bar/Bar_Exp01.dds"),               # XPBar progressXPSolid
     ("Root.wad", "GUI/Art/Art_Bar_Exp.dds"),             # XPBar foreground
     ("_Shared-WorldData.wad", "GUI/HUD/Button_Spellbook3.dds"),  # btnSpellbook
