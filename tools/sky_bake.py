@@ -266,8 +266,9 @@ def zone_points(obj_path, spacing=4.0):
     return np.concatenate(points)
 
 
-def hull(points, centre=CENTRE, segments=SEGMENTS, rings=RINGS, grow=2, margin=1.05, pad=10.0, minimum=MINIMUM):
-    """Dome radius (rings + 1, segments + 1) at each vertex direction of `dome`: just beyond the farthest zone point
+def hull(points, centre=CENTRE, segments=SEGMENTS, rings=RINGS, grow=2, margin=1.05, pad=10.0, minimum=MINIMUM,
+         smoothing=((2, 1), (2.0, 1.5))):
+    """Smoothed (see `smooth_envelope`) dome radius (rings + 1, segments + 1) at each vertex direction of `dome`: just beyond the farthest zone point
     near that direction (within `grow` grid steps), at least `minimum` (low, high: ramped from 5 to 35 degrees up, so
     the sky overhead is farther away and shifts less as you walk; Elden Ring land doesn't rise that high nearby). Below the horizon it keeps the horizon's
     radius, so the dome closes under the street instead of cutting through it."""
@@ -294,9 +295,54 @@ def hull(points, centre=CENTRE, segments=SEGMENTS, rings=RINGS, grow=2, margin=1
     grown[horizon:] = np.maximum(grown[horizon:], grown[horizon])
     ring_elevation = 90 - 180 * np.arange(rings + 1) / rings
     floor = np.interp(ring_elevation, [5.0, 35.0], minimum)[:, None]
-    radius = np.maximum(grown * margin + pad, floor)
-    radius[0], radius[-1] = radius[0].max(), radius[-1].max()  # one point at each pole
+    radius = smooth_envelope(np.maximum(grown * margin + pad, floor), *smoothing)
+    radius[0], radius[-1] = radius[1].mean(), radius[-2].mean()  # one point at each pole
     return np.hstack([radius, radius[:, :1]])  # the seam column repeats the first
+
+
+def _max_filter(a, segments, rings):
+    """Max of `a` (rings, segments; azimuth wraps) over a window of +-segments, +-rings."""
+    out = a.copy()
+    for dr in range(-rings, rings + 1):
+        if dr > 0:
+            shifted = np.vstack([np.repeat(a[:1], dr, 0), a[:-dr]])
+        elif dr < 0:
+            shifted = np.vstack([a[-dr:], np.repeat(a[-1:], -dr, 0)])
+        else:
+            shifted = a
+        for ds in range(-segments, segments + 1):
+            out = np.maximum(out, np.roll(shifted, ds, 1))
+    return out
+
+
+def _blur(a, sigma_segments, sigma_rings):
+    """Gaussian blur of `a` (rings, segments; azimuth wraps, rings clamp at the poles)."""
+    def kernel(sigma):
+        x = np.arange(-int(3 * sigma) - 1, int(3 * sigma) + 2)
+        w = np.exp(-x * x / (2 * sigma * sigma))
+        return x, w / w.sum()
+
+    x, w = kernel(sigma_segments)
+    out = sum(wi * np.roll(a, xi, 1) for xi, wi in zip(x, w))
+    x, w = kernel(sigma_rings)
+    n = len(x)
+    padded = np.vstack([np.repeat(out[:1], n, 0), out, np.repeat(out[-1:], n, 0)])
+    return sum(wi * padded[n + xi:n + xi + len(a)] for xi, wi in zip(x, w))
+
+
+def smooth_envelope(need, widen=(2, 1), sigma=(2.0, 1.5)):
+    """A smooth radius field (rings, segments) that is >= `need` everywhere. The raw hull follows every backdrop tree
+    and jumps by up to 500 m between neighbouring 3-degree directions; seen from the street (off the dome's centre)
+    those jumps are near-radial walls that read as the sky stepping and cutting off. This widens the peaks
+    (by default +-6 degrees around, +-2.5 up), blurs them, re-imposes `need` and blurs again a few times, then
+    scales the result up just enough to cover `need`. On Unicorn Way the largest visible discontinuity from the
+    street drops from 31 degrees to under 3; wider settings (e.g. widen=(6, 3), sigma=(4, 3)) are smoother still
+    but push the dome out far enough that more Elden Ring terrain and assets show above the W101 backdrop."""
+    smooth = _blur(_max_filter(need, *widen), *sigma)
+    for _ in range(3):
+        smooth = _blur(np.maximum(smooth, need), sigma[0] * 0.75, sigma[1] * 0.67)
+    smooth = _blur(np.maximum(smooth, need), sigma[0] * 0.5, sigma[1] * 0.5)
+    return smooth * max(1.0, float((need / smooth).max()))
 
 
 def dome(radii, centre=(0.0, 0.0, 0.0), segments=SEGMENTS, rings=RINGS):
