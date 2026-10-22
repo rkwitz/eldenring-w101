@@ -227,11 +227,14 @@ def _dxt1_blocks(rgb):
     return out.tobytes()
 
 
-def dim(rgb, factor):
-    """The sRGB image `rgb` with its light (linear) intensity times `factor`: Elden Ring draws an unlit (emissive)
-    texture far brighter than Wizard101 does, so the sky is darkened to come out at its own colours."""
+def dim(rgb, factor, saturation=1.0):
+    """The sRGB image `rgb` with its light (linear) intensity times `factor` and its colour pushed away from grey by
+    `saturation` (1.0 keeps it): Elden Ring draws an unlit (emissive) texture far brighter than Wizard101 does, and its
+    tone mapping washes the pastel sky out towards grey, so the sky is darkened and saturated to keep its colours."""
     rgb = np.clip(rgb, 0.0, 1.0)
-    linear = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4) * factor
+    linear = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+    grey = (linear @ np.array([0.2126, 0.7152, 0.0722]))[..., None]
+    linear = np.clip(grey + (linear - grey) * saturation, 0.0, 1.0) * factor
     return np.where(linear <= 0.0031308, linear * 12.92, 1.055 * linear ** (1 / 2.4) - 0.055)
 
 

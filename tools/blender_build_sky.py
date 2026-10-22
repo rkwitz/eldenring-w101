@@ -60,9 +60,11 @@ TEXTURES = [PROJECT / "aet" / "aet030" / f"{ASSET.replace('aeg', 'aet')}{suffix}
 SKY = ROOT / "reference" / "w101" / "converted_sky_classic"
 SKY_TEXTURE, CLOUD_TEXTURE = "WC_Skybox01_KH__19706315", "WC_Skybox_Clouds_KH__d376b071"
 STREET_OBJ = ROOT / "reference" / "w101" / "converted_classic" / "WC_Z06_Unicorn_Way_Classic.obj"
-# Emissive scale of the unlit sky: 1.0 (the texture as it is) is blown out to white in Elden Ring's daylight
-# exposure. Raise it (0.25, 0.5) if the sky looks too dark or grey, lower it (0.06) if it is still washed out.
-SKY_BRIGHTNESS = 0.12
+# Emissive scale of the unlit sky (texture x matbin power). 1.0 blew out to white in Elden Ring's daylight
+# exposure and 0.12 looked flat grey (2026-10-22). If the sky still looks grey with no swirls or clouds at all, the
+# texture isn't being drawn (tell Claude); if the swirls show but it's too dark/bright, change this (0.2 .. 0.6).
+SKY_BRIGHTNESS = 0.35
+SKY_SATURATION = 1.5  # pushes the pastel W101 colours away from grey before Elden Ring's tone mapping (1.0 = as is)
 GAME_GPARAMS = GAME.parent / "param" / "drawparam"
 PROJECT_GPARAMS = PROJECT.parent / "param" / "drawparam"
 
@@ -93,7 +95,7 @@ def build_sky():
     image = sky_bake.bake(SKY / "layer1.obj", (SKY / "textures" / f"{SKY_TEXTURE}.dds").read_bytes(),
                           SKY / "layer2.obj", (SKY / "textures" / f"{CLOUD_TEXTURE}.dds").read_bytes())
     _, dim = flver_textures.unlit_scale(SKY_BRIGHTNESS)
-    dds = sky_bake.dxt1_dds(sky_bake.dim(image, dim))
+    dds = sky_bake.dxt1_dds(sky_bake.dim(image, dim, SKY_SATURATION))
     (SKY / "sky_baked.dds").write_bytes(dds)
 
     positions, uvs, faces = sky_bake.dome(radii)
