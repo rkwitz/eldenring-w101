@@ -155,9 +155,29 @@ class _Blob:
         struct.pack_into(fmt, self.data, at, *values)
 
 
-def split_materials(data, vanilla, face_materials, textures, alpha):
+UNLIT_MATBINS = {  # vanilla matbins on shader M[A]_NoLight.spx, by the brightness (emissive power) they draw the texture at
+    1.0: r"Map_m60_fort\matxml\m60_fort_001",
+    4.0: r"Map_m15_00\matxml\m15_00_865",
+    0.3: r"Map_m16_00\matxml\m16_00_488",
+}
+
+
+def unlit_material(vanilla, brightness=1.0):
+    """Material template for `split_materials(opaque=...)`: an Elden Ring unlit map material (matbin shader
+    M[A]_NoLight.spx: forward rendered, emissive, no lighting or shadows, one albedo sampler whose texture is drawn
+    times the matbin's power, `brightness`; our FLVER texture path overrides the matbin's own). Its GX list is the
+    plain one (GX00 + terminator) of vanilla material 2, m60_fort_201, which has no per-material parameter overrides."""
+    plain = _material_template(vanilla, 2)
+    assert plain["gx"][:4] == b"GX00" and len(plain["gx"]) == 64, "unexpected GX list on vanilla material 2"
+    scale = struct.pack("<2f", 1.0, 1.0) + bytes(16)
+    return {"mtd": rf"N:\GR\data\Material\mtd\{UNLIT_MATBINS[brightness]}.matxml", "flags": plain["flags"],
+            "gx": plain["gx"], "textures": [("M_A__NoLight_snp_Texture2D_1_AlbedoMap_0", scale)]}
+
+
+def split_materials(data, vanilla, face_materials, textures, alpha, opaque=None):
     """New FLVER bytes: one mesh/material per texture. `face_materials[t]` names triangle t's texture (an index into
-    `textures`, or None to drop it); `alpha` holds the indices of textures needing the alpha-tested material."""
+    `textures`, or None to drop it); `alpha` holds the indices of textures needing the alpha-tested material.
+    `opaque` replaces the opaque material template (see `unlit_material`)."""
     version, counts = ff._counts(data)
     starts, _ = ff._section_starts(counts)
     vertex_data = struct.unpack_from("<i", data, 0x0C)[0]
@@ -173,6 +193,8 @@ def split_materials(data, vanilla, face_materials, textures, alpha):
     member_count, _, _, members_offset = struct.unpack_from("<4i", layout)
     members = data[members_offset:members_offset + 20 * member_count]
     templates = {k: _material_template(vanilla, k) for k in (OPAQUE_MATERIAL, ALPHA_MATERIAL)}
+    if opaque is not None:
+        templates[OPAQUE_MATERIAL] = opaque
 
     groups = {}
     for t, texture in enumerate(face_materials):

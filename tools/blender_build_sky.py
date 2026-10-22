@@ -7,10 +7,13 @@ on the zone. In each direction the dome sits just beyond the farthest Wizard101 
 up to ~700 m behind the giant backdrop trees), so it hides Elden Ring's land and sky outside the zone. The clouds are
 frozen (no UV scrolling in our material).
 
-The dome uses the street's plain lit material with every normal pointing up, so the sun lights it evenly. Elden Ring
-has no unlit material we can point at our own texture (the aeg096 sky domes use Field_Skysphere matbins with their own
-sky textures). Its MSB part must not receive shadows or point lights (msb_add_sky.py). Distance fog would wash it
-out, so this also writes fogless gparams (gparam_fog.py) to the project, for the whole overworld.
+The dome uses Elden Ring's unlit map material m60_fort_001 (shader M[A]_NoLight: forward, emissive, no lighting,
+shadows or ambient occlusion; flver_textures.unlit_material), so it shows the texture as baked, like Wizard101's
+APPLY_REPLACE. (It used the street's lit M_AMSN_V before, with every normal pointing up: seen from inside, the walls
+were lit at grazing angles, which turns a lit surface into a mirror of Elden Ring's hazy sky, and the overhead part
+faced away from the camera and from the sky light, so it looked foggy and shadowed.) Distance fog would still tint
+it, so this also writes fogless gparams (gparam_fog.py) for every overworld light set and weather to the project,
+for the whole overworld.
 
 Writes, in the Smithbox project:
   asset/aeg/aeg030/aeg030_523.geombnd.dcx      the dome FLVER, centred on its own origin; part AEG030_523_9000 sits
@@ -57,6 +60,7 @@ TEXTURES = [PROJECT / "aet" / "aet030" / f"{ASSET.replace('aeg', 'aet')}{suffix}
 SKY = ROOT / "reference" / "w101" / "converted_sky_classic"
 SKY_TEXTURE, CLOUD_TEXTURE = "WC_Skybox01_KH__19706315", "WC_Skybox_Clouds_KH__d376b071"
 STREET_OBJ = ROOT / "reference" / "w101" / "converted_classic" / "WC_Z06_Unicorn_Way_Classic.obj"
+SKY_BRIGHTNESS = 1.0  # 1.0 draws the texture as it is; 4.0 or 0.3 if it looks too dim or too bright (UNLIT_MATBINS)
 GAME_GPARAMS = GAME.parent / "param" / "drawparam"
 PROJECT_GPARAMS = PROJECT.parent / "param" / "drawparam"
 
@@ -66,7 +70,8 @@ def remove_fog():
     game's own compression (an earlier DFLT copy from gparam_fog.py's command line may not load)."""
     PROJECT_GPARAMS.mkdir(parents=True, exist_ok=True)
     names = sorted(GAME_GPARAMS.glob("m00_00_*_weatheroutdoor.gparam.dcx"))
-    names += [GAME_GPARAMS / f"m60_00_{light_set}.gparam.dcx" for light_set in ("0000", "0100")]
+    # Every overworld light set (m60_00_XXXX: XXXX is a collision's LightSetID; ours are -1, which keeps the last one)
+    names += [p for p in sorted(GAME_GPARAMS.glob("m60_00_*.gparam.dcx")) if "capturemap" not in p.name]
     written = 0
     for path in names:
         data, dcx_type = decompress(path)
@@ -92,7 +97,8 @@ def build_sky():
     template = flver_fix.flver_in_binder(STREET_GEOMBND)
     vanilla = flver_fix.flver_in_binder(VANILLA)
     single, materials = flver_build.build_single_mesh(template, positions, uvs, faces, fixed_normal=(0.0, 1.0, 0.0))
-    flver = flver_textures.split_materials(single, vanilla, [0] * len(materials), [SKY_TEXTURE], alpha=set())
+    flver = flver_textures.split_materials(single, vanilla, [0] * len(materials), [SKY_TEXTURE], alpha=set(),
+                                           opaque=flver_textures.unlit_material(vanilla, SKY_BRIGHTNESS))
 
     binder = Binder.from_path(STREET_GEOMBND)
     for entry in binder.entries:
