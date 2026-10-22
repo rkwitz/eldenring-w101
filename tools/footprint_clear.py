@@ -10,7 +10,8 @@ What it does, for every tile of the three sizes that overlaps the street:
     MARGIN) are moved 1000 m down;
   - ground map pieces and their collision (m.../h... parts) of every 256 m tile the footprint touches, and their
     far-view copies (m14XXZZ.., m24XXZZ..), are moved 1000 m down too.
-Our own parts (street, sky, grace, exit door) and all characters are left alone. Moving rather than deleting keeps
+SFX/WindSFX regions (embers, ash) over the footprint go down too. Our own parts (street, sky, grace, exit door)
+and all characters are left alone. Moving rather than deleting keeps
 every index the same, so it is safe to rerun, and parts already moved are not moved again.
 
 Coordinates: a part in tile (x, z) of size s (256, 512, 1024) is at global (x * s + s / 2 + px, ..., z * s + s / 2 + pz).
@@ -36,8 +37,9 @@ STREET = "AEG030_518_9000"
 MARGIN = 6  # metres around the W101 surfaces
 SINK = 1000.0
 CELL = 1.0
-KEEP = ("AEG030_518", "AEG030_523", "AEG099_", "AEG110_064", "AEG008_262_1000", "AEG092_102_1000")
+KEEP = ("AEG030_518", "AEG030_523", "AEG099_060", "AEG099_090", "AEG110_064", "AEG008_262_1000", "AEG092_102_1000")
 MAP_PIECE, COLLISION, ASSET = 0, 5, 13
+SFX_REGIONS = (5, 6)  # SFX and WindSFX regions (embers, ash, mist)
 SIZE = {"00": 256, "01": 512, "02": 1024}
 DIVIDE = {"00": 1, "01": 2, "02": 4}
 
@@ -122,7 +124,7 @@ def to_home(name, x, z):
     return int(tx) * s + s / 2 + x - home[0], int(tz) * s + s / 2 + z - home[1]
 
 
-GROUND = re.compile(r"^[mh](?:[12]4)?(\d\d)(\d\d)\d\d(?:_\d+)?$")  # m413600_0000, h413600, m24413600_0000, m14...
+GROUND = re.compile(r"^[mh](?:[12]\d)?(\d\d)(\d\d)\d\d(?:_\d+)?$")  # m413600_0000, h413600, m24413600_0000, m12.., m13..
 
 
 def clear(name, raw, footprint, small):
@@ -148,6 +150,14 @@ def clear(name, raw, footprint, small):
             struct.pack_into("<3f", e, 0x20, x, y - SINK, z)
             parts.entries[k] = bytes(e)
             report.append(f"{name}: {part} ({x:.1f}, {y:.1f}, {z:.1f}) moved down")
+    regions = _list(lists, "POINT_PARAM_ST")
+    for k, e in enumerate(regions.entries):
+        x, y, z = struct.unpack_from("<3f", e, 0x14)
+        if struct.unpack_from("<i", e, 0x08)[0] in SFX_REGIONS and y > -SINK / 2 and footprint.covers(*to_home(name, x, z)):
+            e = bytearray(e)
+            struct.pack_into("<3f", e, 0x14, x, y - SINK, z)
+            regions.entries[k] = bytes(e)
+            report.append(f"{name}: effect region {entry_name(e)} ({x:.1f}, {y:.1f}, {z:.1f}) moved down")
     return (write_msb(header, lists) if report else None), report
 
 
