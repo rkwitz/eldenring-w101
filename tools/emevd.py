@@ -5,6 +5,8 @@ Usage: python emevd.py m18_00_00_00.emevd out.emevd
   needs DCX compression (DFLT, as Smithbox saves) to go in the project's event folder.
 python emevd.py --no-guidance m60_42_36_00.emevd out.emevd
   removes the Guidance of Grace light wisps at The First Step and Church of Elleh (see no_guidance_wisps).
+python emevd.py --no-leaf-gusts common.emevd out.emevd
+  removes the overworld's gusts of glowing orange leaves (see no_leaf_gusts).
 """
 import struct
 class Emevd:
@@ -148,6 +150,29 @@ def no_guidance_wisps(d, markers=GUIDANCE_GRACES, dummy=NO_ENTITY):
     return build(e, events)
 
 
+LEAF_GUST_EVENT, LEAF_GUST_ASSET, LEAF_GUST_SFX = 1040, 1060001500, 806800
+
+
+def no_leaf_gusts(d, dummy=NO_ENTITY):
+    """common.emevd with the overworld leaf gusts gone. Common event 1040 (started from event 0, restarts on rest)
+    loops: random wait, switch the weather wind to 808004 (strong), then 2006[04] attaches effect 806800 to dummy
+    poly 200 of asset 1060001500 (AEG094_900_9900 in m60_00_00_99) for ~14 s. 806800 is a flipbook of tumbling
+    orange leaves (texture s42071_a) with HDR gold colour keys, so the leaves read as falling embers. Both 2006[04]
+    calls get the unused entity `dummy` instead, in place (same file size); wind, SpEffects 4200/4201 and the rest of
+    the event are untouched. Applies to the whole overworld."""
+    e = Emevd(d)
+    old = struct.pack("<iii", LEAF_GUST_ASSET, 200, LEAF_GUST_SFX)
+    out, hits = bytearray(d), 0
+    for ev in e.events:
+        for i in ev["ins"]:
+            if (i["bank"], i["id"]) == (2006, 4) and i["args"] == old:
+                assert ev["id"] == LEAF_GUST_EVENT
+                struct.pack_into("<I", out, i["argoff"], dummy)
+                hits += 1
+    assert hits == 2, f"found {hits} leaf gust SFX calls, expected 2"
+    return bytes(out)
+
+
 def build(e, events):
     """EMEVD bytes from `events` [{id, rest, ins: [{bank, id, args, layer}], pars: [(index, target, source, size, unk)]}]
     with the header flags, linked files and strings of the parsed file `e` (no layers)."""
@@ -188,6 +213,9 @@ def events_of(e):
 
 if __name__ == "__main__":
     import sys
+    if sys.argv[1] == "--no-leaf-gusts":  # emevd.py --no-leaf-gusts common.emevd out.emevd
+        open(sys.argv[3], "wb").write(no_leaf_gusts(open(sys.argv[2], "rb").read()))
+        sys.exit()
     if sys.argv[1] == "--no-guidance":  # emevd.py --no-guidance m60_42_36_00.emevd out.emevd
         open(sys.argv[3], "wb").write(no_guidance_wisps(open(sys.argv[2], "rb").read()))
         sys.exit()
