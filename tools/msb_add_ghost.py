@@ -10,8 +10,9 @@ the grouping because assets are the last type, which is why only the ghost crash
 vanilla patrollers byte for byte apart from that (and a wrong model instance count, copied from c4200).
 
 What this does instead, keeping every list grouped and every index consistent:
-  - model c4300: a copy of the vanilla Limgrave c4300 model entry, inserted in name order among the character models;
-    every part's model index is remapped and the character models' type indices renumbered.
+  - the chr model: a copy of the vanilla Limgrave c4300 model entry (renamed for other chrs), inserted in name order
+    among the character models; every part's model index is remapped and the character models' type indices
+    renumbered.
   - patrol points: copies of a vanilla patrol point region, inserted at the end of the patrol-point block (type 32);
     every region index in the events (common region index, patrol point lists) is remapped. The map may only hold
     event types whose region references are known (treasure, ObjAct, patrol info, sign pool), else this refuses.
@@ -29,10 +30,21 @@ Navmesh: Elden Ring characters walk patrol routes by navmesh path queries. The W
 ghost will most likely stand at its spawn (first point) and only turn/attack, unless the old navmesh of the tile
 happens to lie close under it. See er-enemies.md for the options.
 
-Usage: python msb_add_ghost.py map.msb.dcx pathing.json street.obj template_map.msb out.msb.dcx [--plain] [--static]
+Which enemy (2026-10-22): the Stranded Soul NpcParam (43009000) turned out to be a harmless pass-through "wandering
+ghost" in game, so the default is now Cemetery Shade (chr c3664, Think 36640000, NpcParam 36640012 "Cemetery Shade
+(Weeping Peninsula)", the early-game catacomb row): a hostile, dark spectral humanoid. --enemy picks another:
+  shade    c3664  36640000 / 36640012   hostile ghost (default)
+  noble    c4300  43005000 / 43005210   exactly vanilla Limgrave patroller c4300_9020 (hostile, not ghostly)
+  jelly    c4180  41800000 / 41800010   Spirit Jellyfish, hostile translucent blue spirit (not humanoid)
+  stranded c4300  43005000 / 43009000   the pass-through Stranded Soul look (not an enemy)
+None of these rows was read from regulation.bin (not decrypted here); they come from Smithbox's row names, and the
+model is the chr the row family belongs to.
+
+Usage: python msb_add_ghost.py map.msb.dcx pathing.json street.obj template_map.msb out.msb.dcx [--enemy NAME] [--static]
   template_map.msb: vanilla m60_43_36_00.msb (holds a Wandering Noble c4300_9020 that patrols a walk route)
-  --plain:  vanilla Limgrave Wandering Noble params (Think 43005000, NpcParam 43005210) instead of the Stranded Soul
   --static: no patrol (no regions, no event); just the ghost standing at the first point
+  If the map already has the ghost (any --enemy), it is switched to the chosen enemy in place: the slot, route and
+  points stay; the new model is inserted in order and a model left with no users is removed (indices remapped).
 """
 
 import json
@@ -49,13 +61,16 @@ from msb_floor import _list, _set_name, entry_name, find, read_msb, write_msb  #
 
 STREET = "AEG030_518_9000"
 PATH = "Path Ghost 01"
-MODEL = "c4300"
-PART = "c4300_9000"
+ENEMIES = {  # name: (model, Think, NpcParam)
+    "shade": ("c3664", 36640000, 36640012),
+    "noble": ("c4300", 43005000, 43005210),
+    "jelly": ("c4180", 41800000, 41800010),
+    "stranded": ("c4300", 43005000, 43009000),
+}
+SUFFIX = "_9000"  # ghost part = <model>_9000, routes walk_route_<part>_99_NN
 REPLACE = "c6001_9017"  # vanilla enemy under the street (y 63.5, ~30 m below the road), becomes the ghost
 TEMPLATE_PART = "c4300_9020"  # in template_map: vanilla Wandering Noble walking walk_route_c4300_9020_5
 EVENT_NAME = "ghost_walk"
-STRANDED_SOUL = 43005000, 43009000  # Think (Limgrave patrolling noble), NpcParam "Wandering Noble (Stranded Soul)"
-PLAIN = 43005000, 43005210  # exactly vanilla c4300_9020's
 REGION_ID = 9100  # region 0x2C: unique id, also the walk_route_<part>_<event>_<id> name suffix in vanilla
 
 MODEL_CHR, PART_ENEMY, EVENT_PATROL, REGION_PATROL = 2, 2, 20, 32
@@ -136,31 +151,59 @@ def check_grouped(lists):
         assert len(seq) == len(set(seq)), f"{title} is not grouped by type: {seq}"
 
 
-def add_model(lists, template_lists):
-    """Index of model MODEL, inserted in name order among the character models (copy of the template map's)."""
+def add_model(lists, template_lists, model):
+    """Index of chr model `model`, inserted in name order among the character models. It is a copy of the template
+    map's c4300 entry with the name and sib path changed (same length); every part's model index is remapped."""
     models, parts = _list(lists, "MODEL_PARAM_ST").entries, _list(lists, "PARTS_PARAM_ST").entries
     names = [entry_name(e) for e in models]
-    if MODEL in names:
-        return names.index(MODEL)
-    source = next(e for e in _list(template_lists, "MODEL_PARAM_ST").entries if entry_name(e) == MODEL)
-    chars = [i for i, e in enumerate(models) if u32(e, 8) == MODEL_CHR]
-    at = next((i for i in chars if names[i] > MODEL), chars[-1] + 1)
+    if model in names:
+        return names.index(model)
+    source = next(e for e in _list(template_lists, "MODEL_PARAM_ST").entries if entry_name(e) == "c4300")
     entry = bytearray(source)
+    for a, b in (("c4300", model), ("C4300", model.upper())):
+        entry[:] = entry.replace(a.encode("utf-16-le"), b.encode("utf-16-le"))
+    assert entry_name(entry) == model
     struct.pack_into("<i", entry, 0x18, 0)  # instance count, set by the caller
+    chars = [i for i, e in enumerate(models) if u32(e, 8) == MODEL_CHR]
+    at = next((i for i in chars if names[i] > model), chars[-1] + 1)
     models.insert(at, bytes(entry))
+    _renumber_models(lists, lambda i: i + 1 if i >= at else i)
+    return at
+
+
+def remove_unused_model(lists, index):
+    """Drop model `index` if no part uses it, remapping part model indices."""
+    parts = _list(lists, "PARTS_PARAM_ST").entries
+    if any(u32(e, 0x14) == index for e in parts):
+        return
+    del _list(lists, "MODEL_PARAM_ST").entries[index]
+    _renumber_models(lists, lambda i: i - 1 if i > index else i)
+
+
+def _renumber_models(lists, remap):
+    models, parts = _list(lists, "MODEL_PARAM_ST").entries, _list(lists, "PARTS_PARAM_ST").entries
     for k, i in enumerate(i for i, e in enumerate(models) if u32(e, 8) == MODEL_CHR):
         e = bytearray(models[i])
         struct.pack_into("<i", e, 0x0C, k)
         models[i] = bytes(e)
     for k, e in enumerate(parts):
-        if u32(e, 0x14) >= at:
+        if remap(u32(e, 0x14)) != u32(e, 0x14):
             e = bytearray(e)
-            struct.pack_into("<i", e, 0x14, u32(e, 0x14) + 1)
+            struct.pack_into("<i", e, 0x14, remap(u32(e, 0x14)))
             parts[k] = bytes(e)
-    return at
 
 
-def add_route(lists, points):
+def count_users(lists):
+    models, parts = _list(lists, "MODEL_PARAM_ST").entries, _list(lists, "PARTS_PARAM_ST").entries
+    for i, m in enumerate(models):
+        users = sum(1 for x in parts if u32(x, 0x14) == i)
+        if u32(m, 0x18) != users:
+            m = bytearray(m)
+            struct.pack_into("<i", m, 0x18, users)
+            models[i] = bytes(m)
+
+
+def add_route(lists, points, part):
     """Type index of a new looping PatrolInfo event through new patrol point regions at `points`."""
     regions, events = _list(lists, "POINT_PARAM_ST").entries, _list(lists, "EVENT_PARAM_ST").entries
     kinds = {u32(e, 0x0C) for e in events}
@@ -188,7 +231,7 @@ def add_route(lists, points):
     route_index = len(patrols)
     for n, p in enumerate(points):
         e = bytearray(template)
-        _set_name(e, f"walk_route_{PART}_99_{n + 1:02d}")
+        _set_name(e, f"walk_route_{part}_99_{n + 1:02d}")
         struct.pack_into("<i", e, 0x0C, first_type_index + n)
         struct.pack_into("<3f", e, 0x14, *p)
         struct.pack_into("<3f", e, 0x20, 0.0, 0.0, 0.0)
@@ -214,13 +257,49 @@ def referenced_parts(lists):
     return refs
 
 
-def add_ghost(raw, template_raw, pathing, tris, params=STRANDED_SOUL, static=False):
+def ghost_slot(lists):
+    """Index of the ghost part already in the map (<model>_9000 of any ENEMIES model, with a route or not), or None."""
+    names = [entry_name(e) for e in _list(lists, "PARTS_PARAM_ST").entries]
+    hits = [names.index(m + SUFFIX) for m in {v[0] for v in ENEMIES.values()} if m + SUFFIX in names]
+    assert len(hits) <= 1, "several ghosts in the map"
+    return hits[0] if hits else None
+
+
+def retarget(lists, slot, template_lists, enemy):
+    """Switch the ghost at `slot` to `enemy` in place (name, model, params, route point names)."""
+    model_name, think, npc = ENEMIES[enemy]
+    parts, regions = _list(lists, "PARTS_PARAM_ST").entries, _list(lists, "POINT_PARAM_ST").entries
+    old_name = entry_name(parts[slot])
+    model = add_model(lists, template_lists, model_name)
+    e = bytearray(parts[slot])
+    old_model = u32(e, 0x14)
+    _set_name(e, model_name + SUFFIX)
+    struct.pack_into("<i", e, 0x14, model)
+    struct.pack_into("<ii", e, q(e, 0x68) + THINK, think, npc)
+    parts[slot] = bytes(e)
+    for k, r in enumerate(regions):
+        if entry_name(r).startswith(f"walk_route_{old_name}_99_"):
+            r = bytearray(r)
+            _set_name(r, entry_name(r).replace(old_name, model_name + SUFFIX))
+            regions[k] = bytes(r)
+    if old_model != model:
+        remove_unused_model(lists, old_model)
+    count_users(lists)
+
+
+def add_ghost(raw, template_raw, pathing, tris, enemy="shade", static=False):
     header, lists = read_msb(raw)
     _, template_lists = read_msb(template_raw)
     check_grouped(lists)
+    slot = ghost_slot(lists)
+    if slot is not None:
+        retarget(lists, slot, template_lists, enemy)
+        check_grouped(lists)
+        return write_msb(header, lists), None
+    model_name, think, npc = ENEMIES[enemy]
+    part = model_name + SUFFIX
     parts = _list(lists, "PARTS_PARAM_ST").entries
     names = [entry_name(e) for e in parts]
-    assert PART not in names, f"{PART} is already in the map"
     slot = names.index(REPLACE)
     old = parts[slot]
     assert u32(old, 0x0C) == PART_ENEMY and u32(old, q(old, 0x60)) == 0, f"{REPLACE} must be an enemy with no entity id"
@@ -231,27 +310,22 @@ def add_ghost(raw, template_raw, pathing, tris, params=STRANDED_SOUL, static=Fal
     placed = [to_world(p, street, tris) for p in path_points(pathing)]
     points = [p for p, _ in placed]
 
-    model = add_model(lists, template_lists)
-    route = -1 if static else add_route(lists, points)
+    model = add_model(lists, template_lists, model_name)
+    route = -1 if static else add_route(lists, points, part)
 
     template = _list(template_lists, "PARTS_PARAM_ST")
     e = bytearray(template.entries[find(template, TEMPLATE_PART)])
     assert len(e) == len(old) and q(e, 0x68) == q(old, 0x68), "template enemy layout differs"
-    _set_name(e, PART)
-    struct.pack_into("<iiii", e, 0x08, int(PART.split("_")[1]), PART_ENEMY, u32(old, 0x10), model)
+    _set_name(e, part)
+    struct.pack_into("<iiii", e, 0x08, int(SUFFIX[1:]), PART_ENEMY, u32(old, 0x10), model)
     struct.pack_into("<3f", e, 0x20, *points[0])
     struct.pack_into("<3f", e, 0x2C, 0.0, facing(points[0], points[1]), 0.0)
     struct.pack_into("<i", e, q(e, 0x60), 0)  # no entity id
     t = q(e, 0x68)
-    struct.pack_into("<ii", e, t + THINK, *params)
+    struct.pack_into("<ii", e, t + THINK, think, npc)
     struct.pack_into("<h", e, t + WALK_ROUTE, route)
     parts[slot] = bytes(e)
-
-    models = _list(lists, "MODEL_PARAM_ST").entries
-    for i in {model, u32(old, 0x14) + (1 if u32(old, 0x14) >= model else 0)}:
-        m = bytearray(models[i])
-        struct.pack_into("<i", m, 0x18, sum(1 for x in parts if u32(x, 0x14) == i))
-        models[i] = bytes(m)
+    count_users(lists)
     check_grouped(lists)
     return write_msb(header, lists), placed
 
@@ -262,19 +336,24 @@ def load(path):
 
 
 def main():
-    flags = [a for a in sys.argv[1:] if a.startswith("--")]
-    src, pathing, obj, template, dst = [a for a in sys.argv[1:] if not a.startswith("--")]
+    args = sys.argv[1:]
+    if "--enemy" in args:
+        del args[args.index("--enemy"):args.index("--enemy") + 2]
+    flags = [a for a in args if a.startswith("--")]
+    src, pathing, obj, template, dst = [a for a in args if not a.startswith("--")]
     data = Path(src).read_bytes()
     assert data[:4] == b"DCX\0" and data[0x28:0x2C] == b"DFLT", "expected a DFLT-compressed map"
     raw = zlib.decompress(data[0x4C:])
     assert write_msb(*read_msb(raw)) == raw, "map does not round-trip"
+    enemy = sys.argv[sys.argv.index("--enemy") + 1] if "--enemy" in sys.argv else "shade"
     out, placed = add_ghost(raw, load(template), json.loads(Path(pathing).read_text()), street_surface(obj),
-                            PLAIN if "--plain" in flags else STRANDED_SOUL, "--static" in flags)
+                            enemy, "--static" in flags)
     packed = zlib.compress(out, 9)
     head = bytearray(data[:0x4C])
     struct.pack_into(">II", head, 0x1C, len(out), len(packed))
     Path(dst).write_bytes(bytes(head) + packed)
-    for p, surface in placed:
+    print(f"{'switched the ghost to' if placed is None else 'added'} {enemy} {ENEMIES[enemy]}")
+    for p, surface in placed or []:
         print("route point", tuple(round(c, 2) for c in p), "street surface" if surface is not None else "no surface")
 
 
