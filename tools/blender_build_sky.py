@@ -60,7 +60,9 @@ TEXTURES = [PROJECT / "aet" / "aet030" / f"{ASSET.replace('aeg', 'aet')}{suffix}
 SKY = ROOT / "reference" / "w101" / "converted_sky_classic"
 SKY_TEXTURE, CLOUD_TEXTURE = "WC_Skybox01_KH__19706315", "WC_Skybox_Clouds_KH__d376b071"
 STREET_OBJ = ROOT / "reference" / "w101" / "converted_classic" / "WC_Z06_Unicorn_Way_Classic.obj"
-SKY_BRIGHTNESS = 1.0  # 1.0 draws the texture as it is; 4.0 or 0.3 if it looks too dim or too bright (UNLIT_MATBINS)
+# Emissive scale of the unlit sky: 1.0 (the texture as it is) is blown out to white in Elden Ring's daylight
+# exposure. Raise it (0.25, 0.5) if the sky looks too dark or grey, lower it (0.06) if it is still washed out.
+SKY_BRIGHTNESS = 0.12
 GAME_GPARAMS = GAME.parent / "param" / "drawparam"
 PROJECT_GPARAMS = PROJECT.parent / "param" / "drawparam"
 
@@ -90,7 +92,8 @@ def build_sky():
     assert "#vc" in (SKY / "layer2.obj").read_text(), "layer2.obj has no vertex colours: convert it again (nif2obj.py)"
     image = sky_bake.bake(SKY / "layer1.obj", (SKY / "textures" / f"{SKY_TEXTURE}.dds").read_bytes(),
                           SKY / "layer2.obj", (SKY / "textures" / f"{CLOUD_TEXTURE}.dds").read_bytes())
-    dds = sky_bake.dxt1_dds(image)
+    _, dim = flver_textures.unlit_scale(SKY_BRIGHTNESS)
+    dds = sky_bake.dxt1_dds(sky_bake.dim(image, dim))
     (SKY / "sky_baked.dds").write_bytes(dds)
 
     positions, uvs, faces = sky_bake.dome(radii)

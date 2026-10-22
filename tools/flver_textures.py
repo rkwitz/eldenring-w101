@@ -155,22 +155,31 @@ class _Blob:
         struct.pack_into(fmt, self.data, at, *values)
 
 
-UNLIT_MATBINS = {  # vanilla matbins on shader M[A]_NoLight.spx, by the brightness (emissive power) they draw the texture at
+UNLIT_MATBINS = {  # vanilla matbins on shader M[A]_NoLight.spx, by the emissive scale (colour x power) they draw the texture at
+    0.256: r"Map_Public\matxml\WorldTree_309",  # the far Erdtree's glow; 1.0 already blows out to white in daylight
     1.0: r"Map_m60_fort\matxml\m60_fort_001",
     4.0: r"Map_m15_00\matxml\m15_00_865",
-    0.3: r"Map_m16_00\matxml\m16_00_488",
-}
+}  # (m16_00_488, power 0.3, is not usable: its g_DiffuseMapColor is red)
+
+
+def unlit_scale(brightness):
+    """(matbin power, texture factor) for an overall unlit brightness: the dimmest matbin at or above `brightness`, and
+    the factor (<= 1) to darken the texture by to make up the rest."""
+    power = min((p for p in UNLIT_MATBINS if p >= brightness), default=max(UNLIT_MATBINS))
+    return power, min(1.0, brightness / power)
 
 
 def unlit_material(vanilla, brightness=1.0):
     """Material template for `split_materials(opaque=...)`: an Elden Ring unlit map material (matbin shader
     M[A]_NoLight.spx: forward rendered, emissive, no lighting or shadows, one albedo sampler whose texture is drawn
-    times the matbin's power, `brightness`; our FLVER texture path overrides the matbin's own). Its GX list is the
-    plain one (GX00 + terminator) of vanilla material 2, m60_fort_201, which has no per-material parameter overrides."""
+    times the matbin's colour and power; our FLVER texture path overrides the matbin's own). `brightness` picks the
+    matbin (see `unlit_scale`; darken the texture by the factor it returns). Its GX list is the plain one (GX00 +
+    terminator) of vanilla material 2, m60_fort_201, which has no per-material parameter overrides."""
     plain = _material_template(vanilla, 2)
     assert plain["gx"][:4] == b"GX00" and len(plain["gx"]) == 64, "unexpected GX list on vanilla material 2"
     scale = struct.pack("<2f", 1.0, 1.0) + bytes(16)
-    return {"mtd": rf"N:\GR\data\Material\mtd\{UNLIT_MATBINS[brightness]}.matxml", "flags": plain["flags"],
+    matbin = UNLIT_MATBINS[unlit_scale(brightness)[0]]
+    return {"mtd": rf"N:\GR\data\Material\mtd\{matbin}.matxml", "flags": plain["flags"],
             "gx": plain["gx"], "textures": [("M_A__NoLight_snp_Texture2D_1_AlbedoMap_0", scale)]}
 
 

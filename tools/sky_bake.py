@@ -227,6 +227,14 @@ def _dxt1_blocks(rgb):
     return out.tobytes()
 
 
+def dim(rgb, factor):
+    """The sRGB image `rgb` with its light (linear) intensity times `factor`: Elden Ring draws an unlit (emissive)
+    texture far brighter than Wizard101 does, so the sky is darkened to come out at its own colours."""
+    rgb = np.clip(rgb, 0.0, 1.0)
+    linear = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4) * factor
+    return np.where(linear <= 0.0031308, linear * 12.92, 1.055 * linear ** (1 / 2.4) - 0.055)
+
+
 def dxt1_dds(rgb):
     """DXT1 DDS bytes, with mipmaps down to 4 texels, of an RGB float image whose sides are powers of 2 (>= 4)."""
     rows, columns = rgb.shape[:2]
