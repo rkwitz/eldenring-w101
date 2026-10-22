@@ -129,6 +129,35 @@ def title_on_door_exit(d, event_id=1042362991, door_flag=1042368540, area=104236
     return build(e, events)
 
 
+RATTLEBONES_DOORS = (  # (event id, trigger region, arrival region): msb_add_room.py's regions in m60_42_36_00
+    (1042362810, 1042362800, 1042362801),  # street tower door -> into Rattlebones' room
+    (1042362811, 1042362802, 1042362803),  # the room's door -> back out on Unicorn Way
+)
+
+
+def rattlebones_doors(d, doors=RATTLEBONES_DOORS):
+    """New events (one per door, started from the top of event 0) that wait for the player (10000) to walk into the
+    door's trigger region (3[2], as title_on_door_exit), move them to the arrival region (2004[41] with target type 1 =
+    region and dummy poly -1, as common event 950 places the player for the Melina cutscene in the same map, no
+    loading screen) and restart (1000[4] with 1), like Wizard101's door activators. Existing events with these ids
+    are replaced, so running it again is harmless."""
+    e = Emevd(d)
+    ids = {event_id for event_id, _, _ in doors}
+    events = [ev for ev in events_of(e) if ev["id"] not in ids]
+    ins0 = next(ev for ev in events if ev["id"] == 0)["ins"]
+    ins0[:] = [i for i in ins0 if not ((i["bank"], i["id"]) == (2000, 0)
+                                      and struct.unpack_from("<I", i["args"], 4)[0] in ids)]
+    for slot, (event_id, trigger, arrival) in enumerate(doors):
+        ins0.insert(slot, {"bank": 2000, "id": 0, "args": struct.pack("<iIi", 0, event_id, 0), "layer": -1})
+        body = [
+            {"bank": 3, "id": 2, "args": struct.pack("<bBxxIIi", 0, 1, 10000, trigger, 1), "layer": -1},  # IF in area
+            {"bank": 2004, "id": 41, "args": struct.pack("<IIIi", 10000, 1, arrival, -1), "layer": -1},  # warp to region
+            {"bank": 1000, "id": 4, "args": struct.pack("<Bxxx", 1), "layer": -1},  # End Unconditionally: restart
+        ]
+        events.append({"id": event_id, "rest": 0, "pars": [], "ins": body})
+    return build(e, events)
+
+
 GUIDANCE_GRACES = (1042361981, 1042361980)  # AEG099_090 grace markers of The First Step (76101) and Church of Elleh (76100)
 NO_ENTITY = 1042361989  # unused entity id in this tile (not in m60_42_36_00 or m60_10_09_02)
 
@@ -215,6 +244,9 @@ if __name__ == "__main__":
     import sys
     if sys.argv[1] == "--no-leaf-gusts":  # emevd.py --no-leaf-gusts common.emevd out.emevd
         open(sys.argv[3], "wb").write(no_leaf_gusts(open(sys.argv[2], "rb").read()))
+        sys.exit()
+    if sys.argv[1] == "--rattlebones":  # emevd.py --rattlebones m60_42_36_00.emevd out.emevd (doors of msb_add_room.py)
+        open(sys.argv[3], "wb").write(rattlebones_doors(open(sys.argv[2], "rb").read()))
         sys.exit()
     if sys.argv[1] == "--no-guidance":  # emevd.py --no-guidance m60_42_36_00.emevd out.emevd
         open(sys.argv[3], "wb").write(no_guidance_wisps(open(sys.argv[2], "rb").read()))
