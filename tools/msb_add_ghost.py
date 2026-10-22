@@ -203,16 +203,18 @@ def count_users(lists):
             models[i] = bytes(m)
 
 
-def add_route(lists, points, part):
-    """Type index of a new looping PatrolInfo event through new patrol point regions at `points`."""
+def add_route(lists, points, part, event_name=EVENT_NAME, region_id=REGION_ID):
+    """Type index of a new looping PatrolInfo event `event_name` through new patrol point regions at `points` (region
+    ids `region_id`...). The templates are the patrol point / looping patrol event with the longest names, so the new
+    names fit in their name space."""
     regions, events = _list(lists, "POINT_PARAM_ST").entries, _list(lists, "EVENT_PARAM_ST").entries
     kinds = {u32(e, 0x0C) for e in events}
     assert kinds <= KNOWN_EVENTS, f"events of types {kinds - KNOWN_EVENTS} may hold region indices; not handled"
-    template = next(e for e in regions if u32(e, 0x08) == REGION_PATROL)
+    template = max((e for e in regions if u32(e, 0x08) == REGION_PATROL), key=lambda e: len(entry_name(e)))
     at = block_end(regions, 0x08, REGION_PATROL)
     first_type_index = sum(1 for e in regions if u32(e, 0x08) == REGION_PATROL)
     ids = {u32(e, 0x2C) for e in regions}
-    assert not ids & set(range(REGION_ID, REGION_ID + len(points))), "region ids already used"
+    assert not ids & set(range(region_id, region_id + len(points))), "region ids already used"
 
     def shift(index):
         return index + len(points) if index >= at else index
@@ -235,11 +237,12 @@ def add_route(lists, points, part):
         struct.pack_into("<i", e, 0x0C, first_type_index + n)
         struct.pack_into("<3f", e, 0x14, *p)
         struct.pack_into("<3f", e, 0x20, 0.0, 0.0, 0.0)
-        struct.pack_into("<i", e, 0x2C, REGION_ID + n)
+        struct.pack_into("<i", e, 0x2C, region_id + n)
         regions.insert(at + n, bytes(e))
 
-    e = bytearray(next(x for x in patrols if x[q(x, 0x20)] == 1 and q(x, 0x20) + 16 + 128 <= len(x)))
-    _set_name(e, EVENT_NAME)
+    e = bytearray(max((x for x in patrols if x[q(x, 0x20)] == 1 and q(x, 0x20) + 16 + 128 <= len(x)),
+                      key=lambda x: len(entry_name(x))))
+    _set_name(e, event_name)
     struct.pack_into("<iii", e, 0x08, 1 + max(u32(x, 0x08) for x in events), EVENT_PATROL, route_index)
     td = q(e, 0x20)
     e[td] = 0  # patrol type 0, as vanilla walk_route_c4300_9020_5 (loops back to the first point)
