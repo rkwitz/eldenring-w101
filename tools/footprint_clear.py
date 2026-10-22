@@ -10,9 +10,12 @@ What it does, for every tile of the three sizes that overlaps the street:
     MARGIN) are moved 1000 m down;
   - ground map pieces and their collision (m.../h... parts) of every 256 m tile the footprint touches, and their
     far-view copies (m14XXZZ.., m24XXZZ..), are moved 1000 m down too.
-Dummy assets and dummy enemies (corpses, skulls) over the footprint, and SFX/WindSFX regions (embers, ash) over the footprint go down too. Our own parts (street, sky, grace, exit door)
-and all characters are left alone. Moving rather than deleting keeps
-every index the same, so it is safe to rerun, and parts already moved are not moved again.
+Dummy assets and dummy enemies (corpses, skulls) over the footprint, and SFX/WindSFX regions over the footprint go
+down too, and so does every asset that carries a fire or glow effect (EMBER_SOURCES, from AssetModelSfxParam) within
+EMBER_RADIUS of it: their embers drift over the street even when the
+asset itself is outside the footprint (the falling embers at the exit door were the campfire AEG003_362, effect 7000,
+8 m outside it). Our own parts (street, sky, grace, exit door) and all characters are left alone. Moving rather than
+deleting keeps every index the same, so it is safe to rerun, and parts already moved are not moved again.
 
 Coordinates: a part in tile (x, z) of size s (256, 512, 1024) is at global (x * s + s / 2 + px, ..., z * s + s / 2 + pz).
 The footprint is computed in m60_42_36_00's local coordinates from the street OBJ and the street part's transform.
@@ -41,6 +44,18 @@ KEEP = ("AEG030_518", "AEG030_523", "AEG099_060", "AEG099_090", "AEG110_064", "A
 MAP_PIECE, COLLISION, ASSET = 0, 5, 13
 DUMMY_ASSET, DUMMY_ENEMY = 9, 10  # corpses, skulls and other set dressing placed as dummies
 SFX_REGIONS = (5, 6)  # SFX and WindSFX regions (embers, ash, mist)
+# Asset models whose AssetModelSfxParam row (model * 1000) attaches an effect with embers or glowing motes, checked in
+# the vanilla regulation and sfxbnd_commoneffects (orange keyframe colours, flame/smoke flipbook textures):
+EMBER_SOURCES = {
+    "AEG003_362": 7000,    # campfire (flame + smoke flipbooks s31021/s31031, orange colours); placed only in the 1024 m maps
+    "AEG099_309": 803450,  # Kale's stone pot of glowing coals, Church of Elleh
+    "AEG003_071": 800023,  # fire (same palette as 7000)
+    "AEG004_693": 800023,
+    "AEG004_987": 800400,
+    "AEG099_795": 803311,  # invisible placeholder emitting glowing motes (s10011 glow dot)
+    "AEG099_796": 803310,
+}
+EMBER_RADIUS = 60.0  # metres (XZ) from the footprint
 SIZE = {"00": 256, "01": 512, "02": 1024}
 DIVIDE = {"00": 1, "01": 2, "02": 4}
 
@@ -99,6 +114,12 @@ class Footprint:
         i, j = int((x - self.origin[0]) / CELL), int((z - self.origin[1]) / CELL)
         return 0 <= i < self.grid.shape[0] and 0 <= j < self.grid.shape[1] and bool(self.grid[i, j])
 
+    def distance(self, x, z):
+        """XZ distance in metres from (x, z) to the nearest footprint cell."""
+        if not hasattr(self, "_cells"):
+            self._cells = self.origin + np.argwhere(self.grid) * CELL
+        return float(np.min(np.hypot(self._cells[:, 0] - x, self._cells[:, 1] - z)))
+
     def small_tiles(self):
         """(x, z) indices of the 256 m tiles the footprint touches."""
         i, j = np.nonzero(self.grid)
@@ -142,7 +163,8 @@ def clear(name, raw, footprint, small):
             continue
         if kind in (ASSET, DUMMY_ASSET, DUMMY_ENEMY):
             hx, hz = to_home(name, x, z)
-            hit = footprint.covers(hx, hz)
+            ember = kind == ASSET and any(m in part for m in EMBER_SOURCES)
+            hit = footprint.covers(hx, hz) or (ember and footprint.distance(hx, hz) < EMBER_RADIUS)
         else:
             m = GROUND.match(part)
             hit = bool(m) and (int(m.group(1)), int(m.group(2))) in small
