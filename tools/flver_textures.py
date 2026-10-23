@@ -19,6 +19,7 @@ OPAQUE_MATERIAL, ALPHA_MATERIAL = 4, 3  # vanilla aeg030_518 materials m60_fort_
 AET = "AET030_518"  # texture names must start with the TPF's stem: asset/aet/aet030/aet030_518.tpf.dcx
 TEXTURE_DIR = r"N:\GR\data\Asset\Environment\texture\AET030"
 FLAT_NORMAL = f"{AET}_n"
+BLACK = "black"  # a texture entry's source: our flat black texture f"{AET}_k" (see emissive_material)
 
 
 def texture_name(i):
@@ -183,6 +184,28 @@ def unlit_material(vanilla, brightness=1.0):
             "gx": plain["gx"], "textures": [("M_A__NoLight_snp_Texture2D_1_AlbedoMap_0", scale)]}
 
 
+EMISSIVE_MATBIN = r"Map_m12_00\matxml\m12_00_680"  # shader M[AMSN_V]_Emissive.spx, alpha ref 0, no colour params
+
+
+def emissive_material(vanilla):
+    """Material template for `split_materials(opaque=...)` that shows the texture as light: matbin shader
+    M[AMSN_V]_Emissive.spx, the street's own deferred M_AMSN_V shader (whose FLVER texture paths we know the game
+    uses) plus an EmissiveMap. The texture goes in the EmissiveMap, the AlbedoMap gets a flat black texture (so sun,
+    sky light and shadows add nothing visible) and the NormalMap the flat normal. M[A]_NoLight drew one flat colour
+    (white at power 1, grey at 0.256) in game: it never sampled our texture. Brightness = the texture's own values."""
+    plain = _material_template(vanilla, 2)
+    assert plain["gx"][:4] == b"GX00" and len(plain["gx"]) == 64, "unexpected GX list on vanilla material 2"
+    scale = struct.pack("<2f", 1.0, 1.0) + bytes(16)
+    prefix = "M_AMSN_V__Emissive_snp_Texture2D_"
+    return {"mtd": rf"N:\GR\data\Material\mtd\{EMISSIVE_MATBIN}.matxml", "flags": plain["flags"], "gx": plain["gx"],
+            "textures": [(prefix + "2_AlbedoMap_0", scale, BLACK), (prefix + "1_NormalMap_0", scale),
+                         (prefix + "4_EmissiveMap_0", scale)]}
+
+
+def black_name():
+    return f"{AET}_k"
+
+
 def split_materials(data, vanilla, face_materials, textures, alpha, opaque=None):
     """New FLVER bytes: one mesh/material per texture. `face_materials[t]` names triangle t's texture (an index into
     `textures`, or None to drop it); `alpha` holds the indices of textures needing the alpha-tested material.
@@ -254,9 +277,14 @@ def split_materials(data, vanilla, face_materials, textures, alpha, opaque=None)
             gx_offsets[kind] = blob.add(template["gx"], 4)
         blob.set(material, "<8i", blob.utf16(texture_name(texture)), blob.utf16(template["mtd"]),
                  len(template["textures"]), texture_index, template["flags"], gx_offsets[kind], m, 0)
-        for sampler, rest in template["textures"]:
+        for sampler, rest, *source in template["textures"]:
             header = out_starts["texture"] + 32 * texture_index
-            path = texture_path(texture_name(texture)) if "AlbedoMap" in sampler else texture_path(FLAT_NORMAL)
+            if source == [BLACK]:
+                path = texture_path(black_name())
+            elif "AlbedoMap" in sampler or "EmissiveMap" in sampler:
+                path = texture_path(texture_name(texture))
+            else:
+                path = texture_path(FLAT_NORMAL)
             blob.data[header + 8:header + 32] = rest
             blob.set(header, "<2i", blob.utf16(path), blob.utf16(sampler))
             texture_index += 1

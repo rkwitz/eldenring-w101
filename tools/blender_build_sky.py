@@ -60,11 +60,11 @@ TEXTURES = [PROJECT / "aet" / "aet030" / f"{ASSET.replace('aeg', 'aet')}{suffix}
 SKY = ROOT / "reference" / "w101" / "converted_sky_classic"
 SKY_TEXTURE, CLOUD_TEXTURE = "WC_Skybox01_KH__19706315", "WC_Skybox_Clouds_KH__d376b071"
 STREET_OBJ = ROOT / "reference" / "w101" / "converted_classic" / "WC_Z06_Unicorn_Way_Classic.obj"
-# Emissive scale of the unlit sky (texture x matbin power). 1.0 blew out to white in Elden Ring's daylight
-# exposure and 0.12 looked flat grey (2026-10-22). If the sky still looks grey with no swirls or clouds at all, the
-# texture isn't being drawn (tell Claude); if the swirls show but it's too dark/bright, change this (0.2 .. 0.6).
-SKY_BRIGHTNESS = 0.35
-SKY_SATURATION = 1.5  # pushes the pastel W101 colours away from grey before Elden Ring's tone mapping (1.0 = as is)
+# The dome draws the texture as light (flver_textures.emissive_material). SKY_BRIGHTNESS darkens the texture (1.0
+# keeps it): lower it if the sky is too bright or white, raise it (up to 1.0) if too dark. SKY_SATURATION pushes the
+# pastel colours away from grey before Elden Ring's tone mapping (1.0 = as is).
+SKY_BRIGHTNESS = 0.6
+SKY_SATURATION = 1.3
 GAME_GPARAMS = GAME.parent / "param" / "drawparam"
 PROJECT_GPARAMS = PROJECT.parent / "param" / "drawparam"
 
@@ -94,8 +94,7 @@ def build_sky():
     assert "#vc" in (SKY / "layer2.obj").read_text(), "layer2.obj has no vertex colours: convert it again (nif2obj.py)"
     image = sky_bake.bake(SKY / "layer1.obj", (SKY / "textures" / f"{SKY_TEXTURE}.dds").read_bytes(),
                           SKY / "layer2.obj", (SKY / "textures" / f"{CLOUD_TEXTURE}.dds").read_bytes())
-    _, dim = flver_textures.unlit_scale(SKY_BRIGHTNESS)
-    dds = sky_bake.dxt1_dds(sky_bake.dim(image, dim, SKY_SATURATION))
+    dds = sky_bake.dxt1_dds(sky_bake.dim(image, min(1.0, SKY_BRIGHTNESS), SKY_SATURATION))
     (SKY / "sky_baked.dds").write_bytes(dds)
 
     positions, uvs, faces = sky_bake.dome(radii)
@@ -103,7 +102,7 @@ def build_sky():
     vanilla = flver_fix.flver_in_binder(VANILLA)
     single, materials = flver_build.build_single_mesh(template, positions, uvs, faces, fixed_normal=(0.0, 1.0, 0.0))
     flver = flver_textures.split_materials(single, vanilla, [0] * len(materials), [SKY_TEXTURE], alpha=set(),
-                                           opaque=flver_textures.unlit_material(vanilla, SKY_BRIGHTNESS))
+                                           opaque=flver_textures.emissive_material(vanilla))
 
     binder = Binder.from_path(STREET_GEOMBND)
     for entry in binder.entries:
@@ -113,7 +112,8 @@ def build_sky():
     binder.write(GEOMBND)
     print(f"Wrote {GEOMBND}: {len(materials)} triangles")
 
-    textures = [(flver_textures.texture_name(0), dds), (flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, 64))]
+    textures = [(flver_textures.texture_name(0), dds), (flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, 64)),
+                (flver_textures.black_name(), tpf.solid_dds(0, 0, 0))]
     _, dcx_type = decompress(AET_TEMPLATE)
     packed = compress(tpf.build_tpf(textures), dcx_type)
     for path in TEXTURES:
