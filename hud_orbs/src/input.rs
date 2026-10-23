@@ -25,6 +25,8 @@ pub const LB: u16 = 0x0100;
 pub const RB: u16 = 0x0200;
 pub const A: u16 = 0x1000;
 pub const B: u16 = 0x2000;
+pub const X: u16 = 0x4000;
+pub const Y: u16 = 0x8000;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]

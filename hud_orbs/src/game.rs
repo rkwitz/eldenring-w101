@@ -64,6 +64,17 @@ impl Game {
         })
     }
 
+    /// The player's position in global map-chunk coordinates (metres, the same frame across the overworld's
+    /// tiles) and the map block it is in; None without a player character.
+    pub fn position(&self) -> Option<([f32; 3], i32)> {
+        use eldenring::cs::ChrIns;
+        use std::mem::offset_of;
+        let player = read::<usize>(self.world_chr_man).and_then(|wcm| read::<usize>(wcm + PLAYER))?;
+        let [x, y, z, _] = read::<[f32; 4]>(player + offset_of!(ChrIns, chunk_position))?;
+        let block = read::<i32>(player + offset_of!(ChrIns, block_id))?;
+        [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6).then_some(([x, y, z], block))
+    }
+
     /// The player's character sheet for the spellbook, from PlayerGameData; None without a character.
     pub fn sheet(&self) -> Option<Sheet> {
         use eldenring::cs::{EquipInventoryDataListEntry, EquipMagicData, PlayerGameData};

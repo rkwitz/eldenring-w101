@@ -13,7 +13,10 @@ mod book;
 mod font;
 mod game;
 mod input;
+mod layout;
+mod loadscreen;
 mod names;
+mod pages;
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -89,12 +92,14 @@ struct Art {
     spellbook: TextureId,
 }
 
-struct Settings {
-    left: f32,
-    bottom: f32,
-    scale: f32,
-    debug: bool,
-    level: bool,
+pub(crate) struct Settings {
+    pub(crate) left: f32,
+    pub(crate) bottom: f32,
+    pub(crate) scale: f32,
+    pub(crate) debug: bool,
+    pub(crate) level: bool,
+    /// Wizard101 loading screens on the mod's door warps.
+    pub(crate) loadscreen: bool,
 }
 
 struct Orbs {
@@ -103,6 +108,7 @@ struct Orbs {
     art: Option<Art>,
     font: Option<BitmapFont>,
     book: book::Book,
+    loadscreen: loadscreen::LoadScreen,
     game: Option<Option<game::Game>>,
     shown: [f32; 4],
     start: Instant,
@@ -160,6 +166,7 @@ impl Orbs {
             art: None,
             font: None,
             book: book::Book::new(),
+            loadscreen: loadscreen::LoadScreen::default(),
             game: None,
             shown: [1.0, 1.0, 0.0, 1.0],
             start: Instant::now(),
@@ -210,13 +217,16 @@ impl ImguiRenderLoop for Orbs {
             Ok(font) => self.font = Some(font),
             Err(e) => tracing::warn!("WizardFancy font not loaded, using imgui's default font: {e}"),
         }
-        self.book.load(&self.folder.join("w101_orbs"), render);
+        self.book.load(&self.folder.join("w101_orbs").join("book"), render);
+        self.book.textures.want([loadscreen::IMAGE, loadscreen::BAR, loadscreen::FILL].map(String::from));
+        self.book.load_art(render);
         for line in input::install() {
             tracing::info!("input hook: {line}");
         }
     }
 
-    fn before_render<'a>(&'a mut self, ctx: &mut imgui::Context, _render: &'a mut dyn RenderContext) {
+    fn before_render<'a>(&'a mut self, ctx: &mut imgui::Context, render: &'a mut dyn RenderContext) {
+        self.book.load_art(render);
         // Elden Ring hides and confines the cursor; the open book needs it.
         ctx.io_mut().mouse_draw_cursor = self.book.open;
         if self.book.open {
@@ -229,24 +239,22 @@ impl ImguiRenderLoop for Orbs {
         let stats = self.draw(ui);
         let game = self.game.as_ref().and_then(|g| g.as_ref());
         let hud = game::hud_shown();
-        let folder = self.folder.join("w101_orbs");
-        let s = &self.settings;
-        let cx = book::Context {
+        let faded = game::faded();
+        let position = game.and_then(|g| g.position());
+        let settings_path = self.folder.join("w101_orbs.ini");
+        let mut cx = book::Context {
             game,
             stats,
-            gameplay: game.is_some() && hud && game::faded() <= 0.3 && stats.is_some(),
+            gameplay: game.is_some() && hud && faded <= 0.3 && stats.is_some(),
             hud,
-            fancy: self.font.as_ref(),
-            folder: &folder,
-            settings: vec![
-                ("left".into(), s.left.to_string()),
-                ("bottom".into(), s.bottom.to_string()),
-                ("scale".into(), s.scale.to_string()),
-                ("level".into(), if s.level { "1" } else { "0" }.into()),
-                ("debug".into(), if s.debug { "1" } else { "0" }.into()),
-            ],
+            faded,
+            position,
+            settings: &mut self.settings,
+            settings_path: &settings_path,
         };
-        self.book.frame(ui, &cx);
+        self.book.frame(ui, &mut cx);
+        self.loadscreen.update(position, hud && faded <= 0.3, self.settings.loadscreen);
+        self.loadscreen.draw(ui, &self.book.textures);
         self.perf.frame(begin.elapsed().as_secs_f32());
     }
 
@@ -446,7 +454,7 @@ fn dll_folder() -> PathBuf {
 /// exactly where Wizard101 puts the globes), scale (1 = Wizard101's size on a 768-pixel-tall screen) and debug (1
 /// shows the raw numbers and logs every candidate stat value once a second) and level (0 hides the level number beside the experience bar).
 fn load_settings(path: &Path) -> Settings {
-    let mut settings = Settings { left: 0.0, bottom: 0.0, scale: 1.0, debug: false, level: true };
+    let mut settings = Settings { left: 0.0, bottom: 0.0, scale: 1.0, debug: false, level: true, loadscreen: true };
     for line in std::fs::read_to_string(path).unwrap_or_default().lines() {
         let Some((key, value)) = line.split_once('=') else { continue };
         let value = value.trim();
@@ -456,10 +464,26 @@ fn load_settings(path: &Path) -> Settings {
             "scale" => settings.scale = value.parse().unwrap_or(settings.scale),
             "debug" => settings.debug = value == "1",
             "level" => settings.level = value != "0",
+            "loadscreen" => settings.loadscreen = value != "0",
             _ => {}
         }
     }
     settings
+}
+
+/// Writes the settings back to w101_orbs.ini (the spellbook's Settings page changes them).
+pub(crate) fn save_settings(path: &Path, s: &Settings) -> std::io::Result<()> {
+    let text = format!(
+        "# Wizard101 HUD for Elden Ring (w101_orbs.dll). The spellbook's Settings page rewrites this file.\n\
+         # left / bottom: extra gap from the screen's bottom-left corner, in Wizard101 pixels\n\
+         # scale: 1 = Wizard101's size on a 768-pixel-tall screen\n\
+         # level: 0 hides the level number beside the experience bar\n\
+         # loadscreen: 0 turns off the Wizard101 loading screen on door warps\n\
+         # debug: 1 logs the raw values once a second\n\
+         left = {}\nbottom = {}\nscale = {}\nlevel = {}\nloadscreen = {}\ndebug = {}\n",
+        s.left, s.bottom, s.scale, s.level as u8, s.loadscreen as u8, s.debug as u8
+    );
+    std::fs::write(path, text)
 }
 
 hudhook::hudhook!(ImguiDx12Hooks, Orbs::new());
