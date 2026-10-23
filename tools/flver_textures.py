@@ -206,10 +206,26 @@ def black_name():
     return f"{AET}_k"
 
 
-def split_materials(data, vanilla, face_materials, textures, alpha, opaque=None):
+BLEND_MATBIN = r"Map_m10_00\matxml\m10_00_218"  # shader M[AMSN_V]_Alpha.spx: blend mode 2 (alpha blended), alpha ref 1
+
+
+def blend_material(vanilla):
+    """Material template for `split_materials(blend_material=...)`: the street's M_AMSN_V shader, alpha blended
+    instead of alpha tested, for half-transparent textures such as glass (the alpha-tested m60_fort_215 cuts glass
+    into ragged holes). Plain GX list of vanilla material 2, as in `emissive_material`."""
+    plain = _material_template(vanilla, 2)
+    assert plain["gx"][:4] == b"GX00" and len(plain["gx"]) == 64, "unexpected GX list on vanilla material 2"
+    scale = struct.pack("<2f", 1.0, 1.0) + bytes(16)
+    prefix = "M_AMSN_V__Alpha_snp_Texture2D_"
+    return {"mtd": rf"N:\GR\data\Material\mtd\{BLEND_MATBIN}.matxml", "flags": plain["flags"], "gx": plain["gx"],
+            "textures": [(prefix + "2_AlbedoMap_0", scale), (prefix + "1_NormalMap_0", scale)]}
+
+
+def split_materials(data, vanilla, face_materials, textures, alpha, opaque=None, blend_material=None):
     """New FLVER bytes: one mesh/material per texture. `face_materials[t]` names triangle t's texture (an index into
     `textures`, or None to drop it); `alpha` holds the indices of textures needing the alpha-tested material.
-    `opaque` replaces the opaque material template (see `unlit_material`)."""
+    `opaque` replaces the opaque material template (see `emissive_material`), `blend_material` the alpha-tested one
+    (see `blend_material`)."""
     version, counts = ff._counts(data)
     starts, _ = ff._section_starts(counts)
     vertex_data = struct.unpack_from("<i", data, 0x0C)[0]
@@ -227,6 +243,8 @@ def split_materials(data, vanilla, face_materials, textures, alpha, opaque=None)
     templates = {k: _material_template(vanilla, k) for k in (OPAQUE_MATERIAL, ALPHA_MATERIAL)}
     if opaque is not None:
         templates[OPAQUE_MATERIAL] = opaque
+    if blend_material is not None:
+        templates[ALPHA_MATERIAL] = blend_material
 
     groups = {}
     for t, texture in enumerate(face_materials):
