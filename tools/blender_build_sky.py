@@ -7,13 +7,15 @@ on the zone. In each direction the dome sits just beyond the farthest Wizard101 
 up to ~700 m behind the giant backdrop trees), so it hides Elden Ring's land and sky outside the zone. The clouds are
 frozen (no UV scrolling in our material).
 
-The dome uses Elden Ring's unlit map material m60_fort_001 (shader M[A]_NoLight: forward, emissive, no lighting,
-shadows or ambient occlusion; flver_textures.unlit_material), so it shows the texture as baked, like Wizard101's
-APPLY_REPLACE. (It used the street's lit M_AMSN_V before, with every normal pointing up: seen from inside, the walls
-were lit at grazing angles, which turns a lit surface into a mirror of Elden Ring's hazy sky, and the overhead part
-faced away from the camera and from the sky light, so it looked foggy and shadowed.) Distance fog would still tint
-it, so this also writes fogless gparams (gparam_fog.py) for every overworld light set and weather to the project,
-for the whole overworld.
+The dome uses the street's own lit material (vanilla aeg030_518's m60_fort_220, shader M_AMSN_V), the one material
+whose texture we have seen in game on the dome (2026-10-21: the flat purple cap and the hull steps showed). Unlit
+M[A]_NoLight (m60_fort_001, WorldTree_309) and M[AMSN_V]_Emissive (m12_00_680) both drew one flat colour, grey or
+white, whatever the texture brightness (2026-10-22/23), so they are not used. Its normals are the faces' own, pointing
+in at the camera (with every normal pointing up, as before 2026-10-22, the walls were lit at grazing angles and
+mirrored Elden Ring's hazy sky). To light it, and the street and Rattlebones' room, evenly like Wizard101, this
+also writes gparams for every overworld light set and weather (gparam_fog.py) without fog, without the sun and other
+directional lights (so no shadows) and with a white ambient light from every side (FLAT_LIGHTING, AMBIENT). These
+edits apply to the whole overworld.
 
 Writes, in the Smithbox project:
   asset/aeg/aeg030/aeg030_523.geombnd.dcx      the dome FLVER, centred on its own origin; part AEG030_523_9000 sits
@@ -60,18 +62,20 @@ TEXTURES = [PROJECT / "aet" / "aet030" / f"{ASSET.replace('aeg', 'aet')}{suffix}
 SKY = ROOT / "reference" / "w101" / "converted_sky_classic"
 SKY_TEXTURE, CLOUD_TEXTURE = "WC_Skybox01_KH__19706315", "WC_Skybox_Clouds_KH__d376b071"
 STREET_OBJ = ROOT / "reference" / "w101" / "converted_classic" / "WC_Z06_Unicorn_Way_Classic.obj"
-# The dome draws the texture as light (flver_textures.emissive_material). SKY_BRIGHTNESS darkens the texture (1.0
-# keeps it): lower it if the sky is too bright or white, raise it (up to 1.0) if too dark. SKY_SATURATION pushes the
-# pastel colours away from grey before Elden Ring's tone mapping (1.0 = as is).
-SKY_BRIGHTNESS = 0.6
-SKY_SATURATION = 1.3
+SKY_SATURATION = 1.3  # pushes the pastel colours away from grey before Elden Ring's tone mapping (1.0 = as is)
+# Lighting for the whole overworld (gparam_fog.flat_lighting): True = no sun, no shadows, ambient light of intensity
+# AMBIENT from every side (raise it if everything is too dark, lower it if washed out; vanilla daylight sun is about
+# 0.5). False = Elden Ring's own lighting (fog stays off either way).
+FLAT_LIGHTING = True
+AMBIENT = 0.5
 GAME_GPARAMS = GAME.parent / "param" / "drawparam"
 PROJECT_GPARAMS = PROJECT.parent / "param" / "drawparam"
 
 
 def remove_fog():
-    """Write fogless copies of the overworld's light-set and weather gparams (gparam_fog.py) to the project, in the
-    game's own compression (an earlier DFLT copy from gparam_fog.py's command line may not load)."""
+    """Write fogless, evenly lit copies of the overworld's light-set and weather gparams (gparam_fog.py: remove_fog
+    and, with FLAT_LIGHTING, flat_lighting) to the project, in the game's own compression (an earlier DFLT copy from
+    gparam_fog.py's command line may not load)."""
     PROJECT_GPARAMS.mkdir(parents=True, exist_ok=True)
     names = sorted(GAME_GPARAMS.glob("m00_00_*_weatheroutdoor.gparam.dcx"))
     # Every overworld light set (m60_00_XXXX: XXXX is a collision's LightSetID; ours are -1, which keeps the last one)
@@ -80,10 +84,14 @@ def remove_fog():
     for path in names:
         data, dcx_type = decompress(path)
         new, changed = gparam_fog.remove_fog(data)
+        if FLAT_LIGHTING:
+            new, lit = gparam_fog.flat_lighting(new, AMBIENT)
+            changed += lit
         if changed:
             (PROJECT_GPARAMS / path.name).write_bytes(compress(new, dcx_type))
             written += 1
-    print(f"Wrote {written} fogless gparams to {PROJECT_GPARAMS} (delete that folder to get the fog back)")
+    lighting = f", no sun, ambient {AMBIENT}" if FLAT_LIGHTING else ""
+    print(f"Wrote {written} gparams (no fog{lighting}) to {PROJECT_GPARAMS} (delete that folder to undo)")
 
 
 def build_sky():
@@ -94,15 +102,14 @@ def build_sky():
     assert "#vc" in (SKY / "layer2.obj").read_text(), "layer2.obj has no vertex colours: convert it again (nif2obj.py)"
     image = sky_bake.bake(SKY / "layer1.obj", (SKY / "textures" / f"{SKY_TEXTURE}.dds").read_bytes(),
                           SKY / "layer2.obj", (SKY / "textures" / f"{CLOUD_TEXTURE}.dds").read_bytes())
-    dds = sky_bake.dxt1_dds(sky_bake.dim(image, min(1.0, SKY_BRIGHTNESS), SKY_SATURATION))
+    dds = sky_bake.dxt1_dds(sky_bake.dim(image, 1.0, SKY_SATURATION))
     (SKY / "sky_baked.dds").write_bytes(dds)
 
     positions, uvs, faces = sky_bake.dome(radii)
     template = flver_fix.flver_in_binder(STREET_GEOMBND)
     vanilla = flver_fix.flver_in_binder(VANILLA)
-    single, materials = flver_build.build_single_mesh(template, positions, uvs, faces, fixed_normal=(0.0, 1.0, 0.0))
-    flver = flver_textures.split_materials(single, vanilla, [0] * len(materials), [SKY_TEXTURE], alpha=set(),
-                                           opaque=flver_textures.emissive_material(vanilla))
+    single, materials = flver_build.build_single_mesh(template, positions, uvs, faces)  # normals face the centre
+    flver = flver_textures.split_materials(single, vanilla, [0] * len(materials), [SKY_TEXTURE], alpha=set())
 
     binder = Binder.from_path(STREET_GEOMBND)
     for entry in binder.entries:
@@ -112,8 +119,7 @@ def build_sky():
     binder.write(GEOMBND)
     print(f"Wrote {GEOMBND}: {len(materials)} triangles")
 
-    textures = [(flver_textures.texture_name(0), dds), (flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, 64)),
-                (flver_textures.black_name(), tpf.solid_dds(0, 0, 0))]
+    textures = [(flver_textures.texture_name(0), dds), (flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, 64))]
     _, dcx_type = decompress(AET_TEMPLATE)
     packed = compress(tpf.build_tpf(textures), dcx_type)
     for path in TEXTURES:

@@ -6,8 +6,14 @@ analytical fog on; m60_00_0000 is the overworld base) and the weather layers (m0
 weather, each with its own fog). For each file this sets every time-of-day value of
   VolumetricFog Enable, VolumetricFog EnableAnalyticalFog                -> off
   VolumetricFog Global FixedDensity, VolumetricFog Global HeightFogDensity Scale -> 0
-and leaves everything else (lighting, FogVolume local fog boxes) alone. The weather files apply to the whole overworld,
+and leaves everything else (FogVolume local fog boxes) alone. The weather files apply to the whole overworld,
 so their edit is global.
+
+flat_lighting() (used by blender_build_sky.py, not the command line) also makes the LightSet group light everything
+evenly, as Wizard101 does (unlit textures plus baked vertex colours): every directional light (the sun DiffColor0/
+SpecColor0 that draws the shadows, the fill light 1 and the local lights 1 and 2) gets intensity 0 (a colour's 4th
+value is its intensity), and the hemisphere ambient (Hemi Color Up and Down) becomes white at one intensity from
+above and below. Vanilla: sun 0.2 to 0.6 by day (2.5 in light set 100), hemi up 0.1 (1.0 in some), hemi down 0.
 
 GPARAM (version 5, "filt"): header ints at 0x10 group count, 0x18 group offset table, 0x1C group headers, 0x20 param
 header offset tables, 0x24 param headers, 0x28 values, 0x2C value ids. A group header is (param count, offset of its
@@ -68,6 +74,34 @@ def remove_fog(data):
             struct.pack_into(f"<{count}f", out, offset, *[float(OFF[name])] * count)
         else:
             raise ValueError(f"unexpected type {kind:#x} for {name}")
+        changed.append(name)
+    return bytes(out), changed
+
+
+DIRECTIONAL = ("Directional Light DiffColor0", "Directional Light SpecColor0", "Directional Light DiffColor1",
+               "Directional Light SpecColor1", "Directional Light LocalLight DiffColor1",
+               "Directional Light LocalLight SpecColor1", "Directional Light LocalLight DiffColor2",
+               "Directional Light LocalLight SpecColor2")
+HEMI = ("Directional Light Hemi Color Up", "Directional Light Hemi Color Down")
+COLOUR = 0x0E  # 4 floats: r, g, b, intensity
+
+
+def flat_lighting(data, ambient):
+    """(new GPARAM bytes, [names of changed params]): no directional light, white hemisphere ambient of intensity
+    `ambient` from every side (see the module docstring)."""
+    out = bytearray(data)
+    changed = []
+    for _, name, kind, count, offset in params(data):
+        if name not in DIRECTIONAL and name not in HEMI:
+            continue
+        if kind != COLOUR:
+            raise ValueError(f"unexpected type {kind:#x} for {name}")
+        for k in range(count):
+            at = offset + 16 * k
+            if name in HEMI:
+                struct.pack_into("<4f", out, at, 1.0, 1.0, 1.0, ambient)
+            else:
+                struct.pack_into("<f", out, at + 12, 0.0)
         changed.append(name)
     return bytes(out), changed
 
