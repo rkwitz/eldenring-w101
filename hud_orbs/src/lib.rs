@@ -13,10 +13,14 @@ mod book;
 mod font;
 mod game;
 mod input;
+mod itemdata;
 mod layout;
 mod loadscreen;
 mod names;
 mod pages;
+mod quests;
+mod settings;
+mod sheet;
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -26,6 +30,7 @@ use hudhook::imgui::{self, DrawListMut, FontConfig, FontSource, ImColor32, Textu
 use hudhook::{ImguiRenderLoop, MessageFilter, RenderContext};
 
 use font::BitmapFont;
+pub(crate) use settings::{load_settings, save_settings, Settings};
 
 const FRAMES_PER_SECOND: f32 = 12.0;
 /// Bottom edge of the lowest (energy) globe on Wizard101's 768-pixel-tall screen.
@@ -90,16 +95,6 @@ struct Art {
     xp_fill: TextureId,
     xp_frame: TextureId,
     spellbook: TextureId,
-}
-
-pub(crate) struct Settings {
-    pub(crate) left: f32,
-    pub(crate) bottom: f32,
-    pub(crate) scale: f32,
-    pub(crate) debug: bool,
-    pub(crate) level: bool,
-    /// Wizard101 loading screens on the mod's door warps.
-    pub(crate) loadscreen: bool,
 }
 
 struct Orbs {
@@ -228,7 +223,7 @@ impl ImguiRenderLoop for Orbs {
     fn before_render<'a>(&'a mut self, ctx: &mut imgui::Context, render: &'a mut dyn RenderContext) {
         self.book.load_art(render);
         // Elden Ring hides and confines the cursor; the open book needs it.
-        ctx.io_mut().mouse_draw_cursor = self.book.open;
+        ctx.io_mut().mouse_draw_cursor = false; // the book draws its own
         if self.book.open {
             unsafe { windows_sys::Win32::UI::WindowsAndMessaging::ClipCursor(std::ptr::null()) };
         }
@@ -253,7 +248,12 @@ impl ImguiRenderLoop for Orbs {
             settings_path: &settings_path,
         };
         self.book.frame(ui, &mut cx);
-        self.loadscreen.update(position, hud && faded <= 0.3, self.settings.loadscreen);
+        if game.is_some() && game::event_flag(loadscreen::DOOR_FLAG) == Some(true) {
+            game::set_event_flag(loadscreen::DOOR_FLAG, false);
+            if self.settings.loadscreen {
+                self.loadscreen.show();
+            }
+        }
         self.loadscreen.draw(ui, &self.book.textures);
         self.perf.frame(begin.elapsed().as_secs_f32());
     }
@@ -448,42 +448,6 @@ fn dll_folder() -> PathBuf {
         let path = PathBuf::from(String::from_utf16_lossy(&buffer[..len]));
         path.parent().map(Path::to_path_buf).unwrap_or_default()
     }
-}
-
-/// `key = value` lines: left and bottom (extra gap from the screen's bottom-left corner, in Wizard101 pixels; 0 is
-/// exactly where Wizard101 puts the globes), scale (1 = Wizard101's size on a 768-pixel-tall screen) and debug (1
-/// shows the raw numbers and logs every candidate stat value once a second) and level (0 hides the level number beside the experience bar).
-fn load_settings(path: &Path) -> Settings {
-    let mut settings = Settings { left: 0.0, bottom: 0.0, scale: 1.0, debug: false, level: true, loadscreen: true };
-    for line in std::fs::read_to_string(path).unwrap_or_default().lines() {
-        let Some((key, value)) = line.split_once('=') else { continue };
-        let value = value.trim();
-        match key.trim() {
-            "left" => settings.left = value.parse().unwrap_or(settings.left),
-            "bottom" => settings.bottom = value.parse().unwrap_or(settings.bottom),
-            "scale" => settings.scale = value.parse().unwrap_or(settings.scale),
-            "debug" => settings.debug = value == "1",
-            "level" => settings.level = value != "0",
-            "loadscreen" => settings.loadscreen = value != "0",
-            _ => {}
-        }
-    }
-    settings
-}
-
-/// Writes the settings back to w101_orbs.ini (the spellbook's Settings page changes them).
-pub(crate) fn save_settings(path: &Path, s: &Settings) -> std::io::Result<()> {
-    let text = format!(
-        "# Wizard101 HUD for Elden Ring (w101_orbs.dll). The spellbook's Settings page rewrites this file.\n\
-         # left / bottom: extra gap from the screen's bottom-left corner, in Wizard101 pixels\n\
-         # scale: 1 = Wizard101's size on a 768-pixel-tall screen\n\
-         # level: 0 hides the level number beside the experience bar\n\
-         # loadscreen: 0 turns off the Wizard101 loading screen on door warps\n\
-         # debug: 1 logs the raw values once a second\n\
-         left = {}\nbottom = {}\nscale = {}\nlevel = {}\nloadscreen = {}\ndebug = {}\n",
-        s.left, s.bottom, s.scale, s.level as u8, s.loadscreen as u8, s.debug as u8
-    );
-    std::fs::write(path, text)
 }
 
 hudhook::hudhook!(ImguiDx12Hooks, Orbs::new());

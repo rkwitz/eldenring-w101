@@ -22,31 +22,9 @@ const MODULES: usize = 0x190; // ChrIns -> module bag; its first entry is the st
 const STAT_HP: usize = 0x138; // hp, max hp, (base max hp), _, fp, max fp
 const STAT_FP: usize = 0x148;
 const STAT_SP: usize = 0x154; // stamina, max stamina (CSChrDataModule in the eldenring crate)
+pub use crate::sheet::*;
+
 const PLAYER_GAME_DATA: usize = 0x8; // GameDataMan -> PlayerGameData: hp 0x10, max 0x14, fp 0x1C, max 0x20, sp 0x2C, max 0x30
-
-#[derive(Clone, Copy, Default, Debug)]
-pub struct Stats {
-    pub hp: i32,
-    pub max_hp: i32,
-    pub fp: i32,
-    pub max_fp: i32,
-    pub sp: i32,
-    pub max_sp: i32,
-    /// Rune level and runes held; None if PlayerGameData couldn't be read.
-    pub level: Option<(u32, u32)>,
-}
-
-/// Runes needed to go from `level` to the next one (Elden Ring's level-up cost formula).
-pub fn level_up_cost(level: u32) -> u32 {
-    let x = level as f64 + 81.0;
-    let extra = ((x - 92.0) * 0.02).max(0.0);
-    ((extra + 0.1) * x * x + 1.0).floor() as u32
-}
-
-/// How far the runes held are toward the next level, 0 to 1 (full at the level cap).
-pub fn level_progress(level: u32, runes: u32) -> f32 {
-    if level >= 713 { 1.0 } else { (runes as f32 / level_up_cost(level) as f32).clamp(0.0, 1.0) }
-}
 
 pub struct Game {
     world_chr_man: usize,
@@ -64,15 +42,49 @@ impl Game {
         })
     }
 
-    /// The player's position in global map-chunk coordinates (metres, the same frame across the overworld's
-    /// tiles) and the map block it is in; None without a player character.
-    pub fn position(&self) -> Option<([f32; 3], i32)> {
+    /// The player's position in global map-chunk coordinates (metres) with the map block the player is in and the
+    /// block the chunk coordinates are relative to (`block_origin`: when it changes, the coordinates jump although
+    /// the player didn't move); None without a player character.
+    pub fn position(&self) -> Option<([f32; 3], i32, i32)> {
         use eldenring::cs::ChrIns;
         use std::mem::offset_of;
-        let player = read::<usize>(self.world_chr_man).and_then(|wcm| read::<usize>(wcm + PLAYER))?;
+        let player = self.player()?;
         let [x, y, z, _] = read::<[f32; 4]>(player + offset_of!(ChrIns, chunk_position))?;
         let block = read::<i32>(player + offset_of!(ChrIns, block_id))?;
-        [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6).then_some(([x, y, z], block))
+        let origin = read::<i32>(player + offset_of!(ChrIns, block_origin))?;
+        [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6).then_some(([x, y, z], block, origin))
+    }
+
+    fn player(&self) -> Option<usize> {
+        read::<usize>(self.world_chr_man).and_then(|wcm| read::<usize>(wcm + PLAYER))
+    }
+
+    /// Where a point `height` metres above the player's feet is on the screen (pixels of a `size` screen), through
+    /// the game camera (CSCamera's first perspective camera: rows right, up, forward, position; vertical fov in
+    /// radians), or None when it can't be read or is behind the camera.
+    pub fn player_on_screen(&self, size: [f32; 2], height: f32) -> Option<[f32; 2]> {
+        use eldenring::cs::{CSCam, CSCamera, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
+        use std::mem::offset_of;
+        let player = self.player()?;
+        let modules = read::<usize>(player + offset_of!(ChrIns, modules))?;
+        let physics = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics))?;
+        let [px, py, pz, _] = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position))?;
+        let camera = from_singleton::static_of::<CSCamera>()?;
+        let camera = read::<usize>(camera.as_ptr() as usize)?;
+        let cam = read::<usize>(camera + offset_of!(CSCamera, pers_cam_1))?;
+        let m = read::<[[f32; 4]; 4]>(cam + offset_of!(CSCam, matrix))?;
+        let fov = read::<f32>(cam + offset_of!(CSCam, fov))?;
+        let d = [px - m[3][0], py + height - m[3][1], pz - m[3][2]];
+        let dot = |r: [f32; 4]| d[0] * r[0] + d[1] * r[1] + d[2] * r[2];
+        let (x, y, z) = (dot(m[0]), dot(m[1]), dot(m[2]));
+        if !(z > 0.1) || !(0.1..3.0).contains(&fov) {
+            return None;
+        }
+        let t = (fov / 2.0).tan();
+        let aspect = size[0] / size[1];
+        let sx = (1.0 + x / (z * t * aspect)) / 2.0 * size[0];
+        let sy = (1.0 - y / (z * t)) / 2.0 * size[1];
+        (sx.is_finite() && sy.is_finite()).then_some([sx, sy])
     }
 
     /// The player's character sheet for the spellbook, from PlayerGameData; None without a character.
@@ -191,32 +203,6 @@ impl Game {
     }
 }
 
-/// What the spellbook shows about the player, read from PlayerGameData.
-#[derive(Clone, Default)]
-pub struct Sheet {
-    pub name: String,
-    pub level: u32,
-    pub runes: u32,
-    #[allow(dead_code)]
-    pub rune_memory: u32,
-    /// Vigor, mind, endurance, strength, dexterity, intelligence, faith, arcane.
-    pub attributes: [u32; 8],
-    /// Immunity (poison), robustness (bleed), focus (sleep), vitality (death).
-    pub resistances: [u32; 4],
-    pub poise: f32,
-    pub max_equip_load: f32,
-    /// Flasks of Crimson Tears and of Cerulean Tears.
-    pub flasks: [u8; 2],
-    pub magic_slots: u8,
-    /// Param IDs by ChrAsm slot: weapons L1 R1 L2 R2 L3 R3, arrows/bolts 6-11, armour 12-15, talismans 17-20.
-    pub equipment: [i32; 22],
-    /// Memorised spells (magic param IDs, -1 = empty).
-    pub spells: [i32; 14],
-    /// (item ID with category bits, quantity) of the normal and key item inventories.
-    pub items: Vec<(u32, u32)>,
-    pub key_items: Vec<(u32, u32)>,
-}
-
 /// The candidates `Game::probe` found.
 #[derive(Debug)]
 pub struct Probe {
@@ -265,6 +251,21 @@ fn hud_values() -> Option<[i32; 5]> {
         read(values + offset_of!(FrontEndViewValues, stamina))?,
         read(values + offset_of!(FrontEndViewValues, stamina_max))?,
     ])
+}
+
+/// An event flag (CSEventFlagMan), or None when the flag manager isn't there.
+pub fn event_flag(flag: u32) -> Option<bool> {
+    let man = from_singleton::static_of::<eldenring::cs::CSEventFlagMan>()?;
+    let man = unsafe { (*man.as_ptr()).as_ref()? };
+    Some(man.virtual_memory_flag.get_flag(flag))
+}
+
+/// Sets or clears an event flag.
+pub fn set_event_flag(flag: u32, on: bool) {
+    let Some(man) = from_singleton::static_of::<eldenring::cs::CSEventFlagMan>() else { return };
+    if let Some(man) = unsafe { (*man.as_ptr()).as_mut() } {
+        man.virtual_memory_flag.set_flag(flag, on);
+    }
 }
 
 /// Whether Elden Ring is showing its own HP/FP bars right now. The front-end manager (CSFeMan, found by name through

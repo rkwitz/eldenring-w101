@@ -3,13 +3,17 @@
 //! - XInput: the View/Back button (ER's map button) opens the book instead of the map during normal play; while the
 //!   book is open the game sees an idle controller and the book reads the real one; `press_map` replays a View
 //!   press to the game so that its own map opens.
-//! - DirectInput: while the book is open the game's keyboard and mouse devices read as idle.
+//! - DirectInput: while the book is open the game's keyboard and mouse devices read as idle. The mouse's movement
+//!   and buttons are kept for the book's own cursor (Elden Ring keeps the system cursor locked), and
+//!   SetCursorPos / ClipCursor are hooked so that the game doesn't pull the cursor back while the book is open.
+//! - Turning the character in the book: while `set_camera_pass` is on, the right stick's X axis (and mouse movement
+//!   asked for with `turn_camera`) still reach the game, which turns its camera around the player.
 //!
 //! Keyboard keys for the book itself (B, Esc, arrows) come through imgui, which hudhook feeds from window messages.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicI16, AtomicU16, AtomicU64, AtomicUsize, Ordering};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicI16, AtomicI32, AtomicU16, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use hudhook::mh::{MH_ApplyQueued, MhHook};
@@ -27,6 +31,9 @@ pub const A: u16 = 0x1000;
 pub const B: u16 = 0x2000;
 pub const X: u16 = 0x4000;
 pub const Y: u16 = 0x8000;
+/// The triggers, pressed past half way (XInput reports them as axes; these bits are free in `wButtons`).
+pub const LT: u16 = 0x0400;
+pub const RT: u16 = 0x0800;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -65,13 +72,29 @@ static LEFT_Y: AtomicI16 = AtomicI16::new(0);
 static PAD_SEEN: AtomicU64 = AtomicU64::new(0);
 static PREVIOUS: [AtomicU16; 4] = [AtomicU16::new(0), AtomicU16::new(0), AtomicU16::new(0), AtomicU16::new(0)];
 
-static TRAMPOLINES: [AtomicUsize; 6] = [
+/// The game's camera input passes through while the book is open (turning the character).
+static CAMERA_PASS: AtomicBool = AtomicBool::new(false);
+/// Camera turn asked for by the book: right stick X for the controller, mouse X counts for the mouse.
+static TURN_STICK: AtomicI16 = AtomicI16::new(0);
+static TURN_MOUSE: AtomicI32 = AtomicI32::new(0);
+/// DirectInput mouse movement since the book last asked, the wheel, and the buttons held (bit 0 left, 1 right).
+static MOUSE_DX: AtomicI32 = AtomicI32::new(0);
+static MOUSE_DY: AtomicI32 = AtomicI32::new(0);
+static MOUSE_WHEEL: AtomicI32 = AtomicI32::new(0);
+static MOUSE_BUTTONS: AtomicU8 = AtomicU8::new(0);
+static MOUSE_SEEN: AtomicU64 = AtomicU64::new(0);
+/// DirectInput devices seen in GetDeviceData: (device, is a mouse).
+static DEVICES: Mutex<Vec<(usize, bool)>> = Mutex::new(Vec::new());
+
+static TRAMPOLINES: [AtomicUsize; 8] = [
     AtomicUsize::new(0), // XInputGetState
     AtomicUsize::new(0), // XInputGetStateEx (ordinal 100)
     AtomicUsize::new(0), // IDirectInputDevice8W::GetDeviceState
     AtomicUsize::new(0), // IDirectInputDevice8W::GetDeviceData
     AtomicUsize::new(0), // IDirectInputDevice8A::GetDeviceState
     AtomicUsize::new(0), // IDirectInputDevice8A::GetDeviceData
+    AtomicUsize::new(0), // SetCursorPos
+    AtomicUsize::new(0), // ClipCursor
 ];
 static START_TIME: OnceLock<Instant> = OnceLock::new();
 static INSTALLED: OnceLock<()> = OnceLock::new();
@@ -86,6 +109,35 @@ pub fn set_book_open(open: bool) {
 
 pub fn set_gameplay(gameplay: bool) {
     GAMEPLAY.store(gameplay, Ordering::SeqCst);
+}
+
+/// Lets the game's camera input through while the book is open (the character view).
+pub fn set_camera_pass(on: bool) {
+    CAMERA_PASS.store(on, Ordering::SeqCst);
+    if !on {
+        TURN_STICK.store(0, Ordering::SeqCst);
+        TURN_MOUSE.store(0, Ordering::SeqCst);
+    }
+}
+
+/// Turns the game camera while camera input passes: `stick` -1..1 on the right stick (held until changed), plus
+/// `mouse` counts of mouse movement once.
+pub fn turn_camera(stick: f32, mouse: i32) {
+    TURN_STICK.store((stick.clamp(-1.0, 1.0) * 32767.0) as i16, Ordering::SeqCst);
+    TURN_MOUSE.fetch_add(mouse, Ordering::SeqCst);
+}
+
+/// DirectInput mouse movement and wheel since the last call, the buttons held now (bit 0 left, bit 1 right), and
+/// whether the game reads a DirectInput mouse at all (recently).
+pub fn take_mouse() -> (i32, i32, i32, u8, bool) {
+    let seen = MOUSE_SEEN.load(Ordering::SeqCst);
+    (
+        MOUSE_DX.swap(0, Ordering::SeqCst),
+        MOUSE_DY.swap(0, Ordering::SeqCst),
+        MOUSE_WHEEL.swap(0, Ordering::SeqCst),
+        MOUSE_BUTTONS.load(Ordering::SeqCst),
+        seen != 0 && now_ms() - seen < 1000,
+    )
 }
 
 /// Controller buttons that went down since the last call.
@@ -164,6 +216,13 @@ pub fn install() -> Vec<String> {
                 }
                 Err(e) => report.push(format!("DirectInput {name}: {e}")),
             }
+        }
+        let user32 = LoadLibraryW(wide("user32.dll").as_ptr());
+        if !user32.is_null() {
+            let set = GetProcAddress(user32, c"SetCursorPos".as_ptr().cast());
+            let clip = GetProcAddress(user32, c"ClipCursor".as_ptr().cast());
+            report.push(hook(set.map(|f| f as usize), set_cursor_pos as *const () as usize, 6, "SetCursorPos"));
+            report.push(hook(clip.map(|f| f as usize), clip_cursor as *const () as usize, 7, "ClipCursor"));
         }
         if let Err(e) = MH_ApplyQueued().ok_context("MH_ApplyQueued") {
             report.push(format!("{e:?}"));
@@ -249,7 +308,13 @@ unsafe fn filter_pad(user: u32, result: u32, state: *mut XInputState) {
         return;
     }
     let pad = &mut (*state).pad;
-    let buttons = pad.buttons;
+    let mut buttons = pad.buttons & !(LT | RT);
+    if pad.left_trigger > 128 {
+        buttons |= LT;
+    }
+    if pad.right_trigger > 128 {
+        buttons |= RT;
+    }
     if let Some(previous) = PREVIOUS.get(user as usize) {
         let before = previous.swap(buttons, Ordering::SeqCst);
         PRESSED.fetch_or(buttons & !before, Ordering::SeqCst);
@@ -259,7 +324,12 @@ unsafe fn filter_pad(user: u32, result: u32, state: *mut XInputState) {
     RIGHT_Y.store(pad.right_y, Ordering::SeqCst);
     PAD_SEEN.store(now_ms(), Ordering::SeqCst);
     if BOOK_OPEN.load(Ordering::SeqCst) {
+        let right_x = pad.right_x;
         *pad = Gamepad::default();
+        if CAMERA_PASS.load(Ordering::SeqCst) {
+            let turn = TURN_STICK.load(Ordering::SeqCst);
+            pad.right_x = if turn != 0 { turn } else { right_x };
+        }
         return;
     }
     if GAMEPLAY.load(Ordering::SeqCst) {
@@ -270,20 +340,105 @@ unsafe fn filter_pad(user: u32, result: u32, state: *mut XInputState) {
     }
 }
 
+/// DIMOUSESTATE / DIMOUSESTATE2: lX, lY, lZ, then 4 / 8 button bytes (0x80 = down).
 unsafe fn device_state(slot: usize, this: *mut c_void, size: u32, data: *mut c_void) -> i32 {
     let result = trampoline::<GetDeviceState>(slot)(this, size, data);
-    if BOOK_OPEN.load(Ordering::SeqCst) && !data.is_null() {
+    if data.is_null() || result < 0 {
+        return result;
+    }
+    let mouse = size == 16 || size == 20;
+    if mouse {
+        let state = data.cast::<i32>();
+        MOUSE_DX.fetch_add(*state, Ordering::SeqCst);
+        MOUSE_DY.fetch_add(*state.add(1), Ordering::SeqCst);
+        MOUSE_WHEEL.fetch_add(*state.add(2), Ordering::SeqCst);
+        let buttons = data.cast::<u8>().add(12);
+        MOUSE_BUTTONS.store(((*buttons & 0x80 != 0) as u8) | (((*buttons.add(1) & 0x80 != 0) as u8) << 1), Ordering::SeqCst);
+        MOUSE_SEEN.store(now_ms(), Ordering::SeqCst);
+    }
+    if BOOK_OPEN.load(Ordering::SeqCst) {
         std::ptr::write_bytes(data.cast::<u8>(), 0, size as usize);
+        if mouse && CAMERA_PASS.load(Ordering::SeqCst) {
+            *data.cast::<i32>() = TURN_MOUSE.swap(0, Ordering::SeqCst);
+        }
     }
     result
 }
 
+/// Whether a DirectInput device is a mouse (GetCapabilities' device type), remembered per device.
+unsafe fn is_mouse(this: *mut c_void) -> bool {
+    let Ok(mut devices) = DEVICES.lock() else { return false };
+    if let Some((_, mouse)) = devices.iter().find(|(d, _)| *d == this as usize) {
+        return *mouse;
+    }
+    type GetCapabilities = unsafe extern "system" fn(*mut c_void, *mut u32) -> i32;
+    let vtable = *(this as *const *const usize);
+    let get: GetCapabilities = std::mem::transmute(*vtable.add(3));
+    let mut caps = [0u32; 11];
+    caps[0] = 44; // sizeof(DIDEVCAPS)
+    let mouse = get(this, caps.as_mut_ptr()) >= 0 && caps[2] & 0xFF == 0x12; // DI8DEVTYPE_MOUSE
+    if devices.len() < 64 {
+        devices.push((this as usize, mouse));
+    }
+    mouse
+}
+
+/// Buffered data: DIDEVICEOBJECTDATA entries of `size` bytes (offset, data, time, sequence, app data); for a mouse
+/// offset 0/4/8 = X/Y/wheel movement, 12/13 = left/right button (0x80 = down).
 unsafe fn device_data(slot: usize, this: *mut c_void, size: u32, data: *mut c_void, count: *mut u32, flags: u32) -> i32 {
+    let capacity = if count.is_null() { 0 } else { *count };
     let result = trampoline::<GetDeviceData>(slot)(this, size, data, count, flags);
-    if BOOK_OPEN.load(Ordering::SeqCst) && !count.is_null() {
+    if result < 0 || count.is_null() {
+        return result;
+    }
+    if !data.is_null() && size >= 16 && *count > 0 && is_mouse(this) {
+        MOUSE_SEEN.store(now_ms(), Ordering::SeqCst);
+        for i in 0..*count as usize {
+            let entry = data.cast::<u8>().add(i * size as usize).cast::<u32>();
+            let (offset, value) = (*entry, *entry.add(1));
+            match offset {
+                0 => { MOUSE_DX.fetch_add(value as i32, Ordering::SeqCst); }
+                4 => { MOUSE_DY.fetch_add(value as i32, Ordering::SeqCst); }
+                8 => { MOUSE_WHEEL.fetch_add(value as i32, Ordering::SeqCst); }
+                12 | 13 => {
+                    let bit = 1u8 << (offset - 12);
+                    if value & 0x80 != 0 {
+                        MOUSE_BUTTONS.fetch_or(bit, Ordering::SeqCst);
+                    } else {
+                        MOUSE_BUTTONS.fetch_and(!bit, Ordering::SeqCst);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if BOOK_OPEN.load(Ordering::SeqCst) {
         *count = 0;
+        // Turning the camera: one X movement entry, if the game reads its mouse buffered.
+        if CAMERA_PASS.load(Ordering::SeqCst) && !data.is_null() && size >= 16 && capacity > 0 && flags == 0
+            && is_mouse(this)
+        {
+            let turn = TURN_MOUSE.swap(0, Ordering::SeqCst);
+            if turn != 0 {
+                std::ptr::write_bytes(data.cast::<u8>(), 0, size as usize);
+                *data.cast::<i32>().add(1) = turn;
+                *count = 1;
+            }
+        }
     }
     result
+}
+
+unsafe extern "system" fn set_cursor_pos(x: i32, y: i32) -> i32 {
+    if BOOK_OPEN.load(Ordering::SeqCst) {
+        return 1;
+    }
+    trampoline::<unsafe extern "system" fn(i32, i32) -> i32>(6)(x, y)
+}
+
+unsafe extern "system" fn clip_cursor(rect: *const c_void) -> i32 {
+    let rect = if BOOK_OPEN.load(Ordering::SeqCst) { std::ptr::null() } else { rect };
+    trampoline::<unsafe extern "system" fn(*const c_void) -> i32>(7)(rect)
 }
 
 unsafe extern "system" fn di_state_w(this: *mut c_void, size: u32, data: *mut c_void) -> i32 {

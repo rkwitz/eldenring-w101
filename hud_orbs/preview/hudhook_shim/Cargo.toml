@@ -1,0 +1,9 @@
+[package]
+name = "hudhook"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Stand-in for the parts of hudhook the spellbook uses, for the Linux preview.
+[dependencies]
+imgui = "0.12.0"

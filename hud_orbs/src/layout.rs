@@ -4,6 +4,7 @@
 //! A page is drawn as Wizard101 would draw it with its default visibility; the spellbook changes what it shows
 //! through a `View` (visibility, text and progress overrides, plus extra text boxes) instead of editing the layout.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -263,6 +264,16 @@ pub struct View {
     pub extra: Vec<([f32; 4], String, TextStyle)>,
     /// Images drawn after the nodes: (rect, image, uv).
     pub images: Vec<([f32; 4], String, [f32; 4])>,
+    /// Windows drawn without their background image (their children still draw).
+    pub no_back: HashSet<usize>,
+    /// Nodes drawn whole over the canvas's hole (the frame around it).
+    pub over_hole: HashSet<usize>,
+    /// Hover texts: (rect, lines), the first line the title.
+    pub tips: Vec<([f32; 4], Vec<String>)>,
+    /// The page's row of category tabs along the top (for the LB / RB hints).
+    pub tab_row: Option<[f32; 4]>,
+    /// A cut-out in the book (page pixels) where the game shows through.
+    pub hole: Option<[f32; 4]>,
 }
 
 impl View {
@@ -280,6 +291,16 @@ impl View {
 
     pub fn add(&mut self, rect: [f32; 4], text: impl Into<String>, style: TextStyle) {
         self.extra.push((rect, text.into(), style));
+    }
+
+    pub fn image(&mut self, rect: [f32; 4], image: impl Into<String>) {
+        self.images.push((rect, image.into(), [0.0, 0.0, 1.0, 1.0]));
+    }
+
+    pub fn tip(&mut self, rect: [f32; 4], lines: Vec<String>) {
+        if !lines.is_empty() {
+            self.tips.push((rect, lines));
+        }
     }
 }
 
@@ -311,7 +332,11 @@ impl Textures {
 
     pub fn load_wanted(&mut self, folder: &Path, render: &mut dyn RenderContext) {
         for name in std::mem::take(&mut self.wanted) {
-            let path = folder.join(&name);
+            // "@er/..." is Elden Ring's art next to the Wizard101 art (book/er), the rest is book/art.
+            let path = match name.strip_prefix("@er/") {
+                Some(rest) => folder.parent().unwrap_or(folder).join("er").join(rest),
+                None => folder.join(&name),
+            };
             let loaded = image::open(&path)
                 .map_err(|e| e.to_string())
                 .and_then(|image| {
@@ -346,6 +371,8 @@ pub struct Canvas<'a, 'b> {
     pub mouse_down: bool,
     /// Multiplies every alpha (fading the book in).
     pub alpha: f32,
+    /// A cut-out (page pixels) that images leave empty, so the game shows through.
+    pub hole: Cell<Option<[f32; 4]>>,
 }
 
 pub fn inside(p: [f32; 2], r: [f32; 4]) -> bool {
@@ -365,6 +392,30 @@ impl Canvas<'_, '_> {
         let Some((texture, _)) = self.textures.get(name) else { return };
         if r[2] <= r[0] || r[3] <= r[1] {
             return;
+        }
+        if let Some(h) = self.hole.get() {
+            if h[0] < r[2] && h[2] > r[0] && h[1] < r[3] && h[3] > r[1] {
+                // Draw the parts of the image around the hole: above, below, left, right.
+                let h = [h[0].max(r[0]), h[1].max(r[1]), h[2].min(r[2]), h[3].min(r[3])];
+                let part = |p: [f32; 4]| {
+                    if p[2] - p[0] < 0.01 || p[3] - p[1] < 0.01 {
+                        return;
+                    }
+                    let u = |x: f32| uv[0] + (uv[2] - uv[0]) * (x - r[0]) / (r[2] - r[0]);
+                    let v = |y: f32| uv[1] + (uv[3] - uv[1]) * (y - r[1]) / (r[3] - r[1]);
+                    self.draw
+                        .add_image(texture, self.at(p[0], p[1]), self.at(p[2], p[3]))
+                        .uv_min([u(p[0]), v(p[1])])
+                        .uv_max([u(p[2]), v(p[3])])
+                        .col(fade(tint, self.alpha))
+                        .build();
+                };
+                part([r[0], r[1], r[2], h[1]]);
+                part([r[0], h[3], r[2], r[3]]);
+                part([r[0], h[1], h[0], h[3]]);
+                part([h[2], h[1], r[2], h[3]]);
+                return;
+            }
         }
         self.draw
             .add_image(texture, self.at(r[0], r[1]), self.at(r[2], r[3]))
@@ -431,7 +482,6 @@ impl Canvas<'_, '_> {
         let width = r[2] - r[0];
         let height = r[3] - r[1];
         let scale = if style.scale > 0.0 { style.scale } else { (height * 0.8 / font.line_height).max(0.1) };
-        let line_h = font.line_height * scale;
         let max_w = width / scale;
         let mut lines = Vec::new();
         for paragraph in plain.split('\n') {
@@ -449,19 +499,33 @@ impl Canvas<'_, '_> {
                 }
                 lines.push(line);
             } else {
-                lines.push(font.fit(paragraph, max_w.max(1.0)));
+                lines.push(paragraph.to_string());
+            }
+        }
+        // One-line text: shrink to fit (down to 60%), then cut with "...".
+        let mut scale = scale;
+        if !style.wrap {
+            let widest = lines.iter().map(|l| font.width(l)).fold(0.0, f32::max) * scale;
+            if widest > width && widest > 0.0 {
+                scale *= (width / widest).max(0.6);
+            }
+            let max_w = width / scale;
+            for line in lines.iter_mut() {
+                *line = font.fit(line, max_w.max(1.0));
             }
         }
         while lines.len() > 1 && lines.last().is_some_and(|l| l.is_empty()) {
             lines.pop();
         }
+        let line_h = font.line_height * scale;
         let total = line_h * lines.len() as f32;
         let mut y = if style.middle && total < height { r[1] + (height - total) / 2.0 } else { r[1] };
         let colour = if hovered { style.hover.unwrap_or(style.colour) } else { style.colour };
         let colour = fade(colour, self.alpha);
         let dark = fade(ImColor32::from_rgba(0, 0, 0, 200), self.alpha * colour.a as f32 / 255.0);
         for line in lines {
-            if y + line_h * 0.5 > r[3] + line_h && style.wrap {
+            // Wrapped text stops at the bottom of its box rather than running over what is below.
+            if y + line_h > r[3] + line_h * 0.25 && style.wrap {
                 break;
             }
             let w = font.width(&line) * scale;
@@ -529,7 +593,11 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
             r = [cx - hw, cy - hh, cx + hw, cy + hh];
         }
         let tint = fade(n.tint, alpha);
-        if let Some((back, uv)) = &n.back {
+        let hole = canvas.hole.get();
+        if view.over_hole.contains(&i) {
+            canvas.hole.set(None);
+        }
+        if let Some((back, uv)) = n.back.as_ref().filter(|_| !view.no_back.contains(&i)) {
             canvas.image(back, r, *uv, fade(ImColor32::WHITE, alpha));
         }
         if n.border.iter().any(Option::is_some) {
@@ -587,6 +655,7 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
                 }
             }
         }
+        canvas.hole.set(hole);
     }
     Hits { button: hovered }
 }

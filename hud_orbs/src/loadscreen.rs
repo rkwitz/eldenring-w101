@@ -1,10 +1,9 @@
 //! A placeholder Wizard101 loading screen for the mod's doors.
 //!
-//! The doors in the Wizard101 areas are instant EMEVD warps (no Elden Ring loading screen), so going through one
-//! is a sudden jump of the player's position. When the player moves more than `JUMP` metres in one frame while
-//! Elden Ring's HUD has been up for a while (so not a fast travel or a respawn, which have Elden Ring's own loading
-//! screen), this shows Wizard City's loading screen (GUI/LoadScreen_W01_WC_01) with Wizard101's loading bar filling
-//! for `SHOW` seconds, then fades it out.
+//! The doors in the Wizard101 areas are instant EMEVD warps (no Elden Ring loading screen). Each door event turns on
+//! event flag `DOOR_FLAG` right before its warp; the overlay shows Wizard City's loading screen
+//! (GUI/LoadScreen_W01_WC_01) with Wizard101's loading bar filling for `SHOW` seconds, fades it out, and turns the
+//! flag back off.
 
 use std::time::Instant;
 
@@ -12,10 +11,8 @@ use hudhook::imgui::{ImColor32, Ui};
 
 use crate::layout::Textures;
 
-/// Metres in one frame that count as a warp (running is about 0.2 m per frame, Torrent about 0.5).
-const JUMP: f32 = 30.0;
-/// Seconds the HUD must have been up before a jump counts (Elden Ring's own loads hide it).
-const SETTLED: f32 = 1.0;
+/// Set by the door events (m60_42_36_00.emevd) just before a door warp; cleared here.
+pub const DOOR_FLAG: u32 = 1042366900;
 const SHOW: f32 = 1.0;
 const FADE: f32 = 0.35;
 
@@ -25,35 +22,16 @@ pub const FILL: &str = "GUI/Bar/Bar_Exp01.png";
 
 #[derive(Default)]
 pub struct LoadScreen {
-    last: Option<([f32; 3], i32)>,
-    hud_since: Option<Instant>,
     shown_at: Option<Instant>,
 }
 
 impl LoadScreen {
-    /// Follows the player's position (`hud`: Elden Ring's HUD is up and not faded).
-    pub fn update(&mut self, position: Option<([f32; 3], i32)>, hud: bool, enabled: bool) {
-        if !hud {
-            self.hud_since = None;
-        } else if self.hud_since.is_none() {
-            self.hud_since = Some(Instant::now());
-        }
-        if let (Some((from, _)), Some((at, _))) = (self.last, position) {
-            let d = ((at[0] - from[0]).powi(2) + (at[1] - from[1]).powi(2) + (at[2] - from[2]).powi(2)).sqrt();
-            let settled = self.hud_since.is_some_and(|t| t.elapsed().as_secs_f32() > SETTLED);
-            if d > JUMP && settled && enabled {
-                tracing::info!("door warp: moved {d:.0} m in one frame, showing the loading screen");
-                self.shown_at = Some(Instant::now());
-            }
-        }
-        if position.is_some() {
-            self.last = position;
-        }
+    /// Shows the loading screen from now.
+    pub fn show(&mut self) {
+        tracing::info!("door warp: showing the loading screen");
+        self.shown_at = Some(Instant::now());
     }
 
-    pub fn showing(&self) -> bool {
-        self.shown_at.is_some_and(|t| t.elapsed().as_secs_f32() < SHOW + FADE)
-    }
 
     pub fn draw(&self, ui: &Ui, textures: &Textures) {
         let Some(at) = self.shown_at else { return };
