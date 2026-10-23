@@ -9,15 +9,20 @@
 //! The numbers use Wizard101's HUD font, the WizardFancy bitmap font (`w101_orbs/WizardFancy.xml` and its atlas PNGs,
 //! also made by tools/w101_hud_art.py); without those files they fall back to imgui's default font.
 
+mod book;
+mod font;
 mod game;
+mod input;
+mod names;
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use hudhook::hooks::dx12::ImguiDx12Hooks;
 use hudhook::imgui::{self, DrawListMut, FontConfig, FontSource, ImColor32, TextureId};
-use hudhook::{ImguiRenderLoop, RenderContext};
+use hudhook::{ImguiRenderLoop, MessageFilter, RenderContext};
+
+use font::BitmapFont;
 
 const FRAMES_PER_SECOND: f32 = 12.0;
 /// Bottom edge of the lowest (energy) globe on Wizard101's 768-pixel-tall screen.
@@ -84,23 +89,6 @@ struct Art {
     spellbook: TextureId,
 }
 
-/// A Glyphis bitmap font (Wizard101's Fonts/*.xml): glyph cells in atlas pages, with Windows ABC spacing.
-struct BitmapFont {
-    pages: Vec<(TextureId, [f32; 2])>,
-    glyphs: HashMap<u32, Glyph>,
-    kerning: HashMap<(u32, u32), f32>,
-    line_height: f32,
-}
-
-struct Glyph {
-    page: usize,
-    /// Left, top, right (exclusive) and bottom (inclusive) of the cell in its page, with a 1-pixel margin each side.
-    cell: [f32; 4],
-    a: f32,
-    b: f32,
-    c: f32,
-}
-
 struct Settings {
     left: f32,
     bottom: f32,
@@ -114,6 +102,7 @@ struct Orbs {
     settings: Settings,
     art: Option<Art>,
     font: Option<BitmapFont>,
+    book: book::Book,
     game: Option<Option<game::Game>>,
     shown: [f32; 4],
     start: Instant,
@@ -170,6 +159,7 @@ impl Orbs {
             folder,
             art: None,
             font: None,
+            book: book::Book::new(),
             game: None,
             shown: [1.0, 1.0, 0.0, 1.0],
             start: Instant::now(),
@@ -202,82 +192,6 @@ impl Orbs {
         })
     }
 
-    fn load_font(&self, render: &mut dyn RenderContext) -> Result<BitmapFont, String> {
-        let folder = self.folder.join("w101_orbs");
-        let path = folder.join("WizardFancy.xml");
-        let xml = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut font = BitmapFont { pages: Vec::new(), glyphs: HashMap::new(), kerning: HashMap::new(), line_height: 0.0 };
-        for tag in xml.split('<') {
-            let number = |key: &str| attribute(tag, key).and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
-            if tag.starts_with("Page ") {
-                let name = attribute(tag, "FileName").ok_or("WizardFancy.xml: page without FileName")?;
-                let png = folder.join(Path::new(name).with_extension("png"));
-                let image = image::open(&png).map_err(|e| format!("{}: {e}", png.display()))?.into_rgba8();
-                let texture = render.load_texture(&image, image.width(), image.height())
-                    .map_err(|e| format!("{name}: {e:?}"))?;
-                font.pages.push((texture, [image.width() as f32, image.height() as f32]));
-            } else if tag.starts_with("Glyph ") {
-                let cell = [number("Left"), number("Top"), number("Right"), number("Bottom") + 1].map(|v| v as f32);
-                font.line_height = font.line_height.max(cell[3] - cell[1]);
-                font.glyphs.insert(number("ID") as u32, Glyph {
-                    page: number("Page") as usize,
-                    cell,
-                    a: number("A") as f32,
-                    b: number("B") as f32,
-                    c: number("C") as f32,
-                });
-            } else if tag.starts_with("KerningPair ") {
-                font.kerning.insert((number("First") as u32, number("Second") as u32), number("Amount") as f32);
-            }
-        }
-        if font.glyphs.values().any(|g| g.page >= font.pages.len()) || !('0'..='9').all(|d| font.glyphs.contains_key(&(d as u32))) {
-            return Err("WizardFancy.xml: digits or pages missing".into());
-        }
-        Ok(font)
-    }
-}
-
-/// The value of `key="..."` in an XML tag.
-fn attribute<'a>(tag: &'a str, key: &str) -> Option<&'a str> {
-    let start = tag.find(&format!(" {key}=\""))? + key.len() + 3;
-    tag[start..].split('"').next()
-}
-
-impl BitmapFont {
-    /// Pen advance of each character (ABC width plus kerning with the next one), in font pixels.
-    fn advances(&self, text: &str) -> Vec<(u32, f32)> {
-        let chars: Vec<u32> = text.chars().map(|c| c as u32).filter(|c| self.glyphs.contains_key(c)).collect();
-        chars.iter().enumerate().map(|(i, c)| {
-            let g = &self.glyphs[c];
-            let kern = chars.get(i + 1).and_then(|next| self.kerning.get(&(*c, *next))).copied().unwrap_or(0.0);
-            (*c, g.a + g.b + g.c + kern)
-        }).collect()
-    }
-
-    /// `text` centred on `centre`, `scale` screen pixels per font pixel.
-    /// Width of `text` in font pixels.
-    fn width(&self, text: &str) -> f32 {
-        self.advances(text).iter().map(|(_, a)| a).sum()
-    }
-
-    fn draw(&self, draw: &DrawListMut, text: &str, centre: [f32; 2], scale: f32, colour: ImColor32) {
-        let advances = self.advances(text);
-        let width = self.width(text);
-        let mut pen = centre[0] - width * scale / 2.0;
-        let top = centre[1] - self.line_height * scale / 2.0;
-        for (c, advance) in advances {
-            let g = &self.glyphs[&c];
-            let (texture, [w, h]) = self.pages[g.page];
-            let [left, cell_top, right, bottom] = g.cell;
-            let x = pen + (g.a - 1.0) * scale;
-            draw.add_image(texture, [x, top], [x + (right - left) * scale, top + (bottom - cell_top) * scale])
-                .uv_min([left / w, cell_top / h])
-                .uv_max([right / w, bottom / h])
-                .col(colour)
-                .build();
-            pen += advance * scale;
-        }
-    }
 }
 
 impl ImguiRenderLoop for Orbs {
@@ -292,21 +206,58 @@ impl ImguiRenderLoop for Orbs {
             Ok(art) => self.art = Some(art),
             Err(e) => self.error = Some(e),
         }
-        match self.load_font(render) {
+        match BitmapFont::load(&self.folder.join("w101_orbs"), "WizardFancy", render) {
             Ok(font) => self.font = Some(font),
             Err(e) => tracing::warn!("WizardFancy font not loaded, using imgui's default font: {e}"),
+        }
+        self.book.load(&self.folder.join("w101_orbs"), render);
+        for line in input::install() {
+            tracing::info!("input hook: {line}");
+        }
+    }
+
+    fn before_render<'a>(&'a mut self, ctx: &mut imgui::Context, _render: &'a mut dyn RenderContext) {
+        // Elden Ring hides and confines the cursor; the open book needs it.
+        ctx.io_mut().mouse_draw_cursor = self.book.open;
+        if self.book.open {
+            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::ClipCursor(std::ptr::null()) };
         }
     }
 
     fn render(&mut self, ui: &mut imgui::Ui) {
         let begin = Instant::now();
-        self.draw(ui);
+        let stats = self.draw(ui);
+        let game = self.game.as_ref().and_then(|g| g.as_ref());
+        let hud = game::hud_shown();
+        let folder = self.folder.join("w101_orbs");
+        let s = &self.settings;
+        let cx = book::Context {
+            game,
+            stats,
+            gameplay: game.is_some() && hud && game::faded() <= 0.3 && stats.is_some(),
+            hud,
+            fancy: self.font.as_ref(),
+            folder: &folder,
+            settings: vec![
+                ("left".into(), s.left.to_string()),
+                ("bottom".into(), s.bottom.to_string()),
+                ("scale".into(), s.scale.to_string()),
+                ("level".into(), if s.level { "1" } else { "0" }.into()),
+                ("debug".into(), if s.debug { "1" } else { "0" }.into()),
+            ],
+        };
+        self.book.frame(ui, &cx);
         self.perf.frame(begin.elapsed().as_secs_f32());
+    }
+
+    fn message_filter(&self, _io: &imgui::Io) -> MessageFilter {
+        if self.book.blocking() { MessageFilter::InputAll } else { MessageFilter::empty() }
     }
 }
 
 impl Orbs {
-    fn draw(&mut self, ui: &mut imgui::Ui) {
+    /// Draws the HUD; returns the player's stats when there is a character on screen.
+    fn draw(&mut self, ui: &mut imgui::Ui) -> Option<game::Stats> {
         // The pattern scan reads the whole executable, so it runs once.
         let game = self.game.get_or_insert_with(game::Game::find);
         if game.is_none() {
@@ -316,16 +267,16 @@ impl Orbs {
         if let Some(error) = &self.error {
             draw.add_text([20.0, 20.0], ImColor32::from_rgb(255, 80, 80), format!("w101_orbs: {error}"));
         }
-        let (Some(art), Some(Some(game))) = (&self.art, &self.game) else { return };
+        let (Some(art), Some(Some(game))) = (&self.art, &self.game) else { return None };
         if !game::hud_shown() || game::faded() > 0.3 {
-            return;
+            return None;
         }
         let probe = game.probe();
         if self.settings.debug && self.last_probe_log.elapsed().as_secs_f32() >= 1.0 {
             self.last_probe_log = Instant::now();
             tracing::info!("probe {probe:x?}");
         }
-        let Some(stats) = probe.stats() else { return };
+        let Some(stats) = probe.stats() else { return None };
 
         let height = ui.io().display_size[1];
         let s = self.settings.scale * height / 768.0;
@@ -382,6 +333,7 @@ impl Orbs {
         if self.settings.debug {
             draw.add_text([20.0, 50.0], ImColor32::WHITE, format!("{stats:?}"));
         }
+        Some(stats)
     }
 }
 

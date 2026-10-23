@@ -64,6 +64,85 @@ impl Game {
         })
     }
 
+    /// The player's character sheet for the spellbook, from PlayerGameData; None without a character.
+    pub fn sheet(&self) -> Option<Sheet> {
+        use eldenring::cs::{EquipInventoryDataListEntry, EquipMagicData, PlayerGameData};
+        use std::mem::{offset_of, size_of};
+        let pgd = read::<usize>(self.game_data_man).and_then(|gdm| read::<usize>(gdm + PLAYER_GAME_DATA))?;
+        let u32_at = |offset: usize| read::<u32>(pgd + offset).unwrap_or(0);
+        // character_name ([u16; 17]) is private in the crate; gender follows it directly.
+        let name_at = pgd + offset_of!(PlayerGameData, gender) - 34;
+        let name: Vec<u16> = (0..17).map_while(|i| read::<u16>(name_at + 2 * i).filter(|c| *c != 0)).collect();
+        let level = u32_at(offset_of!(PlayerGameData, level));
+        if !(1..=713).contains(&level) {
+            return None;
+        }
+        let equipment = read::<[i32; 22]>(pgd + offset_of!(PlayerGameData, equipment.chr_asm.equipment_param_ids))
+            .unwrap_or([-1; 22]);
+        let spells = read::<usize>(pgd + offset_of!(PlayerGameData, equipment.equip_magic_data))
+            .and_then(|magic| read::<[[i32; 2]; 14]>(magic + offset_of!(EquipMagicData, entries)))
+            .map(|entries| entries.map(|[id, _charges]| id))
+            .unwrap_or([-1; 14]);
+        let list = |head: usize, len: usize| -> Vec<(u32, u32)> {
+            let (Some(head), Some(len)) = (read::<usize>(pgd + head), read::<u32>(pgd + len)) else { return vec![] };
+            let size = size_of::<EquipInventoryDataListEntry>();
+            let bytes = read_bytes(head, size * (len as usize).min(4096)).unwrap_or_default();
+            let id_at = offset_of!(EquipInventoryDataListEntry, item_id);
+            let quantity_at = offset_of!(EquipInventoryDataListEntry, quantity);
+            bytes
+                .chunks_exact(size)
+                .map(|e| {
+                    let field = |at: usize| u32::from_le_bytes(e[at..at + 4].try_into().unwrap());
+                    (field(id_at), field(quantity_at))
+                })
+                .filter(|(id, _)| *id != u32::MAX && *id != 0)
+                .collect()
+        };
+        let items = list(
+            offset_of!(PlayerGameData, equipment.equip_inventory_data.items_data.normal_items_head),
+            offset_of!(PlayerGameData, equipment.equip_inventory_data.items_data.normal_items_len),
+        );
+        let key_items = list(
+            offset_of!(PlayerGameData, equipment.equip_inventory_data.items_data.key_items_head),
+            offset_of!(PlayerGameData, equipment.equip_inventory_data.items_data.key_items_len),
+        );
+        Some(Sheet {
+            name: String::from_utf16_lossy(&name),
+            level,
+            runes: u32_at(offset_of!(PlayerGameData, rune_count)),
+            rune_memory: u32_at(offset_of!(PlayerGameData, rune_memory)),
+            attributes: [
+                offset_of!(PlayerGameData, vigor),
+                offset_of!(PlayerGameData, mind),
+                offset_of!(PlayerGameData, endurance),
+                offset_of!(PlayerGameData, strength),
+                offset_of!(PlayerGameData, dexterity),
+                offset_of!(PlayerGameData, intelligence),
+                offset_of!(PlayerGameData, faith),
+                offset_of!(PlayerGameData, arcane),
+            ]
+            .map(u32_at),
+            resistances: [
+                offset_of!(PlayerGameData, poison_resist),
+                offset_of!(PlayerGameData, bleed_resist),
+                offset_of!(PlayerGameData, sleep_resist),
+                offset_of!(PlayerGameData, death_resist),
+            ]
+            .map(u32_at),
+            poise: read::<f32>(pgd + offset_of!(PlayerGameData, poise)).unwrap_or(0.0),
+            max_equip_load: read::<f32>(pgd + offset_of!(PlayerGameData, max_equip_load)).unwrap_or(0.0),
+            flasks: [
+                read::<u8>(pgd + offset_of!(PlayerGameData, max_hp_flask)).unwrap_or(0),
+                read::<u8>(pgd + offset_of!(PlayerGameData, max_fp_flask)).unwrap_or(0),
+            ],
+            magic_slots: read::<u8>(pgd + offset_of!(PlayerGameData, unlocked_magic_slots)).unwrap_or(0),
+            equipment,
+            spells,
+            items,
+            key_items,
+        })
+    }
+
     /// Every candidate value, for `stats` and for the debug log.
     pub fn probe(&self) -> Probe {
         let player = read::<usize>(self.world_chr_man).and_then(|wcm| read::<usize>(wcm + PLAYER));
@@ -99,6 +178,32 @@ impl Game {
         });
         Probe { player, stat, live, saved, hud: hud_values(), level }
     }
+}
+
+/// What the spellbook shows about the player, read from PlayerGameData.
+#[derive(Clone, Default)]
+pub struct Sheet {
+    pub name: String,
+    pub level: u32,
+    pub runes: u32,
+    #[allow(dead_code)]
+    pub rune_memory: u32,
+    /// Vigor, mind, endurance, strength, dexterity, intelligence, faith, arcane.
+    pub attributes: [u32; 8],
+    /// Immunity (poison), robustness (bleed), focus (sleep), vitality (death).
+    pub resistances: [u32; 4],
+    pub poise: f32,
+    pub max_equip_load: f32,
+    /// Flasks of Crimson Tears and of Cerulean Tears.
+    pub flasks: [u8; 2],
+    pub magic_slots: u8,
+    /// Param IDs by ChrAsm slot: weapons L1 R1 L2 R2 L3 R3, arrows/bolts 6-11, armour 12-15, talismans 17-20.
+    pub equipment: [i32; 22],
+    /// Memorised spells (magic param IDs, -1 = empty).
+    pub spells: [i32; 14],
+    /// (item ID with category bits, quantity) of the normal and key item inventories.
+    pub items: Vec<(u32, u32)>,
+    pub key_items: Vec<(u32, u32)>,
 }
 
 /// The candidates `Game::probe` found.
@@ -180,6 +285,19 @@ fn plausible(s: &Stats) -> bool {
     (1..100_000).contains(&s.max_hp) && (0..=s.max_hp).contains(&s.hp) && (0..100_000).contains(&s.max_fp)
         && (0..=s.max_fp.max(0)).contains(&s.fp) && (0..100_000).contains(&s.max_sp)
         && (0..=s.max_sp.max(0)).contains(&s.sp)
+}
+
+/// `len` bytes at `address`, or None if any of them can't be read.
+fn read_bytes(address: usize, len: usize) -> Option<Vec<u8>> {
+    if address < 0x10000 {
+        return None;
+    }
+    let mut buffer = vec![0u8; len];
+    let mut got = 0;
+    let ok = unsafe {
+        ReadProcessMemory(GetCurrentProcess(), address as _, buffer.as_mut_ptr().cast(), len, &mut got)
+    };
+    (ok != 0 && got == len).then_some(buffer)
 }
 
 /// Reads a value without crashing on a stale pointer: ReadProcessMemory on our own process fails cleanly when the

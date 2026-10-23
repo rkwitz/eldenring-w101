@@ -1,8 +1,9 @@
-"""Copy Wizard101's HUD art (health, mana and energy globes, experience bar, spellbook button) and its HUD number
-font out of Root.wad and _Shared-WorldData.wad for the hud_orbs add-on.
+"""Copy Wizard101's HUD art (health, mana and energy globes, experience bar, spellbook button and book) and its
+fonts out of Root.wad and _Shared-WorldData.wad for the hud_orbs add-on.
 
-The globe numbers use the Glyphis bitmap font WizardFancy (HUDWindow.gui textHealth/textMana): its glyph table
-WizardFancy.xml is copied as is and its A8 DDS atlas pages become white PNGs with the glyphs in the alpha channel.
+The globe numbers use the Glyphis bitmap font WizardFancy (HUDWindow.gui textHealth/textMana), the spellbook's text
+WizardNormal: each glyph table (.xml) is copied as is and its A8 DDS atlas pages become white PNGs with the glyphs in
+the alpha channel.
 
 Usage: python w101_hud_art.py path\\to\\Wizard101\\Data\\GameData output_dir
 
@@ -24,8 +25,22 @@ ART = [("Root.wad", f"GUI/HUD/{stem}.dds")
     ("Root.wad", "GUI/Bar/Bar_Exp01.dds"),               # XPBar progressXPSolid
     ("Root.wad", "GUI/Art/Art_Bar_Exp.dds"),             # XPBar foreground
     ("_Shared-WorldData.wad", "GUI/HUD/Button_Spellbook3.dds"),  # btnSpellbook
+    # The spellbook (SpellBookPrefsWindow.gui): the open book and its tab buttons down the right edge.
+    ("Root.wad", "GUI/Deck_Background.dds"),
+    ("_Shared-WorldData.wad", "GUI/Buttons/Button_Tab_Character.dds"),
+    ("Root.wad", "GUI/Button_Tab_Inventory.dds"),
+    ("_Shared-WorldData.wad", "GUI/Buttons/Button_Tab_Pet.dds"),
+    ("Root.wad", "GUI/Button_Tab_DeckBuild.dds"),
+    ("Root.wad", "GUI/Button_Tab_Quest.dds"),
+    ("Root.wad", "GUI/Button_Tab_WorldMap.dds"),
+    ("_Shared-WorldData.wad", "GUI/Buttons/Button_Tab_Flask.dds"),
+    ("Root.wad", "GUI/Buttons/Button_Tab_Help.dds"),
+    ("Root.wad", "GUI/Button_Tab_Options.dds"),
+    ("Root.wad", "GUI/Buttons/Button_Exit.dds"),
+    ("_Shared-WorldData.wad", "GUI/Button_PageNext.dds"),
+    ("_Shared-WorldData.wad", "GUI/Button_PagePrevious.dds"),
 ]
-FONT = "WizardFancy"
+FONTS = ["WizardFancy", "WizardNormal"]  # HUD numbers and titles; book text
 
 
 def wad_files(path, wanted):
@@ -62,22 +77,23 @@ def main():
             image = Image.open(BytesIO(found[name])).convert("RGBA")
             image.save(out / f"{stem}.png")
             print(f"{stem}.png {image.size[0]}x{image.size[1]}")
-    font_xml = f"Fonts/{FONT}.xml"
-    xml = wad_files(game_data / "Root.wad", {font_xml}).get(font_xml)
-    if xml is None:
-        sys.exit(f"{font_xml} is missing from Root.wad")
-    (out / f"{FONT}.xml").write_bytes(xml)
-    pages = {f"Fonts/{page}": page for page in re.findall(r'FileName="([^"]+)"', xml.decode())}
-    found = wad_files(game_data / "Root.wad", pages)
-    for name, page in pages.items():
-        if name not in found:
-            sys.exit(f"{name} is missing from Root.wad")
-        alpha = a8_dds(found[name])
-        image = Image.new("L", alpha.size, 255).convert("RGBA")
-        image.putalpha(alpha)
-        stem = Path(page).stem
-        image.save(out / f"{stem}.png")
-        print(f"{stem}.png {image.size[0]}x{image.size[1]}")
+    for font in FONTS:
+        font_xml = f"Fonts/{font}.xml"
+        xml = wad_files(game_data / "Root.wad", {font_xml}).get(font_xml)
+        if xml is None:
+            sys.exit(f"{font_xml} is missing from Root.wad")
+        (out / f"{font}.xml").write_bytes(xml)
+        pages = {f"Fonts/{page}": page for page in re.findall(r'FileName="([^"]+)"', xml.decode())}
+        found = wad_files(game_data / "Root.wad", pages)
+        for name, page in pages.items():
+            if name not in found:
+                sys.exit(f"{name} is missing from Root.wad")
+            alpha = a8_dds(found[name])
+            image = Image.new("L", alpha.size, 255).convert("RGBA")
+            image.putalpha(alpha)
+            stem = Path(page).stem
+            image.save(out / f"{stem}.png")
+            print(f"{stem}.png {image.size[0]}x{image.size[1]}")
 
 
 def a8_dds(data):
