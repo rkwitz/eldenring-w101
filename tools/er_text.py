@@ -7,6 +7,8 @@ Usage: python er_text.py item.msgbnd out.msgbnd
 python er_text.py --npc-name item.msgbnd.dcx out.msgbnd.dcx
   adds NpcName 904969000 "Rattlebones" (the boss bar name of emevd.py --rattlebones-boss). Do both item.msgbnd and
   item_dlc02.msgbnd (the game reads the latter when the DLC is installed).
+python er_text.py --npc-names item.msgbnd.dcx out.msgbnd.dcx
+  adds all four boss bar names (NPC_NAMES: Rattlebones, Lady Blackhope, Fear of Fire, Seraph; emevd.py --bosses).
 """
 import struct
 def bnd4(b):
@@ -75,6 +77,12 @@ def write_fmg(entries, template):
 
 PLACE_NAME_ID = 610900
 NPC_NAME_ID = 904969000  # "Rattlebones": the boss bar name of emevd.boss_bar (unused in vanilla NpcName)
+NPC_NAMES = {  # boss bar names of emevd.BOSSES: every bar shows the Wizard101 boss (ids unused in vanilla NpcName)
+    904969000: "Rattlebones",
+    904969001: "Lady Blackhope",
+    904969002: "Fear of Fire",
+    904969003: "Seraph",
+}
 
 
 def add_text(msgbnd, fmg, text_id, text):
@@ -95,9 +103,10 @@ def add_place_name(msgbnd, text_id=PLACE_NAME_ID, text="Unicorn Way"):
 def main(argv):
     """er_text.py in.msgbnd out.msgbnd                      PlaceName 610900 "Unicorn Way"
     er_text.py --npc-name in.msgbnd out.msgbnd           NpcName 904969000 "Rattlebones"
+    er_text.py --npc-names in.msgbnd out.msgbnd          NpcName NPC_NAMES (all four boss bars)
     Either file may be DFLT DCX (as the project's msg/engus/item.msgbnd.dcx and item_dlc02.msgbnd.dcx are); the output
     is then DFLT DCX with the same header."""
-    npc = argv[0] == "--npc-name"
+    npc = argv[0] in ("--npc-name", "--npc-names")
     src, dst = argv[1:3] if npc else argv[0:2]
     data = open(src, "rb").read()
     dcx = data[:4] == b"DCX\0"
@@ -107,7 +116,12 @@ def main(argv):
         raw = zlib.decompress(data[0x4C:])
     else:
         raw = data
-    out = add_text(raw, "NpcName", NPC_NAME_ID, "Rattlebones") if npc else add_place_name(raw)
+    if argv[0] == "--npc-names":
+        out = raw
+        for text_id, text in NPC_NAMES.items():
+            out = add_text(out, "NpcName", text_id, text)
+    else:
+        out = add_text(raw, "NpcName", NPC_NAME_ID, "Rattlebones") if npc else add_place_name(raw)
     if dcx:
         packed = zlib.compress(out, 9)
         head = bytearray(data[:0x4C])

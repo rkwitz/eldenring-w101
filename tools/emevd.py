@@ -15,6 +15,8 @@ python emevd.py --rattlebones-boss m60_42_36_00.emevd out.emevd
   Rattlebones held on his sigil until you walk in, and his boss health bar (see boss_bar; msb_add_boss.py).
 python emevd.py --interiors m60_42_36_00.emevd out.emevd
   door warps of Lady Blackhope's tower and Fear of Fire's house (see interior_doors; msb_add_interiors.py).
+python emevd.py --bosses m60_42_36_00.emevd out.emevd
+  all door warps (rideable up to the door, load-screen flag) and all four bosses (see all_bosses; msb_add_boss.py).
 """
 import struct
 class Emevd:
@@ -144,14 +146,19 @@ RATTLEBONES_DOORS = (  # (event id, trigger region, arrival region[, character t
 )
 
 
+LOAD_SCREEN_FLAG = 1042366900  # set right before every door warp; the HUD overlay shows its load screen and clears it
+
+
 def rattlebones_doors(d, doors=RATTLEBONES_DOORS):
-    """New events (one per door, started from the top of event 0) that wait for the player (10000) to walk into the
-    door's trigger region (3[2], as title_on_door_exit), move them to the arrival region (2004[41] with target type 1 =
-    region and dummy poly -1, as common event 950 places the player for the Melina cutscene in the same map, no
-    loading screen) and restart (1000[4] with 1), like Wizard101's door activators. A door with a 4th entry (a boss's
-    entity id) only works while that character is dead (4[0] dead AND in the area, condition group 1): the player
-    can't leave the boss room until the boss is beaten (he is back after a rest, and so is the lock). Existing events
-    with these ids are replaced, so running it again is harmless."""
+    """New events (one per door, started from the top of event 0) that wait for the player (10000) to be in the
+    door's trigger region (3[2], as title_on_door_exit) AND not riding Torrent (4[32] with 0: Ryan rides up to a door
+    and arrives on foot; msb_add_indoor.py's no-riding boxes round every door trigger dismount him as he rides in, and
+    the warp waits until he is off), then set LOAD_SCREEN_FLAG (2003[66]) for the HUD's load screen, move them to the
+    arrival region (2004[41] with target type 1 = region and dummy poly -1, as common event 950 places the player for
+    the Melina cutscene in the same map, no loading screen) and restart (1000[4] with 1), like Wizard101's door
+    activators. A door with a 4th entry (a boss's entity id) only works while that character is dead (4[0] dead in the
+    same condition group 1): the player can't leave the boss room until the boss is beaten (he is back after a rest,
+    and so is the lock). Existing events with these ids are replaced, so running it again is harmless."""
     e = Emevd(d)
     ids = {door[0] for door in doors}
     events = [ev for ev in events_of(e) if ev["id"] not in ids]
@@ -160,15 +167,15 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS):
                                       and struct.unpack_from("<I", i["args"], 4)[0] in ids)]
     for slot, (event_id, trigger, arrival, *boss) in enumerate(doors):
         ins0.insert(slot, {"bank": 2000, "id": 0, "args": struct.pack("<iIi", 0, event_id, 0), "layer": -1})
+        wait = [
+            _i(3, 2, "<bBxxIIi", 1, 1, 10000, trigger, 1),  # IF player in the door's area (group 1)
+            _i(4, 32, "<bxxxIBxxx", 1, 10000, 0),  # IF player not riding Torrent (group 1)
+        ]
         if boss:
-            wait = [
-                _i(3, 2, "<bBxxIIi", 1, 1, 10000, trigger, 1),  # IF player in the door's area (group 1)
-                _i(4, 0, "<bxxxIBBxxf", 1, boss[0], 1, 0, 1.0),  # IF the boss is dead (group 1)
-                _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
-            ]
-        else:
-            wait = [_i(3, 2, "<bBxxIIi", 0, 1, 10000, trigger, 1)]  # IF in area
+            wait.append(_i(4, 0, "<bxxxIBBxxf", 1, boss[0], 1, 0, 1.0))  # IF the boss is dead (group 1)
         body = wait + [
+            _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
+            _i(2003, 66, "<BxxxIBxxx", 0, LOAD_SCREEN_FLAG, 1),  # load screen flag on (the HUD clears it)
             _i(2004, 41, "<IIIi", 10000, 1, arrival, -1),  # warp to region
             _i(1000, 4, "<Bxxx", 1),  # End Unconditionally: restart
         ]
@@ -208,35 +215,59 @@ def interior_doors(d):
 BOSS_BAR_EVENT = 1042362815
 RATTLEBONES_ARENA = 1042362808  # msb_add_boss.py: sphere over the whole room
 RATTLEBONES_SIGIL = 1042362809  # msb_add_boss.py: point on the room's sigil, facing the door
-RATTLEBONES_NAME = 904969000  # NpcName "Rattlebones" (er_text.py --npc-name)
+RATTLEBONES_NAME = 904969000  # NpcName "Rattlebones" (er_text.py --npc-names)
+SERAPH = 1042360853
+# (bar event, boss entity, arena region, sigil region, NpcName id, animation on arrival or None, DispMask bits on):
+# msb_add_boss.BOSSES; names from er_text.NPC_NAMES. Rattlebones (Giant Skeleton Torso, Mohgwyn rows) gets the
+# Mohgwyn torsos' wake animation 20010 (m12_05 event 12052250 plays it on c4960 after standby 30010); Seraph (Malenia)
+# gets what m15 event 15002810 does when her fight starts: DispMask bits 0, 12 and 13 on and animation 3006.
+BOSSES = (
+    (BOSS_BAR_EVENT, RATTLEBONES, RATTLEBONES_ARENA, RATTLEBONES_SIGIL, RATTLEBONES_NAME, 20010, ()),
+    (1042362820, 1042360851, 1042362824, 1042362825, 904969001, None, ()),  # Lady Blackhope (Nox Swordstress)
+    (1042362821, 1042360852, 1042362826, 1042362827, 904969002, None, ()),  # Fear of Fire (Mad Pumpkin Head)
+    (1042362822, SERAPH, 1042362828, 1042362829, 904969003, 3006, (0, 12, 13)),  # Seraph (Malenia)
+)
+BOSS_SETUP_EVENT = 1042362814
+PHASE_ONE_EVENT = 1042362823
 
 
-def boss_bar(d, event_id=BOSS_BAR_EVENT, boss=RATTLEBONES, arena=RATTLEBONES_ARENA, sigil=RATTLEBONES_SIGIL,
-             name=RATTLEBONES_NAME):
-    """A new event `event_id` (restarts on rest, started from the top of event 0) for the boss in his room:
-      2004[10] SetCharacterGravity(boss, off): he spawns with the map while the player is still on the street, before
-          the room's asset collision is there for him (first test: he fell through the floor, the bar showed, no boss)
-      wait until the boss is alive AND the player (10000) is in the arena (condition group 1)
-      2004[41] short warp of the boss onto region `sigil` (as Margit's event moves him), 2004[10] gravity back on
-      2003[11] DisplayBossHealthBar(1, boss, slot 0, name), packed as vanilla (m10_00 event 10002810, Margit)
-      wait until the player has left the arena OR the boss is dead (condition group -1)
-      2003[11] DisplayBossHealthBar(0, ...) and restart (so walking back in puts him back on the sigil)
-    4[0] IfCharacterDeadAlive(group, entity, 0 alive / 1 dead, comparison 0 "=", 1.0) and 3[2] are packed as in
-    vanilla events. The boss is an ordinary enemy (no defeat flag), so it is back after a rest like any other and the
-    bar works again. Rerunning replaces the event."""
-    e = Emevd(d)
-    events = [ev for ev in events_of(e) if ev["id"] != event_id]
+def _start_once(events, event_id):
+    """Drop `event_id` from `events` and from event 0's starts, then start it from the top of event 0."""
+    events[:] = [ev for ev in events if ev["id"] != event_id]
     ins0 = next(ev for ev in events if ev["id"] == 0)["ins"]
     ins0[:] = [i for i in ins0 if not ((i["bank"], i["id"]) == (2000, 0)
                                       and struct.unpack_from("<I", i["args"], 4)[0] == event_id)]
     ins0.insert(0, _i(2000, 0, "<iIi", 0, event_id, 0))
+
+
+def boss_bar(d, event_id=BOSS_BAR_EVENT, boss=RATTLEBONES, arena=RATTLEBONES_ARENA, sigil=RATTLEBONES_SIGIL,
+             name=RATTLEBONES_NAME, animation=None, disp_masks=()):
+    """A new event `event_id` (restarts on rest, started from the top of event 0) for the boss in his room (held
+    disabled and without gravity by boss_setup until then):
+      wait until the boss is alive AND the player (10000) is in the arena (condition group 1)
+      2004[5] enable him, 2004[41] short warp onto region `sigil` (as Margit's event moves him), 2004[10] gravity on
+      2004[26] DispMask bits `disp_masks` on, 2003[18] ForceAnimation `animation` (packed as m15 15002810's 3006)
+      2003[11] DisplayBossHealthBar(1, boss, slot 0, name), packed as vanilla (m10_00 event 10002810, Margit)
+      wait until the player has left the arena OR the boss is dead (condition group -1)
+      2003[11] DisplayBossHealthBar(0, ...) and restart (walking back in puts a living boss back on the sigil)
+    4[0] IfCharacterDeadAlive(group, entity, 0 alive / 1 dead, comparison 0 "=", 1.0) and 3[2] are packed as in
+    vanilla events. The boss is an ordinary enemy (no defeat flag), so it is back after a rest like any other and the
+    bar works again. Rerunning replaces the event."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
     body = [
-        _i(2004, 10, "<IBxxx", boss, 0),  # gravity off
         _i(4, 0, "<bxxxIBBxxf", 1, boss, 0, 0, 1.0),  # IF boss alive (group 1)
         _i(3, 2, "<bBxxIIi", 1, 1, 10000, arena, 1),  # IF player inside the arena (group 1)
         _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
+        _i(2004, 5, "<IBxxx", boss, 1),  # enable him
         _i(2004, 41, "<IIIi", boss, 1, sigil, -1),  # warp him onto the sigil
         _i(2004, 10, "<IBxxx", boss, 1),  # gravity on
+    ]
+    body += [_i(2004, 26, "<IBBxx", boss, bit, 1) for bit in disp_masks]
+    if animation is not None:
+        body.append(_i(2003, 18, "<IiBBBbf", boss, animation, 0, 0, 0, 0, 1.0))
+    body += [
         _i(2003, 11, "<BxxxIhxxi", 1, boss, 0, name),  # show the boss bar
         _i(3, 2, "<bBxxIIi", -1, 0, 10000, arena, 1),  # IF player outside the arena (OR group -1)
         _i(4, 0, "<bxxxIBBxxf", -1, boss, 1, 0, 1.0),  # IF boss dead (OR group -1)
@@ -246,6 +277,47 @@ def boss_bar(d, event_id=BOSS_BAR_EVENT, boss=RATTLEBONES, arena=RATTLEBONES_ARE
     ]
     events.append({"id": event_id, "rest": 1, "pars": [], "ins": body})
     return build(e, events)
+
+
+def boss_setup(d, bosses=BOSSES, event_id=BOSS_SETUP_EVENT):
+    """A new event `event_id` (restarts on rest, no loop) that disables every boss (2004[5] 0) and turns its gravity
+    off (2004[10] 0) when the map loads: they wait unseen until boss_bar enables them on their sigil as the player
+    walks in (spawning with the map, before the room's asset collision is there, a boss can fall through the floor;
+    and the Seraph's alcove is within sight of the garden's centre). Rerunning replaces it."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
+    body = []
+    for b in bosses:
+        body += [_i(2004, 5, "<IBxxx", b[1], 0), _i(2004, 10, "<IBxxx", b[1], 0)]
+    events.append({"id": event_id, "rest": 1, "pars": [], "ins": body})
+    return build(e, events)
+
+
+def phase_one_only(d, boss=SERAPH, event_id=PHASE_ONE_EVENT):
+    """Seraph is Malenia's phase 1 only. Vanilla switches to phase 2 from m15 event 15002811: 15002810 makes her
+    immortal (2004[12]) at the start of the fight, and 15002811 waits for her HP <= 1 (4[14], packed as there) to run
+    the Scarlet Aeonia cutscene and switch her DispMasks and SpEffects. Here nothing makes her immortal, so she dies at
+    0 HP in phase 1; in case her row keeps her alive at 1 HP, this event (restarts on rest) waits for HP <= 1 and
+    kills her (2004[4] ForceCharacterDeath, runes 1). Rerunning replaces it."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
+    body = [
+        _i(4, 14, "<bxxxIbxxxibxxxf", 0, boss, 5, 1, 0, 1.0),  # IF HP <= 1
+        _i(2004, 4, "<IBxxx", boss, 1),  # force death, award runes
+    ]
+    events.append({"id": event_id, "rest": 1, "pars": [], "ins": body})
+    return build(e, events)
+
+
+def all_bosses(d):
+    """Every door warp (riding check, load-screen flag) and every boss of Unicorn Way: msb_add_boss.py's four."""
+    for doors in (RATTLEBONES_DOORS, GARDEN_DOORS, INTERIOR_DOORS):
+        d = rattlebones_doors(d, doors)
+    for event_id, boss, arena, sigil, name, animation, masks in BOSSES:
+        d = boss_bar(d, event_id, boss, arena, sigil, name, animation, masks)
+    return phase_one_only(boss_setup(d))
 
 
 GUIDANCE_GRACES = (1042361981, 1042361980)  # AEG099_090 grace markers of The First Step (76101) and Church of Elleh (76100)
@@ -346,6 +418,9 @@ if __name__ == "__main__":
         sys.exit()
     if sys.argv[1] == "--rattlebones-boss":  # emevd.py --rattlebones-boss in.emevd out.emevd (msb_add_boss.py)
         open(sys.argv[3], "wb").write(boss_bar(open(sys.argv[2], "rb").read()))
+        sys.exit()
+    if sys.argv[1] == "--bosses":  # emevd.py --bosses in.emevd out.emevd (msb_add_boss.py, msb_add_indoor.py)
+        open(sys.argv[3], "wb").write(all_bosses(open(sys.argv[2], "rb").read()))
         sys.exit()
     if sys.argv[1] == "--no-guidance":  # emevd.py --no-guidance m60_42_36_00.emevd out.emevd
         open(sys.argv[3], "wb").write(no_guidance_wisps(open(sys.argv[2], "rb").read()))
