@@ -280,8 +280,9 @@ def read(data):
 # after the rest of that block. Array contents are scanned breadth first after their owner.
 
 class _Writer:
-    def __init__(self, tag):
+    def __init__(self, tag, share_strings=False):
         self.tag = tag
+        self.share_strings = share_strings
         self.data = bytearray()
         self.items = [(0, 0, 0)]
         self.patches = {}
@@ -319,9 +320,13 @@ class _Writer:
                 strings = []
                 for i, v in enumerate(values):
                     self.put(element, start + i * element.get("size"), v, blocks, strings)
+                shared = {}
                 for field_type, at, text in strings:
+                    if self.share_strings and text in shared:
+                        self.patch(field_type, at, shared[text])
+                        continue
                     chars = (text + "\0").encode()
-                    item = self.new_item(None)
+                    item = shared[text] = self.new_item(None)
                     char = self.tag.by_name["char"]
                     pos = self.reserve(len(chars), 2)
                     self.data[pos:pos + len(chars)] = chars
@@ -375,9 +380,10 @@ def _section(name, body, flags=0x40):
     return (len(body) + 8 | flags << 24).to_bytes(4, "big") + name.encode() + body
 
 
-def write(tag, root):
-    """Bytes of a tagfile holding `root`, with `tag`'s TYPE section."""
-    w = _Writer(tag)
+def write(tag, root, share_strings=False):
+    """Bytes of a tagfile holding `root`, with `tag`'s TYPE section. `share_strings`: equal strings within one block
+    of values (e.g. a NamedVariant's name and className) share one item, as Havok writes navmeshes."""
+    w = _Writer(tag, share_strings)
     w.run(root)
     w.reserve(0, 16)
     item = b"".join(struct.pack("<III", *i) for i in w.items)
