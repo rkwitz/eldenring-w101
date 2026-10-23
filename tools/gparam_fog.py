@@ -13,7 +13,8 @@ flat_lighting() (used by blender_build_sky.py, not the command line) also makes 
 evenly, as Wizard101 does (unlit textures plus baked vertex colours): every directional light (the sun DiffColor0/
 SpecColor0 that draws the shadows, the fill light 1 and the local lights 1 and 2) gets intensity 0 (a colour's 4th
 value is its intensity), and the hemisphere ambient (Hemi Color Up and Down) becomes white at one intensity from
-above and below. Vanilla: sun 0.2 to 0.6 by day (2.5 in light set 100), hemi up 0.1 (1.0 in some), hemi down 0.
+above and below; optionally directional light 1 (no shadows) stays on as a white light straight down. Vanilla: sun
+0.2 to 0.6 by day (2.5 in light set 100), hemi up 0.1 (1.0 in some), hemi down 0.
 
 GPARAM (version 5, "filt"): header ints at 0x10 group count, 0x18 group offset table, 0x1C group headers, 0x20 param
 header offset tables, 0x24 param headers, 0x28 values, 0x2C value ids. A group header is (param count, offset of its
@@ -24,6 +25,7 @@ Usage: python gparam_fog.py out_dir file.gparam.dcx ...
   Reads KRAK (needs the pyooz module), DFLT or uncompressed files; writes DFLT .gparam.dcx files with the same names.
 """
 
+import math
 import struct
 import sys
 import zlib
@@ -86,12 +88,24 @@ HEMI = ("Directional Light Hemi Color Up", "Directional Light Hemi Color Down")
 COLOUR = 0x0E  # 4 floats: r, g, b, intensity
 
 
-def flat_lighting(data, ambient):
-    """(new GPARAM bytes, [names of changed params]): no directional light, white hemisphere ambient of intensity
-    `ambient` from every side (see the module docstring)."""
+OVERHEAD_LIGHT, OVERHEAD_ANGLE = "Directional Light DiffColor1", "Directional Light Angle1"
+ANGLE = 0x0C  # 2 floats (pitch, yaw in radians) in 16 bytes; vanilla light 1 mostly points straight down (-pi/2, 0)
+
+
+def flat_lighting(data, ambient, overhead=0.0):
+    """(new GPARAM bytes, [names of changed params]): white hemisphere ambient of intensity `ambient` from every
+    side and no directional light (see the module docstring), except, with `overhead` > 0, directional light 1 (the
+    fill light; only light 0, the sun, casts shadows) as white light of that intensity straight down."""
     out = bytearray(data)
     changed = []
     for _, name, kind, count, offset in params(data):
+        if name == OVERHEAD_ANGLE and overhead > 0:
+            if kind != ANGLE:
+                raise ValueError(f"unexpected type {kind:#x} for {name}")
+            for k in range(count):
+                struct.pack_into("<2f", out, offset + 16 * k, -math.pi / 2, 0.0)
+            changed.append(name)
+            continue
         if name not in DIRECTIONAL and name not in HEMI:
             continue
         if kind != COLOUR:
@@ -100,6 +114,8 @@ def flat_lighting(data, ambient):
             at = offset + 16 * k
             if name in HEMI:
                 struct.pack_into("<4f", out, at, 1.0, 1.0, 1.0, ambient)
+            elif name == OVERHEAD_LIGHT:
+                struct.pack_into("<4f", out, at, 1.0, 1.0, 1.0, overhead)
             else:
                 struct.pack_into("<f", out, at + 12, 0.0)
         changed.append(name)

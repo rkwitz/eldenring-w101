@@ -86,10 +86,11 @@ def _encoder(template):
     return encode, size
 
 
-def build_single_mesh(template, positions, uvs, faces, fixed_normal=None):
+def build_single_mesh(template, positions, uvs, faces, fixed_normal=None, vertex_normal=None):
     """(FLVER bytes, [material of each triangle]) for OBJ data from parse_obj. `template` is a single-mesh FLVER
     in the layout above; its header, sections, material and bone are kept, its vertices and indices replaced.
-    `fixed_normal` gives every vertex that normal instead of its face's (the sky dome is lit evenly that way)."""
+    `fixed_normal` gives every vertex that normal instead of its face's; `vertex_normal(point)` (FLVER space, unit
+    length) gives each vertex its own, so a curved surface shades smoothly instead of showing its triangles."""
     encode, vertex_size = _encoder(template)
     vertices, materials = bytearray(), []
     lo, hi = [math.inf] * 3, [-math.inf] * 3
@@ -118,7 +119,7 @@ def build_single_mesh(template, positions, uvs, faces, fixed_normal=None):
                 normal[0] * tangent[1] - normal[1] * tangent[0])
         handedness = sum(a * b for a, b in zip(side, along_u)) * (1 if det > 0 else -1)
         for point, uv in zip(points, tex):
-            vertices += encode(point, normal, tangent, uv, handedness > 0)
+            vertices += encode(point, vertex_normal(point) if vertex_normal else normal, tangent, uv, handedness > 0)
             lo = [min(lo[k], point[k]) for k in range(3)]
             hi = [max(hi[k], point[k]) for k in range(3)]
         materials.append(material)

@@ -29,6 +29,7 @@ binder, and Blender's numpy), then relaunch the game.
 """
 
 import importlib
+import math
 import re
 import sys
 from pathlib import Path
@@ -67,7 +68,8 @@ SKY_SATURATION = 1.3  # pushes the pastel colours away from grey before Elden Ri
 # AMBIENT from every side (raise it if everything is too dark, lower it if washed out; vanilla daylight sun is about
 # 0.5). False = Elden Ring's own lighting (fog stays off either way).
 FLAT_LIGHTING = True
-AMBIENT = 0.5
+AMBIENT = 0.8  # 0.5 looked very dark (2026-10-23)
+OVERHEAD = 0.3  # a soft, shadowless white light straight down (directional light 1), 0 = none
 GAME_GPARAMS = GAME.parent / "param" / "drawparam"
 PROJECT_GPARAMS = PROJECT.parent / "param" / "drawparam"
 
@@ -85,13 +87,18 @@ def remove_fog():
         data, dcx_type = decompress(path)
         new, changed = gparam_fog.remove_fog(data)
         if FLAT_LIGHTING:
-            new, lit = gparam_fog.flat_lighting(new, AMBIENT)
+            new, lit = gparam_fog.flat_lighting(new, AMBIENT, OVERHEAD)
             changed += lit
         if changed:
             (PROJECT_GPARAMS / path.name).write_bytes(compress(new, dcx_type))
             written += 1
-    lighting = f", no sun, ambient {AMBIENT}" if FLAT_LIGHTING else ""
+    lighting = f", no sun, ambient {AMBIENT}, overhead {OVERHEAD}" if FLAT_LIGHTING else ""
     print(f"Wrote {written} gparams (no fog{lighting}) to {PROJECT_GPARAMS} (delete that folder to undo)")
+
+
+def inward(point):
+    length = math.sqrt(sum(c * c for c in point)) or 1.0
+    return tuple(-c / length for c in point)
 
 
 def build_sky():
@@ -102,13 +109,15 @@ def build_sky():
     assert "#vc" in (SKY / "layer2.obj").read_text(), "layer2.obj has no vertex colours: convert it again (nif2obj.py)"
     image = sky_bake.bake(SKY / "layer1.obj", (SKY / "textures" / f"{SKY_TEXTURE}.dds").read_bytes(),
                           SKY / "layer2.obj", (SKY / "textures" / f"{CLOUD_TEXTURE}.dds").read_bytes())
-    dds = sky_bake.dxt1_dds(sky_bake.dim(image, 1.0, SKY_SATURATION))
+    dds = sky_bake.dxt1_dds(sky_bake.dim(image, 1.0, SKY_SATURATION), dither=1 / 64)
     (SKY / "sky_baked.dds").write_bytes(dds)
 
     positions, uvs, faces = sky_bake.dome(radii)
     template = flver_fix.flver_in_binder(STREET_GEOMBND)
     vanilla = flver_fix.flver_in_binder(VANILLA)
-    single, materials = flver_build.build_single_mesh(template, positions, uvs, faces)  # normals face the centre
+    # Smooth normals pointing at the dome's centre (its origin): with each face's own normal every triangle, and every
+    # ring of them, caught the light a little differently and showed as facets and horizontal bands (2026-10-23).
+    single, materials = flver_build.build_single_mesh(template, positions, uvs, faces, vertex_normal=inward)
     flver = flver_textures.split_materials(single, vanilla, [0] * len(materials), [SKY_TEXTURE], alpha=set())
 
     binder = Binder.from_path(STREET_GEOMBND)

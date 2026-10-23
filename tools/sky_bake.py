@@ -238,9 +238,13 @@ def dim(rgb, factor, saturation=1.0):
     return np.where(linear <= 0.0031308, linear * 12.92, 1.055 * linear ** (1 / 2.4) - 0.055)
 
 
-def dxt1_dds(rgb):
-    """DXT1 DDS bytes, with mipmaps down to 4 texels, of an RGB float image whose sides are powers of 2 (>= 4)."""
+def dxt1_dds(rgb, dither=0.0):
+    """DXT1 DDS bytes, with mipmaps down to 4 texels, of an RGB float image whose sides are powers of 2 (>= 4).
+    `dither` adds that much uniform noise (+-, 0..1 units, fixed seed) to the top level first, so smooth gradients
+    don't quantise into visible stripes (DXT1 endpoints are 5/6/5 bits: 1/32 steps in red and blue)."""
     rows, columns = rgb.shape[:2]
+    if dither:
+        rgb = np.clip(rgb + np.random.default_rng(0).uniform(-dither, dither, rgb.shape), 0.0, 1.0)
     levels, data, image = 0, bytearray(), rgb
     while min(image.shape[:2]) >= 4:
         data += _dxt1_blocks(image)
