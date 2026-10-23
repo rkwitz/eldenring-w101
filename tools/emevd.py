@@ -9,8 +9,12 @@ python emevd.py --no-leaf-gusts common.emevd out.emevd
   removes the overworld's gusts of glowing orange leaves (see no_leaf_gusts).
 python emevd.py --garden m60_42_36_00.emevd out.emevd
   the hedge-maze garden's door warps (see garden_doors; regions from msb_add_garden.py).
+python emevd.py --rattlebones m60_42_36_00.emevd out.emevd
+  Rattlebones' room door warps; the room's door only lets you out once he is dead (see rattlebones_doors).
 python emevd.py --rattlebones-boss m60_42_36_00.emevd out.emevd
-  Rattlebones' boss health bar in his room (see boss_bar; enemy and region from msb_add_boss.py).
+  Rattlebones held on his sigil until you walk in, and his boss health bar (see boss_bar; msb_add_boss.py).
+python emevd.py --interiors m60_42_36_00.emevd out.emevd
+  door warps of Lady Blackhope's tower and Fear of Fire's house (see interior_doors; msb_add_interiors.py).
 """
 import struct
 class Emevd:
@@ -133,9 +137,10 @@ def title_on_door_exit(d, event_id=1042362991, door_flag=1042368540, area=104236
     return build(e, events)
 
 
-RATTLEBONES_DOORS = (  # (event id, trigger region, arrival region): msb_add_room.py's regions in m60_42_36_00
+RATTLEBONES = 1042360850  # msb_add_boss.py: Giant Skeleton Torso c4960_9000 on the room's sigil
+RATTLEBONES_DOORS = (  # (event id, trigger region, arrival region[, character that must be dead]): msb_add_room.py
     (1042362810, 1042362800, 1042362801),  # street tower door -> into Rattlebones' room
-    (1042362811, 1042362802, 1042362803),  # the room's door -> back out on Unicorn Way
+    (1042362811, 1042362802, 1042362803, RATTLEBONES),  # the room's door -> back on Unicorn Way, once he is dead
 )
 
 
@@ -143,23 +148,36 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS):
     """New events (one per door, started from the top of event 0) that wait for the player (10000) to walk into the
     door's trigger region (3[2], as title_on_door_exit), move them to the arrival region (2004[41] with target type 1 =
     region and dummy poly -1, as common event 950 places the player for the Melina cutscene in the same map, no
-    loading screen) and restart (1000[4] with 1), like Wizard101's door activators. Existing events with these ids
-    are replaced, so running it again is harmless."""
+    loading screen) and restart (1000[4] with 1), like Wizard101's door activators. A door with a 4th entry (a boss's
+    entity id) only works while that character is dead (4[0] dead AND in the area, condition group 1): the player
+    can't leave the boss room until the boss is beaten (he is back after a rest, and so is the lock). Existing events
+    with these ids are replaced, so running it again is harmless."""
     e = Emevd(d)
-    ids = {event_id for event_id, _, _ in doors}
+    ids = {door[0] for door in doors}
     events = [ev for ev in events_of(e) if ev["id"] not in ids]
     ins0 = next(ev for ev in events if ev["id"] == 0)["ins"]
     ins0[:] = [i for i in ins0 if not ((i["bank"], i["id"]) == (2000, 0)
                                       and struct.unpack_from("<I", i["args"], 4)[0] in ids)]
-    for slot, (event_id, trigger, arrival) in enumerate(doors):
+    for slot, (event_id, trigger, arrival, *boss) in enumerate(doors):
         ins0.insert(slot, {"bank": 2000, "id": 0, "args": struct.pack("<iIi", 0, event_id, 0), "layer": -1})
-        body = [
-            {"bank": 3, "id": 2, "args": struct.pack("<bBxxIIi", 0, 1, 10000, trigger, 1), "layer": -1},  # IF in area
-            {"bank": 2004, "id": 41, "args": struct.pack("<IIIi", 10000, 1, arrival, -1), "layer": -1},  # warp to region
-            {"bank": 1000, "id": 4, "args": struct.pack("<Bxxx", 1), "layer": -1},  # End Unconditionally: restart
+        if boss:
+            wait = [
+                _i(3, 2, "<bBxxIIi", 1, 1, 10000, trigger, 1),  # IF player in the door's area (group 1)
+                _i(4, 0, "<bxxxIBBxxf", 1, boss[0], 1, 0, 1.0),  # IF the boss is dead (group 1)
+                _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
+            ]
+        else:
+            wait = [_i(3, 2, "<bBxxIIi", 0, 1, 10000, trigger, 1)]  # IF in area
+        body = wait + [
+            _i(2004, 41, "<IIIi", 10000, 1, arrival, -1),  # warp to region
+            _i(1000, 4, "<Bxxx", 1),  # End Unconditionally: restart
         ]
         events.append({"id": event_id, "rest": 0, "pars": [], "ins": body})
     return build(e, events)
+
+
+def _i(bank, iid, fmt, *args):
+    return {"bank": bank, "id": iid, "args": struct.pack(fmt, *args), "layer": -1}
 
 
 GARDEN_DOORS = (  # msb_add_garden.py's regions: the hedge-maze double door on Unicorn Way and the garden's door
@@ -173,19 +191,36 @@ def garden_doors(d):
     return rattlebones_doors(d, GARDEN_DOORS)
 
 
+INTERIOR_DOORS = (  # msb_add_interiors.py's regions: the other boss interiors, empty for now
+    (1042362816, 1042362816, 1042362817),  # Lady Blackhope's tower door (T1) -> into her room
+    (1042362817, 1042362818, 1042362819),  # her room's door -> back on Unicorn Way
+    (1042362818, 1042362820, 1042362821),  # Fear of Fire's house door (H4) -> into the clubhouse
+    (1042362819, 1042362822, 1042362823),  # the clubhouse door -> back on Unicorn Way
+)
+
+
+def interior_doors(d):
+    """Door warps of Lady Blackhope's tower and Fear of Fire's house, events like rattlebones_doors (no boss lock yet;
+    add the boss's entity id as a 4th entry once one is placed). Rerunning replaces them."""
+    return rattlebones_doors(d, INTERIOR_DOORS)
+
+
 BOSS_BAR_EVENT = 1042362815
-RATTLEBONES = 1042360850  # msb_add_boss.py: Giant Skeleton Torso c4960_9000 on the room's sigil
 RATTLEBONES_ARENA = 1042362808  # msb_add_boss.py: sphere over the whole room
+RATTLEBONES_SIGIL = 1042362809  # msb_add_boss.py: point on the room's sigil, facing the door
 RATTLEBONES_NAME = 904969000  # NpcName "Rattlebones" (er_text.py --npc-name)
 
 
-def boss_bar(d, event_id=BOSS_BAR_EVENT, boss=RATTLEBONES, arena=RATTLEBONES_ARENA, name=RATTLEBONES_NAME):
-    """A new event `event_id` (restarts on rest, started from the top of event 0) that shows Elden Ring's boss health
-    bar for `boss` with NpcName `name` while the player is inside region `arena`:
+def boss_bar(d, event_id=BOSS_BAR_EVENT, boss=RATTLEBONES, arena=RATTLEBONES_ARENA, sigil=RATTLEBONES_SIGIL,
+             name=RATTLEBONES_NAME):
+    """A new event `event_id` (restarts on rest, started from the top of event 0) for the boss in his room:
+      2004[10] SetCharacterGravity(boss, off): he spawns with the map while the player is still on the street, before
+          the room's asset collision is there for him (first test: he fell through the floor, the bar showed, no boss)
       wait until the boss is alive AND the player (10000) is in the arena (condition group 1)
+      2004[41] short warp of the boss onto region `sigil` (as Margit's event moves him), 2004[10] gravity back on
       2003[11] DisplayBossHealthBar(1, boss, slot 0, name), packed as vanilla (m10_00 event 10002810, Margit)
       wait until the player has left the arena OR the boss is dead (condition group -1)
-      2003[11] DisplayBossHealthBar(0, ...) and restart
+      2003[11] DisplayBossHealthBar(0, ...) and restart (so walking back in puts him back on the sigil)
     4[0] IfCharacterDeadAlive(group, entity, 0 alive / 1 dead, comparison 0 "=", 1.0) and 3[2] are packed as in
     vanilla events. The boss is an ordinary enemy (no defeat flag), so it is back after a rest like any other and the
     bar works again. Rerunning replaces the event."""
@@ -194,21 +229,20 @@ def boss_bar(d, event_id=BOSS_BAR_EVENT, boss=RATTLEBONES, arena=RATTLEBONES_ARE
     ins0 = next(ev for ev in events if ev["id"] == 0)["ins"]
     ins0[:] = [i for i in ins0 if not ((i["bank"], i["id"]) == (2000, 0)
                                       and struct.unpack_from("<I", i["args"], 4)[0] == event_id)]
-    ins0.insert(0, {"bank": 2000, "id": 0, "args": struct.pack("<iIi", 0, event_id, 0), "layer": -1})
-
-    def i(bank, iid, fmt, *args):
-        return {"bank": bank, "id": iid, "args": struct.pack(fmt, *args), "layer": -1}
-
+    ins0.insert(0, _i(2000, 0, "<iIi", 0, event_id, 0))
     body = [
-        i(4, 0, "<bxxxIBBxxf", 1, boss, 0, 0, 1.0),  # IF boss alive (group 1)
-        i(3, 2, "<bBxxIIi", 1, 1, 10000, arena, 1),  # IF player inside the arena (group 1)
-        i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
-        i(2003, 11, "<BxxxIhxxi", 1, boss, 0, name),  # show the boss bar
-        i(3, 2, "<bBxxIIi", -1, 0, 10000, arena, 1),  # IF player outside the arena (OR group -1)
-        i(4, 0, "<bxxxIBBxxf", -1, boss, 1, 0, 1.0),  # IF boss dead (OR group -1)
-        i(0, 0, "<bBbx", 0, 1, -1),  # IF condition group -1
-        i(2003, 11, "<BxxxIhxxi", 0, boss, 0, name),  # hide it
-        i(1000, 4, "<Bxxx", 1),  # restart
+        _i(2004, 10, "<IBxxx", boss, 0),  # gravity off
+        _i(4, 0, "<bxxxIBBxxf", 1, boss, 0, 0, 1.0),  # IF boss alive (group 1)
+        _i(3, 2, "<bBxxIIi", 1, 1, 10000, arena, 1),  # IF player inside the arena (group 1)
+        _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
+        _i(2004, 41, "<IIIi", boss, 1, sigil, -1),  # warp him onto the sigil
+        _i(2004, 10, "<IBxxx", boss, 1),  # gravity on
+        _i(2003, 11, "<BxxxIhxxi", 1, boss, 0, name),  # show the boss bar
+        _i(3, 2, "<bBxxIIi", -1, 0, 10000, arena, 1),  # IF player outside the arena (OR group -1)
+        _i(4, 0, "<bxxxIBBxxf", -1, boss, 1, 0, 1.0),  # IF boss dead (OR group -1)
+        _i(0, 0, "<bBbx", 0, 1, -1),  # IF condition group -1
+        _i(2003, 11, "<BxxxIhxxi", 0, boss, 0, name),  # hide it
+        _i(1000, 4, "<Bxxx", 1),  # restart
     ]
     events.append({"id": event_id, "rest": 1, "pars": [], "ins": body})
     return build(e, events)
@@ -306,6 +340,9 @@ if __name__ == "__main__":
         sys.exit()
     if sys.argv[1] == "--garden":  # emevd.py --garden m60_42_36_00.emevd out.emevd (doors of msb_add_garden.py)
         open(sys.argv[3], "wb").write(garden_doors(open(sys.argv[2], "rb").read()))
+        sys.exit()
+    if sys.argv[1] == "--interiors":  # emevd.py --interiors in.emevd out.emevd (doors of msb_add_interiors.py)
+        open(sys.argv[3], "wb").write(interior_doors(open(sys.argv[2], "rb").read()))
         sys.exit()
     if sys.argv[1] == "--rattlebones-boss":  # emevd.py --rattlebones-boss in.emevd out.emevd (msb_add_boss.py)
         open(sys.argv[3], "wb").write(boss_bar(open(sys.argv[2], "rb").read()))

@@ -6,7 +6,7 @@ WC_Unicorn_HedgeMaze, whose classic geometry WC_Z06I02_Life_Hedge_Maze.nif (Clas
 WC_Unicorn_HedgeMaze.wad, textures there and in ClassicMode-WorldData.wad) is converted (nif2obj.py, tex2dds.py) to
 reference/w101/converted_hedgemaze_classic/WC_Unicorn_HedgeMaze_Classic.obj and textures/. About 80 m across (hedges,
 a unicorn statue, the Life school entrance arch, flower beds), framed by a cliff, a city wall tower and giant backdrop
-trees up to 500 m away and 192 m tall. Butterfly cards (animated in W101) and the untextured "Bone" meshes are left
+trees up to 500 m away and 192 m tall (cut off at CLIP_TOP, see below). Butterfly cards (animated in W101) and the untextured "Bone" meshes are left
 out. Collision covers every drawn triangle except flowers, flower-bed decals and the tree cards (NO_COLLISION).
 
 Window: Wizard101 shows a building's WC_Unicorn_<zone>_quest window mesh (WC_Window03_JT, a blue copy of the window
@@ -48,7 +48,13 @@ for module in (dds_color, flver_fix, flver_build, flver_textures, hkx_tag, hkx_c
     importlib.reload(module)
 
 SATURATION, BRIGHTNESS = 1.3, 1.1  # same colour boost as the classic street (dds_color.py)
-WINDOW_BRIGHTNESS = 1.0  # brightness boost of the glowing window texture (dds_color.boost), 1.0 = as in W101
+# The glowing window: the emissive material has no strength setting, and Elden Ring's exposure and bloom turn emitted
+# light near full brightness white (Ryan's test 2026-10-23: "the light is white, it should be blue"). The texture is
+# darkened to a quarter and saturated instead, which keeps W101's pale blue panes (rendered comparison, 0.22-0.25).
+WINDOW_SATURATION, WINDOW_BRIGHTNESS = 1.8, 0.25
+# The garden sits msb_add_garden.GARDEN_DEPTH (50) m under the street, so nothing of it may reach the street's ground:
+# its giant backdrop (cliff, city wall tower, trees up to 192 m tall) is cut off at CLIP_TOP m above the garden floor.
+CLIP_TOP = 48.0
 
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset"
 GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset")
@@ -86,6 +92,37 @@ def face_objects(path):
     return names
 
 
+def clip_below(positions, uvs, faces, top):
+    """(positions, uvs, faces) with every triangle cut off at height `top` (OBJ y): parts above it are dropped,
+    triangles crossing it are clipped (new corners interpolated in position and UV) and fanned back into triangles.
+    `faces` are flver_build.parse_obj triangles [(key, ((v, vt), (v, vt), (v, vt)))]; the keys are kept."""
+    positions, uvs, out = list(positions), list(uvs), []
+    for key, corners in faces:
+        heights = [positions[v][1] for v, _ in corners]
+        if max(heights) <= top:
+            out.append((key, corners))
+            continue
+        polygon = []
+        for k in range(3):
+            a, b = corners[k], corners[(k + 1) % 3]
+            ya, yb = positions[a[0]][1], positions[b[0]][1]
+            if ya <= top:
+                polygon.append(a)
+            if (ya <= top) != (yb <= top):
+                t = (top - ya) / (yb - ya)
+                pa, pb = positions[a[0]], positions[b[0]]
+                positions.append(tuple(pa[i] + (pb[i] - pa[i]) * t for i in range(3)))
+                uv = None
+                if a[1] is not None and b[1] is not None:
+                    ua, ub = uvs[a[1]], uvs[b[1]]
+                    uvs.append(tuple(ua[i] + (ub[i] - ua[i]) * t for i in range(2)))
+                    uv = len(uvs) - 1
+                polygon.append((len(positions) - 1, uv))
+        for k in range(1, len(polygon) - 1):
+            out.append((key, (polygon[0], polygon[k], polygon[k + 1])))
+    return positions, uvs, out
+
+
 def write_asset(paths, asset, flver, textures):
     binder = Binder.from_path(STREET_GEOMBND)
     for entry in binder.entries:
@@ -106,6 +143,9 @@ def build_garden(asset="aeg030_555"):
     vanilla = flver_fix.flver_in_binder(VANILLA)
     positions, uvs, faces = flver_build.parse_obj(GARDEN_OBJ)
     faces = [((material, name), corners) for (material, corners), name in zip(faces, face_objects(GARDEN_OBJ))]
+    count = len(faces)
+    positions, uvs, faces = clip_below(positions, uvs, faces, CLIP_TOP)
+    print(f"  {count} garden triangles, {len(faces)} after cutting the backdrop off at {CLIP_TOP} m")
     single, materials = flver_build.build_single_mesh(template, positions, uvs, faces)
     texture_of_material = flver_textures.parse_mtl(GARDEN_OBJ.with_suffix(".mtl"))
     stems = sorted({t for m, t in texture_of_material.items() if not LEFT_OUT.search(m)})
@@ -139,7 +179,7 @@ def build_window(asset="aeg030_529"):
     single, materials = flver_build.build_single_mesh(template, positions, uvs, faces)
     (stem,) = set(flver_textures.parse_mtl(WINDOW_OBJ.with_suffix(".mtl")).values())
     texture = W101 / "converted_classic" / "textures" / f"{stem}.dds"  # the street's converted copy
-    dds = dds_color.boost(texture.read_bytes(), SATURATION, WINDOW_BRIGHTNESS)
+    dds = dds_color.boost(texture.read_bytes(), WINDOW_SATURATION, WINDOW_BRIGHTNESS)
     flver = flver_textures.split_materials(single, vanilla, [0] * len(materials), [stem], alpha=set(),
                                            opaque=flver_textures.emissive_material(vanilla))
     textures = [(flver_textures.texture_name(0), dds), (flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, 64)),

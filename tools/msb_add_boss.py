@@ -7,6 +7,12 @@ regulation.bin) standing on the room's duel sigil and facing the door, plus the 
                           (0, 0, -0.45)), facing the arrival point W101_Rattlebones_in; no patrol route (the room has
                           no navmesh: it turns and attacks but won't walk)
   W101_Rattlebones_arena  sphere r ARENA_RADIUS over the whole room; inside it the "Rattlebones" health bar shows
+  W101_Rattlebones_sigil  small sphere on the sigil, facing the door: the boss event (emevd.boss_bar) holds him with
+                          gravity off until the player walks in, then warps him onto it and turns gravity back on
+
+In the first test (2026-10-23) the bar showed but Rattlebones was nowhere: he spawns with the map while the player is
+on the street, likely before the room's asset collision 60 m down is there for him, and fell through the floor (still
+alive, so the bar shows). The sigil point and the event fix that.
 
 The enemy is a copy of vanilla patroller c4300_9020 from m60_43_36_00 (as msb_add_mobs.py), inserted at the end of the
 enemy block with every later part index remapped; the c4960 model is added in name order among the character models.
@@ -34,7 +40,9 @@ BOSS_ENTITY = 1042360850
 SIGIL = (0.0, 0.0, -0.45)  # room FLVER frame: W101 (0, -45), floor height
 FACING = 180.0  # room frame: towards -z, the door and W101_Rattlebones_in
 ARENA_RADIUS = 13.0
-REGIONS = [("W101_Rattlebones_arena", "room", (0.0, 4.0, 0.0), 0.0, ARENA_RADIUS, 1042362808, 9208)]
+SIGIL_ENTITY = 1042362809
+REGIONS = [("W101_Rattlebones_arena", "room", (0.0, 4.0, 0.0), 0.0, ARENA_RADIUS, 1042362808, 9208),
+           ("W101_Rattlebones_sigil", "room", (SIGIL[0], 0.1, SIGIL[2]), FACING, 0.5, SIGIL_ENTITY, 9209)]
 
 
 def place_boss(raw, template_raw):
