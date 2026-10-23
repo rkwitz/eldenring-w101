@@ -8,7 +8,7 @@ of the tower door. Here the room sits ROOM_DEPTH m under the tower, turned like 
 player between Other-type regions (2004[41], as the Melina cutscene does for the same map, no loading screen):
 
   W101_Rattlebones_door  sphere r 1.5 on the street tower's door (Door19)     -> W101_Rattlebones_in
-  W101_Rattlebones_exit  sphere r 1.0 on the room's door (Door_01)            -> W101_Rattlebones_out
+  W101_Rattlebones_exit  sphere r 1.2 on the room's door (Door_01)            -> W101_Rattlebones_out
   W101_Rattlebones_in    room arrival, facing into the room
   W101_Rattlebones_out   street arrival in front of the tower door, facing away from it
 
@@ -43,7 +43,7 @@ TEMPLATE_REGION_ENTITY = 1042362980  # vanilla Other sphere (Melina cutscene pla
 REGIONS = [
     ("W101_Rattlebones_door", "street", (-164.9, 1.0, 192.0), 0.0, 1.5, 1042362800, 9200),
     ("W101_Rattlebones_in", "room", (-0.26, 0.05, -10.3), 0.0, 0.5, 1042362801, 9201),
-    ("W101_Rattlebones_exit", "room", (0.0, 1.0, -12.6), 0.0, 1.0, 1042362802, 9202),
+    ("W101_Rattlebones_exit", "room", (0.0, 0.6, -12.6), 0.0, 1.2, 1042362802, 9202),
     ("W101_Rattlebones_out", "street", (-165.03, 0.35, 187.68), 180.0, 0.5, 1042362803, 9203),
 ]
 
