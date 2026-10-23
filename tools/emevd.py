@@ -7,6 +7,10 @@ python emevd.py --no-guidance m60_42_36_00.emevd out.emevd
   removes the Guidance of Grace light wisps at The First Step and Church of Elleh (see no_guidance_wisps).
 python emevd.py --no-leaf-gusts common.emevd out.emevd
   removes the overworld's gusts of glowing orange leaves (see no_leaf_gusts).
+python emevd.py --garden m60_42_36_00.emevd out.emevd
+  the hedge-maze garden's door warps (see garden_doors; regions from msb_add_garden.py).
+python emevd.py --rattlebones-boss m60_42_36_00.emevd out.emevd
+  Rattlebones' boss health bar in his room (see boss_bar; enemy and region from msb_add_boss.py).
 """
 import struct
 class Emevd:
@@ -158,6 +162,58 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS):
     return build(e, events)
 
 
+GARDEN_DOORS = (  # msb_add_garden.py's regions: the hedge-maze double door on Unicorn Way and the garden's door
+    (1042362812, 1042362804, 1042362805),  # street double door -> into the garden
+    (1042362813, 1042362806, 1042362807),  # the garden's door -> back out on Unicorn Way
+)
+
+
+def garden_doors(d):
+    """The hedge-maze garden's two door warps, events like rattlebones_doors (rerunning replaces them)."""
+    return rattlebones_doors(d, GARDEN_DOORS)
+
+
+BOSS_BAR_EVENT = 1042362815
+RATTLEBONES = 1042360850  # msb_add_boss.py: Giant Skeleton Torso c4960_9000 on the room's sigil
+RATTLEBONES_ARENA = 1042362808  # msb_add_boss.py: sphere over the whole room
+RATTLEBONES_NAME = 904969000  # NpcName "Rattlebones" (er_text.py --npc-name)
+
+
+def boss_bar(d, event_id=BOSS_BAR_EVENT, boss=RATTLEBONES, arena=RATTLEBONES_ARENA, name=RATTLEBONES_NAME):
+    """A new event `event_id` (restarts on rest, started from the top of event 0) that shows Elden Ring's boss health
+    bar for `boss` with NpcName `name` while the player is inside region `arena`:
+      wait until the boss is alive AND the player (10000) is in the arena (condition group 1)
+      2003[11] DisplayBossHealthBar(1, boss, slot 0, name), packed as vanilla (m10_00 event 10002810, Margit)
+      wait until the player has left the arena OR the boss is dead (condition group -1)
+      2003[11] DisplayBossHealthBar(0, ...) and restart
+    4[0] IfCharacterDeadAlive(group, entity, 0 alive / 1 dead, comparison 0 "=", 1.0) and 3[2] are packed as in
+    vanilla events. The boss is an ordinary enemy (no defeat flag), so it is back after a rest like any other and the
+    bar works again. Rerunning replaces the event."""
+    e = Emevd(d)
+    events = [ev for ev in events_of(e) if ev["id"] != event_id]
+    ins0 = next(ev for ev in events if ev["id"] == 0)["ins"]
+    ins0[:] = [i for i in ins0 if not ((i["bank"], i["id"]) == (2000, 0)
+                                      and struct.unpack_from("<I", i["args"], 4)[0] == event_id)]
+    ins0.insert(0, {"bank": 2000, "id": 0, "args": struct.pack("<iIi", 0, event_id, 0), "layer": -1})
+
+    def i(bank, iid, fmt, *args):
+        return {"bank": bank, "id": iid, "args": struct.pack(fmt, *args), "layer": -1}
+
+    body = [
+        i(4, 0, "<bxxxIBBxxf", 1, boss, 0, 0, 1.0),  # IF boss alive (group 1)
+        i(3, 2, "<bBxxIIi", 1, 1, 10000, arena, 1),  # IF player inside the arena (group 1)
+        i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
+        i(2003, 11, "<BxxxIhxxi", 1, boss, 0, name),  # show the boss bar
+        i(3, 2, "<bBxxIIi", -1, 0, 10000, arena, 1),  # IF player outside the arena (OR group -1)
+        i(4, 0, "<bxxxIBBxxf", -1, boss, 1, 0, 1.0),  # IF boss dead (OR group -1)
+        i(0, 0, "<bBbx", 0, 1, -1),  # IF condition group -1
+        i(2003, 11, "<BxxxIhxxi", 0, boss, 0, name),  # hide it
+        i(1000, 4, "<Bxxx", 1),  # restart
+    ]
+    events.append({"id": event_id, "rest": 1, "pars": [], "ins": body})
+    return build(e, events)
+
+
 GUIDANCE_GRACES = (1042361981, 1042361980)  # AEG099_090 grace markers of The First Step (76101) and Church of Elleh (76100)
 NO_ENTITY = 1042361989  # unused entity id in this tile (not in m60_42_36_00 or m60_10_09_02)
 
@@ -247,6 +303,12 @@ if __name__ == "__main__":
         sys.exit()
     if sys.argv[1] == "--rattlebones":  # emevd.py --rattlebones m60_42_36_00.emevd out.emevd (doors of msb_add_room.py)
         open(sys.argv[3], "wb").write(rattlebones_doors(open(sys.argv[2], "rb").read()))
+        sys.exit()
+    if sys.argv[1] == "--garden":  # emevd.py --garden m60_42_36_00.emevd out.emevd (doors of msb_add_garden.py)
+        open(sys.argv[3], "wb").write(garden_doors(open(sys.argv[2], "rb").read()))
+        sys.exit()
+    if sys.argv[1] == "--rattlebones-boss":  # emevd.py --rattlebones-boss in.emevd out.emevd (msb_add_boss.py)
+        open(sys.argv[3], "wb").write(boss_bar(open(sys.argv[2], "rb").read()))
         sys.exit()
     if sys.argv[1] == "--no-guidance":  # emevd.py --no-guidance m60_42_36_00.emevd out.emevd
         open(sys.argv[3], "wb").write(no_guidance_wisps(open(sys.argv[2], "rb").read()))

@@ -2,7 +2,11 @@
 
 Usage: python er_text.py item.msgbnd out.msgbnd
   adds PlaceName 610900 "Unicorn Way" (the name the street's MapNameOverride regions in m60_42_36_00 show). Input is an
-  uncompressed msgbnd from blender_unpack.py; compress the output as DFLT DCX for the project's msg/engus folder.
+  uncompressed msgbnd from blender_unpack.py (compress the output as DFLT DCX for the project's msg/engus folder) or
+  the project's DFLT .msgbnd.dcx itself.
+python er_text.py --npc-name item.msgbnd.dcx out.msgbnd.dcx
+  adds NpcName 904969000 "Rattlebones" (the boss bar name of emevd.py --rattlebones-boss). Do both item.msgbnd and
+  item_dlc02.msgbnd (the game reads the latter when the DLC is installed).
 """
 import struct
 def bnd4(b):
@@ -70,16 +74,48 @@ def write_fmg(entries, template):
 
 
 PLACE_NAME_ID = 610900
+NPC_NAME_ID = 904969000  # "Rattlebones": the boss bar name of emevd.boss_bar (unused in vanilla NpcName)
 
 
-def add_place_name(msgbnd, text_id=PLACE_NAME_ID, text="Unicorn Way"):
-    name = next(k for k in bnd4(msgbnd) if k.endswith("\\PlaceName.fmg"))
+def add_text(msgbnd, fmg, text_id, text):
+    """msgbnd bytes with entry `text_id` of `fmg` (e.g. "PlaceName", "NpcName") set to `text`. Only the base FMG of that
+    name is changed (item_dlc02.msgbnd also has NpcName_dlc01 / _dlc02, which are left alone)."""
+    suffix = f"\\{fmg}.fmg"
+    name = next(k for k in bnd4(msgbnd) if k.endswith(suffix))
     old = bnd4(msgbnd)[name]
     entries = read_fmg(old)
     entries[text_id] = text
-    return replace_entry(msgbnd, "\\PlaceName.fmg", write_fmg(entries, old))
+    return replace_entry(msgbnd, suffix, write_fmg(entries, old))
+
+
+def add_place_name(msgbnd, text_id=PLACE_NAME_ID, text="Unicorn Way"):
+    return add_text(msgbnd, "PlaceName", text_id, text)
+
+
+def main(argv):
+    """er_text.py in.msgbnd out.msgbnd                      PlaceName 610900 "Unicorn Way"
+    er_text.py --npc-name in.msgbnd out.msgbnd           NpcName 904969000 "Rattlebones"
+    Either file may be DFLT DCX (as the project's msg/engus/item.msgbnd.dcx and item_dlc02.msgbnd.dcx are); the output
+    is then DFLT DCX with the same header."""
+    npc = argv[0] == "--npc-name"
+    src, dst = argv[1:3] if npc else argv[0:2]
+    data = open(src, "rb").read()
+    dcx = data[:4] == b"DCX\0"
+    if dcx:
+        import zlib
+        assert data[0x28:0x2C] == b"DFLT", "expected DFLT compression"
+        raw = zlib.decompress(data[0x4C:])
+    else:
+        raw = data
+    out = add_text(raw, "NpcName", NPC_NAME_ID, "Rattlebones") if npc else add_place_name(raw)
+    if dcx:
+        packed = zlib.compress(out, 9)
+        head = bytearray(data[:0x4C])
+        struct.pack_into(">II", head, 0x1C, len(out), len(packed))
+        out = bytes(head) + packed
+    open(dst, "wb").write(out)
 
 
 if __name__ == "__main__":
     import sys
-    open(sys.argv[2], "wb").write(add_place_name(open(sys.argv[1], "rb").read()))
+    main(sys.argv[1:])
