@@ -19,13 +19,17 @@ internal = right child offset / 2). All of this was read off vanilla m60_42_36_0
 vanilla file round-trips byte for byte through hkx_tag.
 
 Pipeline: asset collision (fsnp compressed mesh, decoded by hkx_collision) -> placed by the map's part transforms
--> Recast (tools/recast_bake.cpp: voxelise, erode by the agent radius, regions, convex polygons) -> keep
-the connected pieces that hold an enemy or the player spawn -> hkaiNavMesh + cache + tree written into the vanilla
-navmesh files as templates.
+-> Recast (tools/recast_bake.cpp: voxelise, erode by the agent radius, regions, convex polygons; once for n, once
+with a larger agent for o) -> keep the connected pieces that hold an enemy or the player spawn -> clip to the 256 m
+tiles (no vanilla navmesh has a vertex outside its tile's +-128 m square; the street spans m60_41_36, 42_35 and
+42_36) -> per tile, hkaiNavMesh + cache + tree written into that tile's vanilla n/o files, and its nva counts set.
+Vanilla tiles keep open boundary edges on the tile border (no streaming sets), so cut points are shared exactly.
+The first deploy (one mesh reaching 237 m outside m60_42_36) coincided with a load crash (2026-10-23).
 
 Usage:
-  python er_navmesh.py MAP.msb.dcx VANILLA.nvmhktbnd.dcx VANILLA.nva.dcx OUT_DIR
-         --asset AEG030_518_9000=aeg030_518_l.geomhkxbnd.dcx [--asset ...] [--recast recast_bake] [--preview out.png]
+  python er_navmesh.py MAP.msb.dcx GAME/map/m60 OUT_DIR --asset AEG030_518_9000=aeg030_518_l.geomhkxbnd.dcx
+         [--asset ...] [--recast recast_bake] [--preview out.png]
+  writes OUT_DIR/m60_XX_ZZ_00/<tile>.nvmhktbnd.dcx and .nva.dcx for every tile the mesh touches.
 DCX input may be DFLT or KRAK (read with pyooz block by block, dcx_krak.py). Output is DFLT DCX, which the game
 loads. recast_bake is built from tools/recast_bake.cpp and Recast (github.com/recastnavigation, zlib
 licence); the build line is at the top of that file.
@@ -51,7 +55,10 @@ from msb_floor import _list, entry_name, read_msb, transform  # noqa: E402
 BOUNDARY = 0xFFFFFFFF
 EDGE_ORIGINAL = 4
 SEED_MODELS = ("c0000", "c3450", "c3500", "c4180", "c4960")  # player spawns + our enemies
-AGENT = dict(cell=0.3, cell_height=0.1, height=1.8, radius=0.4, climb=0.5, slope=50.0)
+AGENT = dict(cell=0.3, cell_height=0.1, height=1.8, radius=0.4, climb=0.5, slope=50.0)  # n: normal characters
+AGENT_LARGE = dict(AGENT, height=3.0, radius=0.9)  # o: large characters (vanilla o meshes are coarser)
+TILE = 256.0
+MIN_TILE_FACES = 8
 DFLT_HEADER = bytes.fromhex("44435800000100000000001800000024000000440000004c44435300000000000000000044435000"
                             "44464c540000002009000000000000000000000000000000000101004443410000000008")
 
@@ -230,6 +237,64 @@ def orient(verts, polys):
     return out
 
 
+def split_tiles(verts, polys, home):
+    """{(x, z) tile index: (tile-local vertices, polygons)}: every polygon clipped to the 256 m tiles it crosses, so
+    each tile's navmesh stays inside its own +-128 m square like vanilla's (no vanilla navmesh has a vertex outside
+    it). Cut points are computed from each edge in a fixed direction, so neighbours share them exactly."""
+    hx, hz = home
+    out = defaultdict(lambda: ([], [], {}))
+
+    def cut(a, b, axis, value):
+        a, b = sorted((a, b))
+        t = (value - a[axis]) / (b[axis] - a[axis])
+        return tuple(a[k] + t * (b[k] - a[k]) if k != axis else value for k in range(3))
+
+    def clip(points, axis, value, keep_below):
+        res = []
+        for i in range(len(points)):
+            cur, prev = points[i], points[i - 1]
+            cin = cur[axis] <= value if keep_below else cur[axis] >= value
+            pin = prev[axis] <= value if keep_below else prev[axis] >= value
+            if cin != pin:
+                res.append(cut(prev, cur, axis, value))
+            if cin:
+                res.append(cur)
+        return res
+
+    for p in polys:
+        pts = [tuple(verts[i]) for i in p]
+        txs = range(int(math.floor((min(q[0] for q in pts) + 128) / TILE)), int(math.floor((max(q[0] for q in pts) + 128) / TILE)) + 1)
+        tzs = range(int(math.floor((min(q[2] for q in pts) + 128) / TILE)), int(math.floor((max(q[2] for q in pts) + 128) / TILE)) + 1)
+        for dx in txs:
+            for dz in tzs:
+                piece = pts
+                for axis, d in ((0, dx), (2, dz)):
+                    piece = clip(piece, axis, d * TILE - 128, False) if piece else piece
+                    piece = clip(piece, axis, d * TILE + 128, True) if piece else piece
+                local = []
+                for q in piece:
+                    q = (q[0] - dx * TILE, q[1], q[2] - dz * TILE)
+                    if not local or max(abs(q[k] - local[-1][k]) for k in range(3)) > 1e-4:
+                        local.append(q)
+                while len(local) > 1 and max(abs(local[0][k] - local[-1][k]) for k in range(3)) <= 1e-4:
+                    local.pop()
+                if len(local) < 3:
+                    continue
+                area = abs(sum(local[k][2] * local[k - 1][0] - local[k][0] * local[k - 1][2] for k in range(len(local)))) / 2
+                if area < 1e-3:
+                    continue
+                tv, tp, index = out[(hx + dx, hz + dz)]
+                face = []
+                for q in local:
+                    key = tuple(round(c, 4) for c in q)
+                    if key not in index:
+                        index[key] = len(tv)
+                        tv.append(list(q))
+                    face.append(index[key])
+                tp.append(face)
+    return {tile: (tv, tp) for tile, (tv, tp, _) in out.items()}
+
+
 class Boundary:
     """Boundary segments bucketed on a 4 m x/z grid, for clearance queries."""
 
@@ -360,9 +425,10 @@ def build_hkx(template_bytes, verts, polys):
     nm["streamingSets"] = Array(nm["streamingSets"].type)
     nm["faceData"] = Array(nm["faceData"].type, [0] * len(faces))
     nm["edgeData"] = Array(nm["edgeData"].type, [0] * len(edges))
-    lo = [min(v[k] for v in verts) - 2.4 for k in range(3)]
-    hi = [max(v[k] for v in verts) + 2.4 for k in range(3)]
-    nm["aabb"] = Record(nm["aabb"].type, min=lo + [-2.4], max=hi + [2.4])
+    # vanilla: x/z = +-(384 + r) (the tile and its neighbours), y = vertex range +- r, w = -+r; r = 2.4 (n), 8 (o)
+    r = -nm["aabb"]["min"][3] or 2.4
+    ys = [v[1] for v in verts]
+    nm["aabb"] = Record(nm["aabb"].type, min=[-384 - r, min(ys) - r, -384 - r, -r], max=[384 + r, max(ys) + r, 384 + r, r])
     seeding = nm["clearanceCacheSeedingDataSet"]
     for data in seeding["cacheDatas"]:
         data["initialCache"] = clearance_cache(data["initialCache"], verts, polys, edges)
@@ -453,44 +519,56 @@ def preview(path, verts, polys, seed_points):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("map")
-    ap.add_argument("nvm")
-    ap.add_argument("nva")
-    ap.add_argument("out_dir")
+    ap.add_argument("map", help="our m60_42_36_00.msb.dcx")
+    ap.add_argument("vanilla_m60", help="the game's map/m60 folder (vanilla <tile>.nvmhktbnd.dcx and .nva.dcx)")
+    ap.add_argument("out_dir", help="gets m60_XX_ZZ_00/<tile>.nvmhktbnd.dcx + .nva.dcx for every tile the mesh touches")
     ap.add_argument("--asset", action="append", required=True, help="PART_NAME=collision.geomhkxbnd.dcx")
     ap.add_argument("--recast", default=str(Path(__file__).parent / "recast_bake"))
     ap.add_argument("--preview")
-    ap.add_argument("--tile", default="m60_42_36_00")
+    ap.add_argument("--home", default="42,36", help="tile the map and enemies belong to")
     args = ap.parse_args()
+    home = tuple(int(x) for x in args.home.split(","))
 
     map_raw = load_dcx(args.map)
     tris = placed_triangles(map_raw, [a.split("=", 1) for a in args.asset])
-    verts, polys = bake(tris, args.recast)
-    print(f"Recast: {len(verts)} vertices, {len(polys)} polygons")
     seed_points = seeds(map_raw)
-    verts, polys = keep_connected(verts, polys, seed_points)
-    polys = orient(verts, polys)
-    print(f"kept {len(polys)} polygons, {len(verts)} vertices connected to the enemies/spawns")
-    if args.preview:
-        preview(args.preview, verts, polys, seed_points)
+    meshes = {}
+    for kind, agent in (("n", AGENT), ("o", AGENT_LARGE)):
+        verts, polys = bake(tris, args.recast, agent)
+        print(f"{kind}: Recast {len(verts)} vertices, {len(polys)} polygons")
+        verts, polys = keep_connected(verts, polys, seed_points)
+        polys = orient(verts, polys)
+        print(f"{kind}: kept {len(polys)} polygons connected to the enemies/spawns")
+        if args.preview and kind == "n":
+            preview(args.preview, verts, polys, seed_points)
+        meshes[kind] = split_tiles(verts, polys, home)
 
-    bnd = load_dcx(args.nvm)
-    model = int(args.tile[4:6] + args.tile[7:9] + "00")  # m60_42_36_00 -> 423600
-    new = {}
-    for _, name, data in bnd4_entries(bnd):
-        base = name.split("\\")[-1]
-        if base[0] in "no" and base.endswith(f"_{model}.hkx"):
-            out = build_hkx(data, verts, polys)
-            print(f"{base}: {check_hkx(out)} faces/edges/vertices, {len(out)} bytes")
-            new[base] = out
-    assert len(new) == 2, f"expected the n and o navmeshes, got {list(new)}"
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    nvm_out = out_dir / f"{args.tile}.nvmhktbnd.dcx"
-    nvm_out.write_bytes(dflt_dcx(bnd4_replace(bnd, new)))
-    nva_out = out_dir / f"{args.tile}.nva.dcx"
-    nva_out.write_bytes(dflt_dcx(patch_nva(load_dcx(args.nva), model, {1: len(polys), 3: len(polys)})))
-    print(f"Wrote {nvm_out} and {nva_out}")
+    for kind in meshes:  # drop slivers (a few faces cut off at a tile corner) rather than edit a tile for them
+        for tile in [t for t, (_, tp) in meshes[kind].items() if len(tp) < MIN_TILE_FACES]:
+            print(f"{kind}: dropping {len(meshes[kind][tile][1])} sliver face(s) in tile {tile}")
+            del meshes[kind][tile]
+    for tile in sorted(set(meshes["n"]) | set(meshes["o"])):
+        name = f"m60_{tile[0]:02d}_{tile[1]:02d}_00"
+        model = int(f"{tile[0]:02d}{tile[1]:02d}00")
+        bnd = load_dcx(Path(args.vanilla_m60, name, f"{name}.nvmhktbnd.dcx"))
+        new, counts = {}, {}
+        for _, entry, data in bnd4_entries(bnd):
+            base = entry.split("\\")[-1]
+            kind = base[0]
+            if kind in "no" and base.endswith(f"_{model}.hkx"):
+                verts, polys = meshes[kind].get(tile, ([], []))
+                assert polys, f"{name}: no {kind} faces (tiny sliver?); not handled"
+                out = build_hkx(data, verts, polys)
+                print(f"{name} {base}: {check_hkx(out)} faces/edges/vertices, {len(out)} bytes")
+                new[base] = out
+                counts[1 if kind == "n" else 3] = len(polys)
+        assert len(new) == 2, f"{name}: expected the n and o navmeshes, got {list(new)}"
+        folder = Path(args.out_dir, name)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"{name}.nvmhktbnd.dcx").write_bytes(dflt_dcx(bnd4_replace(bnd, new)))
+        nva = load_dcx(Path(args.vanilla_m60, name, f"{name}.nva.dcx"))
+        (folder / f"{name}.nva.dcx").write_bytes(dflt_dcx(patch_nva(nva, model, counts)))
+        print(f"Wrote {folder}")
 
 
 if __name__ == "__main__":
