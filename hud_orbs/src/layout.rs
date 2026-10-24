@@ -34,6 +34,8 @@ pub struct TextStyle {
     pub align: Align,
     /// Vertically centred in the box (otherwise from the top).
     pub middle: bool,
+    /// The control's m_nKerningAdjust: extra pen advance per glyph, font pixels.
+    pub tracking: f32,
 }
 
 impl TextStyle {
@@ -48,6 +50,7 @@ impl TextStyle {
             wrap: false,
             align: Align::Left,
             middle: true,
+            tracking: 0.0,
         }
     }
 
@@ -154,6 +157,7 @@ impl Layout {
                 wrap: get("ww") == Some("1"),
                 align: Align::Left,
                 middle: true,
+                tracking: get("ka").and_then(|v| v.parse().ok()).unwrap_or(0.0),
             });
             let frame = |key: &str| get(key).and_then(floats::<4>);
             nodes.push(Node {
@@ -262,6 +266,10 @@ pub struct View {
     /// Nodes moved to another rectangle (the tab marker under the chosen tab).
     pub rect: HashMap<usize, [f32; 4]>,
     pub extra: Vec<([f32; 4], String, TextStyle)>,
+    /// Images drawn over a node, right after its own (in the layout's painter's order).
+    pub node_images: HashMap<usize, String>,
+    /// Filled rectangles drawn after the nodes, under the images.
+    pub fills: Vec<([f32; 4], ImColor32)>,
     /// Images drawn after the nodes: (rect, image, uv).
     pub images: Vec<([f32; 4], String, [f32; 4])>,
     /// Windows drawn without their background image (their children still draw).
@@ -318,8 +326,16 @@ impl Textures {
     }
 
     /// Queues images to load on the next `load_wanted` (render thread, before the frame).
+    /// Registers a texture made elsewhere (the character pictures, "@model/...").
+    pub fn set(&mut self, name: &str, texture: TextureId, size: [f32; 2]) {
+        self.map.insert(name.to_string(), (texture, size));
+    }
+
     pub fn want(&mut self, names: impl IntoIterator<Item = String>) {
         for name in names {
+            if name.starts_with("@model/") {
+                continue;
+            }
             if !self.map.contains_key(&name) && !self.failed.contains(&name) && !self.wanted.contains(&name) {
                 self.wanted.push(name);
             }
@@ -479,6 +495,7 @@ impl Canvas<'_, '_> {
             .or_else(|| self.fonts.get("WizardFancy"))
             .or_else(|| self.fonts.values().next());
         let Some(font) = font else { return };
+        let t = style.tracking;
         let width = r[2] - r[0];
         let height = r[3] - r[1];
         let scale = if style.scale > 0.0 { style.scale } else { (height * 0.8 / font.line_height).max(0.1) };
@@ -490,7 +507,7 @@ impl Canvas<'_, '_> {
                 let mut line = String::new();
                 for word in paragraph.split_whitespace() {
                     let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-                    if font.width(&candidate) > max_w && !line.is_empty() {
+                    if font.width_tracked(&candidate, t) > max_w && !line.is_empty() {
                         lines.push(std::mem::take(&mut line));
                         line = word.to_string();
                     } else {
@@ -505,13 +522,13 @@ impl Canvas<'_, '_> {
         // One-line text: shrink to fit (down to 60%), then cut with "...".
         let mut scale = scale;
         if !style.wrap {
-            let widest = lines.iter().map(|l| font.width(l)).fold(0.0, f32::max) * scale;
+            let widest = lines.iter().map(|l| font.width_tracked(l, t)).fold(0.0, f32::max) * scale;
             if widest > width && widest > 0.0 {
                 scale *= (width / widest).max(0.6);
             }
             let max_w = width / scale;
             for line in lines.iter_mut() {
-                *line = font.fit(line, max_w.max(1.0));
+                *line = font.fit(line, max_w.max(1.0), t);
             }
         }
         while lines.len() > 1 && lines.last().is_some_and(|l| l.is_empty()) {
@@ -528,7 +545,7 @@ impl Canvas<'_, '_> {
             if y + line_h > r[3] + line_h * 0.25 && style.wrap {
                 break;
             }
-            let w = font.width(&line) * scale;
+            let w = font.width_tracked(&line, t) * scale;
             let x = match align {
                 Align::Left => r[0],
                 Align::Centre => r[0] + (width - w) / 2.0,
@@ -539,13 +556,13 @@ impl Canvas<'_, '_> {
             let o = (1.2 * self.s).max(1.0);
             if style.outline {
                 for (dx, dy) in [(-o, 0.0), (o, 0.0), (0.0, -o), (0.0, o)] {
-                    font.draw_at(self.draw, &line, [at[0] + dx, at[1] + dy], sc, dark);
+                    font.draw_tracked(self.draw, &line, [at[0] + dx, at[1] + dy], sc, dark, t);
                 }
             }
             if style.shadow {
-                font.draw_at(self.draw, &line, [at[0] + o * 1.5, at[1] + o * 1.5], sc, dark);
+                font.draw_tracked(self.draw, &line, [at[0] + o * 1.5, at[1] + o * 1.5], sc, dark, t);
             }
-            font.draw_at(self.draw, &line, at, sc, colour);
+            font.draw_tracked(self.draw, &line, at, sc, colour, t);
             y += line_h;
         }
     }
@@ -629,6 +646,9 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
                 None => canvas.image(img, r, uv, tint),
             }
         }
+        if let Some(img) = view.node_images.get(&i) {
+            canvas.image(img, r, [0.0, 0.0, 1.0, 1.0], fade(ImColor32::WHITE, alpha));
+        }
         if let Some(bar) = &n.bar {
             let f = view.progress.get(&i).copied().unwrap_or(n.position).clamp(0.0, 1.0);
             if f > 0.0 {
@@ -662,6 +682,10 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
 
 /// The extra text boxes and images of a view, drawn over the layout.
 pub fn draw_extra(view: &View, canvas: &Canvas) {
+    for (r, colour) in &view.fills {
+        canvas.draw.add_rect(canvas.at(r[0], r[1]), canvas.at(r[2], r[3]), fade(*colour, canvas.alpha))
+            .filled(true).rounding(3.0 * canvas.s).build();
+    }
     for (r, img, uv) in &view.images {
         canvas.image(img, *r, *uv, ImColor32::WHITE);
     }

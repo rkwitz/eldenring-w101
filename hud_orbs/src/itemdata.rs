@@ -17,6 +17,8 @@ pub struct Weapon {
     pub requirements: [u32; 5],
     pub reinforce: u32,
     pub kind: &'static str,
+    /// The parts model (wp_a_<model>).
+    pub model: u32,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -28,6 +30,11 @@ pub struct Armour {
     /// Immunity, robustness, focus, vitality.
     pub resistance: [u32; 4],
     pub poise: f32,
+    /// The parts model and kind (equipModelCategory: 5 head, 2 body, 1 arms, 6 legs).
+    pub model: u32,
+    pub model_kind: u32,
+    /// invisibleFlag_SexVerNN bits: the `#NN#` meshes of all worn parts this piece hides.
+    pub hide: u128,
 }
 
 #[derive(Clone, Default)]
@@ -95,6 +102,7 @@ impl ItemData {
                         requirements: list(get("req")),
                         reinforce: num("rf") as u32,
                         kind,
+                        model: num("model") as u32,
                     });
                     data.icons.insert(('W', id), num("icon") as u32);
                 }
@@ -108,6 +116,10 @@ impl ItemData {
                         absorption: list(get("cut")),
                         resistance: list(get("res")),
                         poise: num("poise"),
+                        model: num("model") as u32,
+                        model_kind: num("mcat") as u32,
+                        hide: get("hide").split('.').filter_map(|n| n.parse::<u32>().ok()).filter(|n| *n < 128)
+                            .fold(0, |m, n| m | (1u128 << n)),
                     });
                     data.icons.insert(('P', id), num("icon") as u32);
                 }
@@ -174,6 +186,26 @@ impl ItemData {
             (key.0 == 'W').then(|| self.icons.get(&('W', key.1 - key.1 % 10000))).flatten()
         })?;
         Some(format!("@er/icons/{icon}.png"))
+    }
+
+    /// A weapon's parts model (wp_a_<model>), from its param ID (with or without upgrade / affinity).
+    pub fn weapon_model(&self, weapon_id: u32) -> Option<u32> {
+        let row = weapon_id - weapon_id % 100;
+        let w = self.weapons.get(&row).or_else(|| self.weapons.get(&(row - row % 10000)))?;
+        (w.model > 0).then_some(w.model)
+    }
+
+    /// An armour piece's parts file stem (e.g. "bd_m_1520") and hidden mesh groups.
+    pub fn armour_model(&self, protector_id: u32) -> Option<(String, u128)> {
+        let a = self.armour.get(&protector_id)?;
+        let prefix = match a.model_kind {
+            5 => "hd",
+            2 => "bd",
+            1 => "am",
+            6 => "lg",
+            _ => return None,
+        };
+        Some((format!("{prefix}_m_{:04}", a.model), a.hide))
     }
 
     pub fn spell(&self, goods_id: u32) -> Option<&Spell> {

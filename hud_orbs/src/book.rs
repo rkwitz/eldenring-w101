@@ -8,10 +8,12 @@
 //! left/right or the mouse wheel. The mouse works as in a menu: the book draws its own cursor and follows the system
 //! cursor, or DirectInput's mouse movement when Elden Ring keeps the system cursor locked.
 //!
-//! The Backpack's portrait window is a hole in the book: the book moves so that the window sits over the player and
-//! the camera can turn (right stick, or drag in the window). The World Map tab opens Elden Ring's own map and draws
-//! the book around it, the map showing through the page; the book comes back when the map closes, unless the player
-//! travelled (to a grace). While the book is open the game gets no other input (see input.rs).
+//! The Backpack's character window and the Character page's portrait show the player drawn from Elden Ring's own
+//! models by model.rs (standing, weapon in hand, whatever the character is doing in the world); the Backpack's
+//! turns with the right stick or by dragging. Turning to the World Map tab opens Elden Ring's own map and draws the
+//! book around it, the map showing through the page and nothing else of the game around the book; the book comes
+//! back when the map closes (or a book tab is clicked), unless the player travelled (to a grace). While the book is
+//! open the game gets no input at all, the mouse included (see input.rs).
 //!
 //! Quests: the quest event flags (quests.rs) fill the Quests page, and an NPC's talk flag shows its dialogue in a
 //! Wizard101-style box (then the flag is cleared).
@@ -29,6 +31,7 @@ use crate::game::{self, Sheet};
 use crate::input;
 use crate::itemdata::ItemData;
 use crate::layout::{self, Canvas, Layout, TextStyle, Textures, View};
+use crate::model::{Framing, Look, Renderer, Request};
 use crate::names::Names;
 use crate::pages::{self, Action, Data, Tab, TABS};
 use crate::quests::{Active, Quests, Talk};
@@ -39,8 +42,9 @@ const BOOK: [f32; 2] = [800.0, 600.0];
 const SCREEN: f32 = 768.0;
 /// How far the player has to move while Elden Ring's map is open to count as travel (map-chunk metres).
 const TRAVEL: f32 = 30.0;
-/// The point on the player the Backpack's portrait window centres on (metres above the feet).
-const PORTRAIT_HEIGHT: f32 = 0.95;
+/// Turning speed of the character picture: right stick (radians per second), mouse drag (radians per pixel).
+const TURN_STICK: f32 = 3.0;
+const TURN_MOUSE: f32 = 0.012;
 /// How often the quest flags are read.
 const QUEST_POLL: Duration = Duration::from_millis(250);
 /// How long after a talk press the quest flags are compared (the map's events update them on the same press).
@@ -109,10 +113,19 @@ pub struct Book {
     last_os: [f32; 2],
     di_buttons: u8,
     last_click: Option<Instant>,
-    /// Turning the camera by dragging in the portrait window.
+    /// Turning the character picture by dragging in its window.
     dragging: bool,
-    /// Where the book is moved to (screen pixels from centred), easing towards its target.
-    shift: [f32; 2],
+    /// The character pictures: renderer, their textures (id, size) per slot, the Backpack's turn, last turned.
+    model: Option<Renderer>,
+    model_textures: [Option<(hudhook::imgui::TextureId, [u32; 2])>; 2],
+    yaw: f32,
+    turned: Option<Instant>,
+    /// A book tab clicked while Elden Ring's map was open: shown once the map has closed.
+    after_map: Option<Tab>,
+    face_logged: bool,
+    flasks_logged: bool,
+    /// Per pages::ACHIEVEMENTS entry, read with the sheet.
+    achieved: Vec<Option<bool>>,
     last_frame: Instant,
 }
 
@@ -190,7 +203,14 @@ impl Book {
             di_buttons: 0,
             last_click: None,
             dragging: false,
-            shift: [0.0; 2],
+            model: None,
+            model_textures: [None, None],
+            yaw: 0.0,
+            turned: None,
+            after_map: None,
+            face_logged: false,
+            flasks_logged: false,
+            achieved: Vec::new(),
             last_frame: Instant::now(),
         }
     }
@@ -222,15 +242,91 @@ impl Book {
         self.items = ItemData::load(&folder.join("er"));
         self.quests = Quests::load(&folder.join("quests.tsv"));
         self.quest_flags = self.quests.flags();
+        // The game's parts folder: next to eldenring.exe (W101_PARTS overrides, for the preview).
+        let parts = std::env::var_os("W101_PARTS").map(PathBuf::from).or_else(|| {
+            std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("parts")))
+        });
+        self.model = parts.map(Renderer::new);
         tracing::info!("spellbook: {} page layouts, {} fonts, {} quests", self.layouts.len(), self.fonts.len(),
                        self.quests.quests.len());
     }
 
-    /// Loads queued art (render thread, before the frame).
+    /// Loads queued art and new character pictures (render thread, before the frame).
     pub fn load_art(&mut self, render: &mut dyn RenderContext) {
         if self.textures.pending() {
             let folder = self.folder.join("art");
             self.textures.load_wanted(&folder, render);
+        }
+        let Some(renderer) = self.model.as_ref() else { return };
+        for slot in 0..2 {
+            let Some(frame) = renderer.take(slot) else { continue };
+            let [w, h] = frame.size;
+            let id = match self.model_textures[slot] {
+                Some((id, size)) if size == frame.size => render.replace_texture(id, &frame.rgba, w, h).ok().map(|_| id),
+                _ => render.load_texture(&frame.rgba, w, h).ok(),
+            };
+            match id {
+                Some(id) => {
+                    self.model_textures[slot] = Some((id, frame.size));
+                    let name = [pages::MODEL_FULL, pages::MODEL_PORTRAIT][slot];
+                    self.textures.set(name, id, [w as f32, h as f32]);
+                }
+                None => tracing::warn!("character picture {slot}: texture upload failed"),
+            }
+        }
+    }
+
+    /// Waits until the character pictures asked for are drawn (the preview renderer).
+    #[allow(dead_code)]
+    pub fn preview_wait_models(&self) {
+        if let Some(r) = &self.model {
+            r.wait_idle(Duration::from_secs(20));
+        }
+    }
+
+    /// What the character looks like: worn armour, the weapon in the right hand, body type, hair.
+    fn look(&self, sheet: &Sheet) -> Look {
+        let e = &sheet.equipment;
+        let mut look = Look { male: sheet.gender != 0, hair_colour: [0.22, 0.15, 0.09], ..Look::default() };
+        for slot in 12..16 {
+            // 10000-10300 are the bare head, body, arms and legs.
+            if let Some((stem, hide)) = e[slot].try_into().ok().and_then(|id: u32| self.items.armour_model(id)) {
+                look.armour.push(stem);
+                look.hide |= hide;
+            }
+        }
+        let right = e[1 + 2 * (sheet.weapon_slots[1].min(2) as usize)];
+        look.weapon = u32::try_from(right).ok().and_then(|id| self.items.weapon_model(id));
+        look.hair = hair_model(&sheet.face);
+        look
+    }
+
+    /// Asks for the character pictures the page shows, at the size they are drawn.
+    fn request_models(&mut self, view: &View, page: Option<&Layout>, s: f32, dt: f32, pointer_turn: f32) {
+        let (Some(page), Some(sheet)) = (page, self.sheet.as_ref()) else { return };
+        let look = self.look(sheet);
+        if !self.face_logged && !sheet.face.is_empty() {
+            self.face_logged = true;
+            let hex: Vec<String> = sheet.face.iter().take(64).map(|b| format!("{b:02x}")).collect();
+            tracing::info!("character: gender {} face {} look {:?}", sheet.gender, hex.join(""), look);
+        }
+        let stick = input::right_x();
+        let turn = if stick.abs() > 0.2 { stick * TURN_STICK * dt } else { 0.0 } + pointer_turn;
+        if turn != 0.0 {
+            self.yaw = (self.yaw + turn) % std::f32::consts::TAU;
+            self.turned = Some(Instant::now());
+        }
+        let fast = self.turned.is_some_and(|t| t.elapsed() < Duration::from_millis(300));
+        let Some(renderer) = self.model.as_mut() else { return };
+        for (node, name) in &view.node_images {
+            let (slot, framing, yaw) = match name.as_str() {
+                pages::MODEL_FULL => (0, Framing::Full, self.yaw),
+                pages::MODEL_PORTRAIT => (1, Framing::Portrait, 0.3),
+                _ => continue,
+            };
+            let r = page.nodes[*node].rect;
+            let size = [((r[2] - r[0]) * s).round().max(8.0) as u32, ((r[3] - r[1]) * s).round().max(8.0) as u32];
+            renderer.request(slot, Request { look: look.clone(), framing, yaw, size, fast: fast && slot == 0 });
         }
     }
 
@@ -241,7 +337,7 @@ impl Book {
         self.map = MapState::Idle;
         self.set_open(true);
         self.opened_at = Instant::now() - Duration::from_secs(1);
-        self.select(tab, false);
+        self.tab = tab;
         self.state.reset();
         self.state.sub = sub;
     }
@@ -298,13 +394,21 @@ impl Book {
             return;
         }
         if !self.open {
-            input::set_camera_pass(false);
-            self.shift = [0.0; 2];
             self.dragging = false;
             if self.map == MapState::Open && cx.game.is_some() && cx.faded < 0.5 {
-                // Elden Ring's map is open: the book around it.
+                // Elden Ring's map is open: the book around it. A click on another book tab closes the map and
+                // shows that tab when the map has gone.
                 self.refresh(cx);
-                self.draw(ui, cx, &Pointer { pos: [-1.0e4; 2], ..Pointer::default() }, dt, true);
+                let (tab_hit, _, _) = self.draw(ui, cx, &pointer, dt, true);
+                if pointer.clicked && self.after_map.is_none() {
+                    let prefs = self.prefs.as_ref().expect("checked above");
+                    let name = tab_hit.map(|h| prefs.nodes[h].name.clone()).unwrap_or_default();
+                    if let Some((tab, _, _)) = TABS.iter().find(|t| t.1 == name && t.0 != Tab::Map) {
+                        tracing::info!("spellbook: leaving the map for {tab:?}");
+                        self.after_map = Some(*tab);
+                        input::press_map();
+                    }
+                }
             }
             let quiet = self.closed_at.is_none_or(|t| t.elapsed().as_secs_f32() > 0.25);
             if self.holding && quiet && input::held().0 == 0 {
@@ -374,17 +478,14 @@ impl Book {
             }
         }
 
-        let (tab_hit, page_hit, in_hole) = self.draw(ui, cx, &pointer, dt, false);
+        let (tab_hit, page_hit, in_model) = self.draw(ui, cx, &pointer, dt, false);
 
-        // Turning the camera: drag in the portrait window.
-        if pointer.clicked && in_hole {
+        // Turning the character picture: drag in its window.
+        if pointer.clicked && in_model {
             self.dragging = true;
         }
         if !pointer.down {
             self.dragging = false;
-        }
-        if self.dragging && pointer.delta[0] != 0.0 {
-            input::turn_camera(0.0, (pointer.delta[0] * 2.0) as i32);
         }
 
         if !pointer.clicked {
@@ -475,10 +576,28 @@ impl Book {
             settings,
             map_opening: matches!(self.map, MapState::Opening(_)),
             map_open: map_view,
+            achieved: &self.achieved,
         };
         if let Some(page) = self.layouts.get(page_name) {
             pages::bind(tab, page, &data, &mut self.state, &mut view);
         }
+        // The book, centred.
+        let [width, height] = ui.io().display_size;
+        let s = height / SCREEN;
+        let origin = [(width - BOOK[0] * s) / 2.0, (height - BOOK[1] * s) / 2.0];
+        let mouse = [(pointer.pos[0] - origin[0]) / s, (pointer.pos[1] - origin[1]) / s];
+
+        // The character pictures this page shows; dragging in the Backpack's turns it.
+        let model_node = view.node_images.iter().find(|(_, n)| n.as_str() == pages::MODEL_FULL).map(|(i, _)| *i);
+        let page_layout = self.layouts.get(page_name);
+        let in_model = model_node.zip(page_layout).is_some_and(|(i, l)| layout::inside(mouse, l.nodes[i].rect));
+        let drag = if self.dragging { pointer.delta[0] * TURN_MOUSE / s } else { 0.0 };
+        if !map_view {
+            let layouts = std::mem::take(&mut self.layouts);
+            self.request_models(&view, layouts.get(page_name), s, dt, drag);
+            self.layouts = layouts;
+        }
+
         let prefs = self.prefs.as_ref().expect("checked by frame");
         let mut prefs_view = View::default();
         if let Some(b) = prefs.find(TABS[tab_index(tab)].1) {
@@ -498,33 +617,18 @@ impl Book {
         wanted.extend(view.images.iter().map(|i| i.1.clone()));
         self.textures.want(wanted);
 
-        // Where the book goes: centred, or (Backpack) moved so that the portrait window is over the player.
-        let [width, height] = ui.io().display_size;
-        let s = height / SCREEN;
-        let base = [(width - BOOK[0] * s) / 2.0, (height - BOOK[1] * s) / 2.0];
-        let mut target = [0.0, 0.0];
-        let camera = tab == Tab::Backpack && view.hole.is_some() && !map_view;
-        if camera {
-            let h = view.hole.expect("checked");
-            let on_screen = cx.game.and_then(|g| g.player_on_screen([width, height], PORTRAIT_HEIGHT));
-            if let Some(p) = on_screen {
-                let centre = [base[0] + (h[0] + h[2]) / 2.0 * s, base[1] + (h[1] + h[3]) / 2.0 * s];
-                // Keep the whole book on the screen.
-                target = [(p[0] - centre[0]).clamp(-base[0], base[0]), (p[1] - centre[1]).clamp(-base[1], base[1])];
-            }
-        }
-        input::set_camera_pass(camera);
-        let ease = (dt * 10.0).min(1.0);
-        for i in 0..2 {
-            self.shift[i] += (target[i] - self.shift[i]) * ease;
-            if (target[i] - self.shift[i]).abs() < 0.5 {
-                self.shift[i] = target[i];
-            }
-        }
-        let origin = [base[0] + self.shift[0], base[1] + self.shift[1]];
-        let mouse = [(pointer.pos[0] - origin[0]) / s, (pointer.pos[1] - origin[1]) / s];
-
         let draw = ui.get_foreground_draw_list();
+        if let Some(h) = view.hole.filter(|_| map_view) {
+            // Only the map shows through the book: the rest of the screen around the book is covered.
+            let dark = ImColor32::from_rgba(12, 9, 6, 255);
+            let (p0, p1) = ([origin[0] + h[0] * s, origin[1] + h[1] * s], [origin[0] + h[2] * s, origin[1] + h[3] * s]);
+            for (a, b) in [([0.0, 0.0], [width, p0[1]]), ([0.0, p1[1]], [width, height]), ([0.0, p0[1]], [p0[0], p1[1]]),
+                           ([p1[0], p0[1]], [width, p1[1]])] {
+                if b[0] > a[0] && b[1] > a[1] {
+                    draw.add_rect(a, b, dark).filled(true).build();
+                }
+            }
+        }
         let canvas = Canvas {
             draw: &draw,
             textures: &self.textures,
@@ -571,9 +675,11 @@ impl Book {
                 self.draw_tip(&canvas, lines, mouse, [width, height]);
             }
             draw_cursor(&draw, pointer.pos);
+        } else if !view.hole.is_some_and(|h| layout::inside(mouse, h)) && layout::inside(mouse, [0.0, 0.0, BOOK[0], BOOK[1]]) {
+            // Over the book's frame around the map: the book's cursor, for its tabs.
+            draw_cursor(&draw, pointer.pos);
         }
-        let in_hole = view.hole.is_some_and(|h| layout::inside(mouse, h));
-        (tab_hit, page_hit, in_hole)
+        (tab_hit, page_hit, in_model)
     }
 
     /// A hover box beside the mouse: the title, then the lines, wrapped.
@@ -680,7 +786,6 @@ impl Book {
     /// The NPC dialogue box: A, Enter, Space or a click for the next line; B or Esc closes it.
     fn dialogue_frame(&mut self, ui: &Ui, pressed: u16, pointer: &Pointer) {
         input::set_book_open(true);
-        input::set_camera_pass(false);
         let Some(d) = self.dialogue.as_mut() else { return };
         let settled = d.opened.elapsed() > Duration::from_millis(250);
         let next = pressed & input::A != 0
@@ -757,12 +862,10 @@ impl Book {
             self.opened_at = Instant::now();
             self.state.page = 0;
             self.sheet_time = None;
-            self.shift = [0.0; 2];
         } else {
             self.holding = true;
             self.closed_at = Some(Instant::now());
             self.dragging = false;
-            input::set_camera_pass(false);
         }
         input::set_book_open(self.blocking());
     }
@@ -776,7 +879,8 @@ impl Book {
         }
         match tab {
             Tab::Close => self.set_open(false),
-            Tab::Map if activate => self.open_map_now(None),
+            // Turning to the World Map opens Elden Ring's map straight away.
+            Tab::Map if activate || self.open => self.open_map_now(None),
             _ => {}
         }
     }
@@ -817,6 +921,7 @@ impl Book {
         match self.map {
             MapState::Opening(_) if !cx.hud => self.map = MapState::Open,
             MapState::Opening(since) if since.elapsed().as_secs_f32() > 4.0 => {
+                self.after_map = None;
                 tracing::warn!("spellbook: Elden Ring's map didn't open");
                 self.map = MapState::Idle;
             }
@@ -824,9 +929,10 @@ impl Book {
                 self.map = MapState::Idle;
                 if self.travelled {
                     tracing::info!("spellbook: travelled from the map; the book stays closed");
+                    self.after_map = None;
                 } else {
                     self.set_open(true);
-                    self.tab = Tab::Map;
+                    self.tab = self.after_map.take().unwrap_or(Tab::Map);
                 }
             }
             _ => {}
@@ -841,8 +947,28 @@ impl Book {
         if self.sheet_time.is_none_or(|t| t.elapsed().as_secs_f32() > 0.5) {
             self.sheet = cx.game.and_then(|g| g.sheet());
             self.sheet_time = Some(Instant::now());
+            if let (false, Some(sheet)) = (self.flasks_logged, self.sheet.as_ref()) {
+                self.flasks_logged = true;
+                let flasks: Vec<String> = sheet.items.iter().chain(&sheet.key_items)
+                    .filter(|(id, _)| id >> 28 == 4 && (1000..1076).contains(&(id & 0x0FFF_FFFF)))
+                    .map(|(id, n)| format!("{}x{n}", id & 0x0FFF_FFFF))
+                    .collect();
+                tracing::info!("flask items (even = empty, odd = filled): {} (max {:?})", flasks.join(" "), sheet.flasks);
+            }
+            self.achieved = pages::ACHIEVEMENTS
+                .iter()
+                .map(|(_, _, flag)| if *flag == 0 || cx.game.is_none() { None } else { game::event_flag(*flag) })
+                .collect();
         }
     }
+}
+
+/// The hair model (hr_a_<n>) chosen in the character creator: FaceDataBuffer's model IDs come first
+/// (face, hair, eyes, ...), read here as the second little-endian u32. Unverified against a real save: the log
+/// line "character: ... face ..." shows the bytes; a value with no hair file just leaves the hair out.
+fn hair_model(face: &[u8]) -> Option<u32> {
+    let v = u32::from_le_bytes(face.get(4..8)?.try_into().ok()?);
+    (v < 1000).then_some(v)
 }
 
 /// The settings page's rows: (label, value).

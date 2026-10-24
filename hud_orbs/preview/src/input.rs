@@ -21,6 +21,5 @@ pub fn take_pressed() -> u16 { 0 }
 pub fn held() -> (u16, f32, f32) { (0, 0.0, 0.0) }
 pub fn pad_connected() -> bool { std::env::var("PREVIEW_PAD").is_ok() }
 pub fn press_map() {}
-pub fn set_camera_pass(_on: bool) {}
-pub fn turn_camera(_stick: f32, _mouse: i32) {}
+pub fn right_x() -> f32 { 0.0 }
 pub fn take_mouse() -> (i32, i32, i32, u8, bool) { (0, 0, 0, 0, false) }

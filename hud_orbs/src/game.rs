@@ -59,34 +59,6 @@ impl Game {
         read::<usize>(self.world_chr_man).and_then(|wcm| read::<usize>(wcm + PLAYER))
     }
 
-    /// Where a point `height` metres above the player's feet is on the screen (pixels of a `size` screen), through
-    /// the game camera (CSCamera's first perspective camera: rows right, up, forward, position; vertical fov in
-    /// radians), or None when it can't be read or is behind the camera.
-    pub fn player_on_screen(&self, size: [f32; 2], height: f32) -> Option<[f32; 2]> {
-        use eldenring::cs::{CSCam, CSCamera, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
-        use std::mem::offset_of;
-        let player = self.player()?;
-        let modules = read::<usize>(player + offset_of!(ChrIns, modules))?;
-        let physics = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics))?;
-        let [px, py, pz, _] = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position))?;
-        let camera = from_singleton::static_of::<CSCamera>()?;
-        let camera = read::<usize>(camera.as_ptr() as usize)?;
-        let cam = read::<usize>(camera + offset_of!(CSCamera, pers_cam_1))?;
-        let m = read::<[[f32; 4]; 4]>(cam + offset_of!(CSCam, matrix))?;
-        let fov = read::<f32>(cam + offset_of!(CSCam, fov))?;
-        let d = [px - m[3][0], py + height - m[3][1], pz - m[3][2]];
-        let dot = |r: [f32; 4]| d[0] * r[0] + d[1] * r[1] + d[2] * r[2];
-        let (x, y, z) = (dot(m[0]), dot(m[1]), dot(m[2]));
-        if !(z > 0.1) || !(0.1..3.0).contains(&fov) {
-            return None;
-        }
-        let t = (fov / 2.0).tan();
-        let aspect = size[0] / size[1];
-        let sx = (1.0 + x / (z * t * aspect)) / 2.0 * size[0];
-        let sy = (1.0 - y / (z * t)) / 2.0 * size[1];
-        (sx.is_finite() && sy.is_finite()).then_some([sx, sy])
-    }
-
     /// The player's character sheet for the spellbook, from PlayerGameData; None without a character.
     pub fn sheet(&self) -> Option<Sheet> {
         use eldenring::cs::{EquipInventoryDataListEntry, EquipMagicData, PlayerGameData};
@@ -159,6 +131,10 @@ impl Game {
                 read::<u8>(pgd + offset_of!(PlayerGameData, max_fp_flask)).unwrap_or(0),
             ],
             magic_slots: read::<u8>(pgd + offset_of!(PlayerGameData, unlocked_magic_slots)).unwrap_or(0),
+            weapon_slots: read::<[u32; 2]>(pgd + offset_of!(PlayerGameData, equipment.chr_asm.equipment.selected_slots))
+                .unwrap_or([0; 2]),
+            gender: read::<u8>(pgd + offset_of!(PlayerGameData, gender)).unwrap_or(1),
+            face: read_bytes(pgd + offset_of!(PlayerGameData, face_data.face_data_buffer.buffer), 276).unwrap_or_default(),
             equipment,
             spells,
             items,

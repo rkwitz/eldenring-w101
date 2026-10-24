@@ -162,7 +162,7 @@ class Converter:
         if not m:
             return None
         self.fonts.add(m.group(1))
-        return m.group(1), float(font.findtext("m_fScale") or 1)
+        return m.group(1), float(font.findtext("m_fScale") or 1), int(font.findtext("m_nKerningAdjust") or 0)
 
     def page(self, root):
         lines = []
@@ -248,6 +248,8 @@ class Converter:
         if text is not None or label:
             if font:
                 fields["font"], fields["fs"] = font[0], f"{font[1]:.4g}"
+                if font[2]:
+                    fields["ka"] = str(font[2])  # extra pen advance per glyph, font pixels
             if style is not None:
                 fields["col"] = colour(style.findtext("m_Color"), "FF000000")
                 fields["hcol"] = colour(style.findtext("m_HighColor"))

@@ -3,6 +3,7 @@
 //! turns imgui's draw lists into an image.
 //!
 //! Usage: cargo run --release -- <w101_orbs folder (with book/)> <out folder> [width height]
+//! (W101_PARTS = a folder of decompressed Elden Ring parts files, for the character pictures.)
 
 #![allow(dead_code)]
 
@@ -24,6 +25,8 @@ mod sheet;
 mod itemdata;
 #[path = "../../src/quests.rs"]
 mod quests;
+#[path = "../../src/model.rs"]
+mod model;
 mod input;
 mod game;
 
@@ -43,6 +46,12 @@ impl hudhook::RenderContext for Render {
         let image = RgbaImage::from_raw(width, height, data.to_vec()).ok_or("bad texture size")?;
         self.textures.push(image);
         Ok(TextureId::new(self.textures.len()))
+    }
+
+    fn replace_texture(&mut self, texture_id: TextureId, data: &[u8], width: u32, height: u32) -> Result<(), String> {
+        let image = RgbaImage::from_raw(width, height, data.to_vec()).ok_or("bad texture size")?;
+        self.textures[texture_id.id() - 1] = image;
+        Ok(())
     }
 }
 
@@ -207,6 +216,9 @@ fn main() {
                 settings_path: Path::new("/tmp/book_preview_settings.ini"),
             };
             book.frame(ui, &mut cx);
+            if frame == 1 {
+                book.preview_wait_models();
+            }
             let draw_data = ctx.render();
             if frame == 3 {
                 let mut canvas = backdrop.clone().map(|b| image::imageops::resize(&b, width as u32, height as u32,

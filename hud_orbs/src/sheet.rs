@@ -43,6 +43,12 @@ pub struct Sheet {
     pub magic_slots: u8,
     /// Param IDs by ChrAsm slot: weapons L1 R1 L2 R2 L3 R3, arrows/bolts 6-11, armour 12-15, talismans 17-20.
     pub equipment: [i32; 22],
+    /// Which of the three weapons in each hand is held (0-2): left, right.
+    pub weapon_slots: [u32; 2],
+    /// 1 = body type A (the male model), 0 = B.
+    pub gender: u8,
+    /// FaceDataBuffer.buffer (the character creator's choices).
+    pub face: Vec<u8>,
     /// Memorised spells (magic param IDs, -1 = empty).
     pub spells: [i32; 14],
     /// (item ID with category bits, quantity) of the normal and key item inventories.

@@ -49,17 +49,25 @@ WEAPON_KINDS = {
     94: "Great Katana", 95: "Beast Claw",
 }
 
-# Spell schools: (goodsType, sortGroupId) -> (Elden Ring school, Wizard101 school tab). goodsType 5 / 17 =
-# sorcery (attack / support), 16 / 18 = incantation; sortGroupId is the in-game sort group, one per school.
+# Spell classes: (goodsType, sortGroupId) -> (Elden Ring's school, the book's tab). goodsType 5 / 17 = sorcery
+# (attack / support), 16 / 18 = incantation; sortGroupId is the in-game sort group, one per school. The tabs are
+# Elden Ring's own classes (pages.rs DECK_TABS gives each a Wizard101 school symbol): Glintstone, Carian (with crystal
+# and cold), Gravity (with primeval), Night, Death (Destined Death: death sorceries, Godskin black flame and Maliketh's
+# bestial incantations; with Mohg's blood and Malenia's rot), Fire (fire monks, giants, Messmer, and the magma
+# sorceries, which share the night sorceries' sort group), Golden Order (with Two Fingers, Erdtree, Miquella), Dragon
+# Cult, Frenzied Flame, Dragon Communion.
 SCHOOLS = {
-    ("S", 10): ("Glintstone", "Myth"), ("S", 20): ("Carian", "Myth"), ("S", 30): ("Night and Magma", "Astral"),
-    ("S", 40): ("Crystal and Cold", "Ice"), ("S", 50): ("Gravity and Primeval", "Balance"), ("S", 60): ("Death", "Death"),
-    ("I", 10): ("Two Fingers", "Life"), ("I", 20): ("Golden Order", "Life"), ("I", 25): ("Miquella", "Life"),
-    ("I", 30): ("Dragon Cult", "Storm"), ("I", 35): ("Erdtree", "Life"), ("I", 40): ("Fire Monk and Giants", "Fire"),
+    ("S", 10): ("Glintstone", "Glintstone"), ("S", 20): ("Carian", "Carian"), ("S", 30): ("Night", "Night"),
+    ("S", 40): ("Crystal and Cold", "Carian"), ("S", 50): ("Gravity and Primeval", "Gravity"), ("S", 60): ("Death", "Death"),
+    ("I", 10): ("Two Fingers", "Golden Order"), ("I", 20): ("Golden Order", "Golden Order"),
+    ("I", 25): ("Miquella", "Golden Order"), ("I", 30): ("Dragon Cult", "Dragon Cult"),
+    ("I", 35): ("Erdtree", "Golden Order"), ("I", 40): ("Fire Monk and Giants", "Fire"),
     ("I", 45): ("Messmer's Flame", "Fire"), ("I", 50): ("Godskin and Bestial", "Death"),
-    ("I", 60): ("Blood and Rot", "Death"), ("I", 70): ("Frenzied Flame", "Astral"),
-    ("I", 80): ("Dragon Communion", "Balance"),
+    ("I", 60): ("Blood and Rot", "Death"), ("I", 70): ("Frenzied Flame", "Frenzied Flame"),
+    ("I", 80): ("Dragon Communion", "Dragon Communion"),
 }
+# Magma Shot, Gelmir's Fury, Roiling Magma, Rykard's Rancor (sort group 30 with the night sorceries).
+MAGMA = {4800, 4810, 4820, 4830}
 
 TEXT_TABLES = {"WeaponInfo": "W", "ProtectorInfo": "P", "AccessoryInfo": "A", "GoodsInfo": "G", "GemInfo": "E",
                "MagicInfo": "M"}
@@ -86,6 +94,7 @@ def stats(regulation, defs, msgbnd, out):
                                                 "correctLuck")]),
             "req": fmt([w[k] for k in ("properStrength", "properAgility", "properMagic", "properFaith", "properLuck")]),
             "rf": w["reinforceTypeId"], "kind": WEAPON_KINDS.get(w["wepType"], ""),
+            "model": w["equipModelId"],
         }))
     for row_id, r in reg.param("ReinforceParamWeapon").items():
         lines.append(("R", row_id, {
@@ -105,6 +114,9 @@ def stats(regulation, defs, msgbnd, out):
             "res": fmt([p["resistPoison"] + p["resistDisease"], p["resistBlood"] + p["resistFreeze"],
                         p["resistSleep"] + p["resistMadness"], p["resistCurse"]]),
             "poise": round(p["toughnessCorrectRate"] * 1000, 1),
+            # The parts file (parts\\<hd|bd|am|lg>_<m|f>_<model>) and the "#NN#" meshes of all worn parts it hides.
+            "model": p["equipModelId"], "mcat": p["equipModelCategory"],
+            "hide": ".".join(str(n) for n in range(96) if p.get(f"invisibleFlag_SexVer{n:02}")),
         }))
     for row_id, a in reg.param("EquipParamAccessory").items():
         if a["iconId"] > 0:
@@ -121,7 +133,9 @@ def stats(regulation, defs, msgbnd, out):
         m = magic.get(row_id)
         if kind and m:
             er_school, tab = SCHOOLS.get((kind, g["sortGroupId"]), ("Sorcery" if kind == "S" else "Incantation",
-                                                                    "Balance"))
+                                                                    "Glintstone" if kind == "S" else "Golden Order"))
+            if row_id in MAGMA:
+                er_school, tab = "Magma", "Fire"
             lines.append(("M", row_id, {
                 "fp": m["mp"], "slots": m["slotLength"],
                 "req": fmt([m["requirementIntellect"], m["requirementFaith"], m["requirementLuck"]]),

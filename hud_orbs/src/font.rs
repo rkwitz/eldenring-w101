@@ -18,7 +18,8 @@ pub struct BitmapFont {
 
 struct Glyph {
     page: usize,
-    /// Left, top, right (exclusive) and bottom (inclusive) of the cell in its page, with a 1-pixel margin each side.
+    /// Left, top, right and bottom (exclusive; rows of cells share their edges) of the cell in its page, with a
+    /// 1-pixel margin each side.
     cell: [f32; 4],
     a: f32,
     b: f32,
@@ -41,7 +42,7 @@ impl BitmapFont {
                     .map_err(|e| format!("{file}: {e:?}"))?;
                 font.pages.push((texture, [image.width() as f32, image.height() as f32]));
             } else if tag.starts_with("Glyph ") {
-                let cell = [number("Left"), number("Top"), number("Right"), number("Bottom") + 1].map(|v| v as f32);
+                let cell = [number("Left"), number("Top"), number("Right"), number("Bottom")].map(|v| v as f32);
                 let id = number("ID") as u32;
                 if (32..127).contains(&id) {
                     font.line_height = font.line_height.max(cell[3] - cell[1]);
@@ -65,9 +66,9 @@ impl BitmapFont {
         Ok(font)
     }
 
-    /// Pen advance of each character (ABC width plus kerning with the next one), in font pixels. Characters the
-    /// font lacks are drawn as '?'.
-    fn advances(&self, text: &str) -> Vec<(u32, f32)> {
+    /// Pen advance of each character (ABC width plus kerning with the next one, plus the control's
+    /// m_nKerningAdjust `tracking`), in font pixels. Characters the font lacks are drawn as '?'.
+    fn advances(&self, text: &str, tracking: f32) -> Vec<(u32, f32)> {
         let chars: Vec<u32> = text
             .chars()
             .map(|c| c as u32)
@@ -77,13 +78,17 @@ impl BitmapFont {
         chars.iter().enumerate().map(|(i, c)| {
             let g = &self.glyphs[c];
             let kern = chars.get(i + 1).and_then(|next| self.kerning.get(&(*c, *next))).copied().unwrap_or(0.0);
-            (*c, g.a + g.b + g.c + kern)
+            (*c, g.a + g.b + g.c + kern + tracking)
         }).collect()
     }
 
     /// Width of `text` in font pixels.
     pub fn width(&self, text: &str) -> f32 {
-        self.advances(text).iter().map(|(_, a)| a).sum()
+        self.width_tracked(text, 0.0)
+    }
+
+    pub fn width_tracked(&self, text: &str, tracking: f32) -> f32 {
+        self.advances(text, tracking).iter().map(|(_, a)| a).sum()
     }
 
     /// `text` centred on `centre`, `scale` screen pixels per font pixel.
@@ -95,9 +100,14 @@ impl BitmapFont {
 
     /// `text` with its line's top-left corner at `top_left`.
     pub fn draw_at(&self, draw: &DrawListMut, text: &str, top_left: [f32; 2], scale: f32, colour: ImColor32) {
+        self.draw_tracked(draw, text, top_left, scale, colour, 0.0);
+    }
+
+    pub fn draw_tracked(&self, draw: &DrawListMut, text: &str, top_left: [f32; 2], scale: f32, colour: ImColor32,
+                        tracking: f32) {
         let mut pen = top_left[0];
         let top = top_left[1];
-        for (c, advance) in self.advances(text) {
+        for (c, advance) in self.advances(text, tracking) {
             let g = &self.glyphs[&c];
             let (texture, [w, h]) = self.pages[g.page];
             let [left, cell_top, right, bottom] = g.cell;
@@ -112,15 +122,15 @@ impl BitmapFont {
     }
 
     /// `text` shortened with "..." so that it is at most `max_width` font pixels wide.
-    pub fn fit(&self, text: &str, max_width: f32) -> String {
-        if self.width(text) <= max_width {
+    pub fn fit(&self, text: &str, max_width: f32, tracking: f32) -> String {
+        if self.width_tracked(text, tracking) <= max_width {
             return text.to_string();
         }
         let mut chars: Vec<char> = text.chars().collect();
         while !chars.is_empty() {
             chars.pop();
             let candidate = format!("{}...", chars.iter().collect::<String>().trim_end());
-            if self.width(&candidate) <= max_width {
+            if self.width_tracked(&candidate, tracking) <= max_width {
                 return candidate;
             }
         }

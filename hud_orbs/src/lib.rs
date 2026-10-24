@@ -16,6 +16,7 @@ mod input;
 mod itemdata;
 mod layout;
 mod loadscreen;
+mod model;
 mod names;
 mod pages;
 mod quests;
