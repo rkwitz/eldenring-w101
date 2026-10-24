@@ -16,7 +16,11 @@ python emevd.py --rattlebones-boss m60_42_36_00.emevd out.emevd
 python emevd.py --interiors m60_42_36_00.emevd out.emevd
   door warps of Lady Blackhope's tower and Fear of Fire's house (see interior_doors; msb_add_interiors.py).
 python emevd.py --bosses m60_42_36_00.emevd out.emevd
-  all door warps (rideable up to the door, load-screen flag) and all four bosses (see all_bosses; msb_add_boss.py).
+  all door warps (rideable up to the door, load-screen flag, camera turned) and all four bosses (see all_bosses).
+python emevd.py --no-leaves common.emevd|m60.emevd out.emevd
+  every falling-leaf source of those events off, in place (see no_leaves).
+python emevd.py --midday m60_42_36_00.emevd out.emevd [first_id second_id]
+  always 12:00 (see midday; m60.emevd takes ids 1060002990 1060002991).
 """
 import struct
 class Emevd:
@@ -147,6 +151,14 @@ RATTLEBONES_DOORS = (  # (event id, trigger region, arrival region[, character t
 
 
 LOAD_SCREEN_FLAG = 1042366900  # set right before every door warp; the HUD overlay shows its load screen and clears it
+STREET_YAW = -27.011917  # AEG030_518_9000 (the street) and every room part are turned by this about y
+ARRIVAL_YAW = {  # arrival region -> its rotation y in m60_42_36_00 (msb_add_room / _garden / _interiors facings)
+    1042362801: STREET_YAW, 1042362803: STREET_YAW + 180.0,  # Rattlebones in (room +z) / out (street -z)
+    1042362805: STREET_YAW, 1042362807: STREET_YAW + 88.9,  # garden in / out
+    1042362817: STREET_YAW, 1042362819: STREET_YAW,  # Lady Blackhope in / out (street +z)
+    1042362821: STREET_YAW + 180.0, 1042362823: STREET_YAW + 180.0,  # Fear of Fire in (room -z) / out
+}
+CAMERA_PITCH = 5.0  # as common event 950 after its warp
 
 
 def rattlebones_doors(d, doors=RATTLEBONES_DOORS):
@@ -156,7 +168,12 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS):
     the warp waits until he is off), then set LOAD_SCREEN_FLAG (2003[66]) for the HUD's load screen, move them to the
     arrival region (2004[41] with target type 1 = region and dummy poly -1, as common event 950 places the player for
     the Melina cutscene in the same map, no loading screen) and restart (1000[4] with 1), like Wizard101's door
-    activators. A door with a 4th entry (a boss's entity id) only works while that character is dead (4[0] dead in the
+    activators. After the warp, 2008[4] SetCameraAngle (pitch, world yaw; as common event 950 does after its warp)
+    turns the camera to look where the arrival region faces (ARRIVAL_YAW): the warp turns the player but not the
+    camera, and ER moves the player relative to the camera, so holding forward through a door carried them straight
+    on into the other side's trigger and back (Lady Blackhope's and Fear of Fire's doors, whose rooms face the
+    other way from their street doors: the "glitching" exit, 2026-10-24). A door with a 4th entry (a boss's entity
+    id) only works while that character is dead (4[0] dead in the
     same condition group 1): the player can't leave the boss room until the boss is beaten (he is back after a rest,
     and so is the lock). Existing events with these ids are replaced, so running it again is harmless."""
     e = Emevd(d)
@@ -177,8 +194,10 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS):
             _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
             _i(2003, 66, "<BxxxIBxxx", 0, LOAD_SCREEN_FLAG, 1),  # load screen flag on (the HUD clears it)
             _i(2004, 41, "<IIIi", 10000, 1, arrival, -1),  # warp to region
-            _i(1000, 4, "<Bxxx", 1),  # End Unconditionally: restart
         ]
+        if arrival in ARRIVAL_YAW:  # camera behind the player, looking where the arrival faces
+            body.append(_i(2008, 4, "<ff", CAMERA_PITCH, (ARRIVAL_YAW[arrival] + 180.0) % 360.0 - 180.0))
+        body.append(_i(1000, 4, "<Bxxx", 1))  # End Unconditionally: restart
         events.append({"id": event_id, "rest": 0, "pars": [], "ins": body})
     return build(e, events)
 
@@ -364,6 +383,77 @@ def no_leaf_gusts(d, dummy=NO_ENTITY):
     return bytes(out)
 
 
+LEAF_SFX = (806800, 806810)  # falling-leaf flipbooks AEG094_900_9900 (entity 1060001500) carries
+GUST_WIND_SFX = 808004  # the strong wind of the gusts (2006[06] Set Wind SFX; -1 = none)
+AMBIENT_SPEFFECTS = (4200, 4201, 4202)  # player SpEffects of the gusts (4200/4201) and of Limgrave north by day (4202)
+
+
+def no_leaves(d, dummy=NO_ENTITY):
+    """common.emevd or m60.emevd with every falling-leaf source of their events gone, in place (same file size; skip
+    counts untouched):
+      2006[04] CreateAssetFollowingSFX of LEAF_SFX on 1060001500 -> entity `dummy` (no SFX)
+      2006[06] SetWindSFX 808004 -> -1
+      2004[08] SetSpEffect AMBIENT_SPEFFECTS on the player (10000 / 20000) -> entity `dummy`
+    Sources: common event 1040 (the gusts: between 0:00 and 3:30 in m60, wind 808004, leaves 806800, SpEffects
+    4200/4201; no_leaf_gusts only did its SFX) and m60.emevd, which repeats that event as 1060002500 (not started),
+    keeps leaves 806810 on 1060001500 whenever flag 9988 is on (1060002510, started from its event 0) and gives the
+    player SpEffect 4202 in region group 1060002410 "緑北" (Limgrave north) from 6:00 to 18:00 in most weathers
+    (1060002410; its siblings 1060002420 / 2430 are Liurnia's fireflies and the mountains' particles, left alone).
+    Returns (bytes, number of patched instructions)."""
+    e = Emevd(d)
+    out, hits = bytearray(d), 0
+    for ev in e.events:
+        for i in ev["ins"]:
+            key, a = (i["bank"], i["id"]), i["args"]
+            if key == (2006, 4) and struct.unpack_from("<i", a, 8)[0] in LEAF_SFX:
+                struct.pack_into("<I", out, i["argoff"], dummy)
+            elif key == (2006, 6) and struct.unpack_from("<i", a)[0] == GUST_WIND_SFX:
+                struct.pack_into("<i", out, i["argoff"], -1)
+            elif key == (2004, 8) and struct.unpack_from("<Ii", a) in {(p, s) for p in (10000, 20000)
+                                                                          for s in AMBIENT_SPEFFECTS}:
+                struct.pack_into("<I", out, i["argoff"], dummy)
+            else:
+                continue
+            hits += 1
+    return bytes(out), hits
+
+
+MIDDAY_EVENT, REFREEZE_EVENT = 1042362992, 1042362993  # in m60_42_36_00; m60.emevd gets 1060002990 / 1060002991
+MIDDAY = (12, 0, 0)
+
+
+def midday(d, event_ids=(MIDDAY_EVENT, REFREEZE_EVENT)):
+    """Always midday (Wizard101 has no day and night). Vanilla holds the time in the Stranded Graveyard this way (m18
+    event 18000021: 2001[04] SetCurrentTime 10:30 then 2001[05] FreezeTime until the First Step door opens). Two new
+    events, restarting on rest (so a rest at the grace sets it again), started from the top of event 0:
+      first:  unfreeze, SetCurrentTime(12:00, no fade, no clock), freeze; then wait until the time is outside
+              11:30-12:30 (1[05] TimeOfDayInRange 0:00-11:29:59 OR 12:30-23:59:59, e.g. after "pass time" at a grace
+              or something unfreezing it) and restart
+      second: freeze again every 10 s (common events 702 / 3040 unfreeze time in their own situations)
+    Rerunning replaces them."""
+    e = Emevd(d)
+    events = events_of(e)
+    first, second = event_ids
+    for event_id in (second, first):
+        _start_once(events, event_id)
+    h, m, s = MIDDAY
+    events.append({"id": first, "rest": 1, "pars": [], "ins": [
+        _i(2001, 5, "<Bxxx", 0),
+        _i(2001, 4, "<BBBBBBxxfff", h, m, s, 0, 0, 0, 0.0, 0.0, 0.0),
+        _i(2001, 5, "<Bxxx", 1),
+        _i(1, 5, "<bBBBBBBx", -1, 0, 0, 0, 11, 29, 59),
+        _i(1, 5, "<bBBBBBBx", -1, 12, 30, 0, 23, 59, 59),
+        _i(0, 0, "<bBbx", 0, 1, -1),
+        _i(1000, 4, "<Bxxx", 1),
+    ]})
+    events.append({"id": second, "rest": 1, "pars": [], "ins": [
+        _i(2001, 5, "<Bxxx", 1),
+        _i(1001, 0, "<f", 10.0),
+        _i(1000, 4, "<Bxxx", 1),
+    ]})
+    return build(e, events)
+
+
 def build(e, events):
     """EMEVD bytes from `events` [{id, rest, ins: [{bank, id, args, layer}], pars: [(index, target, source, size, unk)]}]
     with the header flags, linked files and strings of the parsed file `e` (no layers)."""
@@ -418,6 +508,15 @@ if __name__ == "__main__":
         sys.exit()
     if sys.argv[1] == "--rattlebones-boss":  # emevd.py --rattlebones-boss in.emevd out.emevd (msb_add_boss.py)
         open(sys.argv[3], "wb").write(boss_bar(open(sys.argv[2], "rb").read()))
+        sys.exit()
+    if sys.argv[1] == "--no-leaves":  # emevd.py --no-leaves common.emevd|m60.emevd out.emevd
+        out, hits = no_leaves(open(sys.argv[2], "rb").read())
+        print(f"{hits} instructions patched")
+        open(sys.argv[3], "wb").write(out)
+        sys.exit()
+    if sys.argv[1] == "--midday":  # emevd.py --midday m60_42_36_00.emevd out.emevd [first_id second_id]
+        ids = tuple(int(x) for x in sys.argv[4:6]) or (MIDDAY_EVENT, REFREEZE_EVENT)
+        open(sys.argv[3], "wb").write(midday(open(sys.argv[2], "rb").read(), ids))
         sys.exit()
     if sys.argv[1] == "--bosses":  # emevd.py --bosses in.emevd out.emevd (msb_add_boss.py, msb_add_indoor.py)
         open(sys.argv[3], "wb").write(all_bosses(open(sys.argv[2], "rb").read()))

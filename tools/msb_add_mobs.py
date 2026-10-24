@@ -5,7 +5,8 @@ Ryan's picks (2026-10-22, "subject to change later"); Rattlebones (Giant Skeleto
   Lost Soul (Ghost-Blue, 4 groups)      -> Spirit Jellyfish   c4180  Think 41800000 / NpcParam 41800010  (unverified)
   Skeletal Pirate (4 groups)            -> Skeleton, curved swords c3500  35004000 / 35004010        (unverified;
                                            same chr as the vanilla Limgrave skeletons 35000000/35000010 in m60_42_35)
-  Dark Sprite (2 groups)                -> Winged Misbegotten c3450  34501000 / 34501012             (unverified)
+  Dark Sprite (2 groups)                -> Winged Misbegotten c3450  34500000 / 34500012             (2026-10-24: the
+                                           patrolling pair of vanilla Limgrave; 34501000 never patrols in vanilla)
 "Unverified" = rows picked by Smithbox row names, not seen on a vanilla enemy and not read from regulation.bin.
 
 Positions: W101 path nodes through the street part's current transform, snapped to the street surface of the OBJ
@@ -45,7 +46,7 @@ from msb_floor import _list, _set_name, entry_name, read_msb, write_msb  # noqa:
 MOBS = {  # W101 mob template -> (model, Think, NpcParam)
     "Ghost-Blue-L01": ("c4180", 41800000, 41800010),
     "Skeleton-Pirate-L01": ("c3500", 35004000, 35004010),
-    "Sprite-Dark-L01": ("c3450", 34501000, 34501012),
+    "Sprite-Dark-L01": ("c3450", 34500000, 34500012),
 }
 GHOST_PATH = "Path Ghost 01"  # the route msb_add_ghost.py gave the ghost
 FIRST_REGION_ID = 9100
@@ -177,8 +178,28 @@ def add_mobs(raw, template_raw, pathing, tris, one_each=False):
     return write_msb(header, lists), report
 
 
+def set_rows(raw):
+    """Map bytes with every placed mob's Think / NpcParam set from MOBS (by model; entries named <model>_90NN), so a
+    row change reaches mobs that are already placed: python msb_add_mobs.py --rows map.msb.dcx out.msb.dcx"""
+    header, lists = read_msb(raw)
+    rows = {model: (think, npc) for model, think, npc in MOBS.values()}
+    parts = _list(lists, "PARTS_PARAM_ST").entries
+    for k, e in enumerate(parts):
+        name = entry_name(e)
+        if u32(e, 0x0C) == ENEMY and name[:5] in rows and name[5:8] == "_90":
+            e = bytearray(e)
+            struct.pack_into("<ii", e, q(e, 0x68) + THINK, *rows[name[:5]])
+            parts[k] = bytes(e)
+            print(name, *rows[name[:5]])
+    return write_msb(header, lists)
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if "--rows" in sys.argv:
+        from msb_add_garden import run
+        sys.argv[1:] = args
+        return run(set_rows)
     src, pathing, obj, template, dst = args
     data = Path(src).read_bytes()
     assert data[:4] == b"DCX\0" and data[0x28:0x2C] == b"DFLT", "expected a DFLT-compressed map"
