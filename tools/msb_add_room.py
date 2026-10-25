@@ -39,12 +39,14 @@ ROOM_ORIGIN = (TOWER_DOOR[0], -ROOM_DEPTH, TOWER_DOOR[2])  # room centre on its 
 OTHER = 0xFFFFFFFF
 SPHERE = 2
 TEMPLATE_REGION_ENTITY = 1042362980  # vanilla Other sphere (Melina cutscene player position), copied for ours
-# (name, frame, FLVER position, facing: 0 = the frame's +z, 180 = its -z, radius, entity id, region id at 0x2C)
+# (name, frame, FLVER position, facing, radius, entity id, region id at 0x2C). Facing: rotation y = frame rotation +
+# facing; in game a region turned by frame + 0 faces the frame's -z (Ryan, 2026-10-25: the arrivals faced the door they
+# came through), so 0 = towards -z and 180 = towards +z.
 REGIONS = [
     ("W101_Rattlebones_door", "street", (-164.9, 1.0, 192.0), 0.0, 1.5, 1042362800, 9200),
-    ("W101_Rattlebones_in", "room", (-0.26, 0.05, -10.3), 0.0, 0.5, 1042362801, 9201),
+    ("W101_Rattlebones_in", "room", (-0.26, 0.05, -10.3), 180.0, 0.5, 1042362801, 9201),
     ("W101_Rattlebones_exit", "room", (0.0, 0.6, -12.6), 0.0, 1.2, 1042362802, 9202),
-    ("W101_Rattlebones_out", "street", (-165.03, 0.35, 187.68), 180.0, 0.5, 1042362803, 9203),
+    ("W101_Rattlebones_out", "street", (-165.03, 0.35, 187.68), 0.0, 0.5, 1042362803, 9203),
 ]
 
 

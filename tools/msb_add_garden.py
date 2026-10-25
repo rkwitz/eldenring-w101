@@ -7,8 +7,8 @@ Activator", sphere at W101 (-29588.0, 19501.9, 161.3) r 1.63) loads zone WC_Unic
 maze, geometry WC_Z06I02_Life_Hedge_Maze.nif) at "Target (Street1 Hedgemaze Entrance)" (600.7, -3195.2), facing into
 the garden. The garden's own door ("TeleportVol_Teleport (Hedgemaze Street1 Exit)", (607.4, -3574.9) r 2.19) puts you
 back on the street at "Target location (Street1 Hedgemaze Exit)" (-29200.8, 19500.0), 3.9 m east of the door, facing
-away from it. Here the garden sits GARDEN_DEPTH m under the street door, turned like the street, with its door right
-under the street's, and the events move the player between Other-type regions as the Rattlebones doors do
+away from it. Here the garden sits at road level north-west of the street (GARDEN_ORIGIN), turned like the street,
+and the events move the player between Other-type regions as the Rattlebones doors do
 (emevd.rattlebones_doors):
 
   W101_Garden_door  sphere r 2.0 at the street's double door        -> W101_Garden_in
@@ -49,20 +49,26 @@ STREET, STREET_MODEL = "AEG030_518_9000", "AEG030_518"
 GARDEN, GARDEN_MODEL = "AEG030_555_9000", "AEG030_555"
 WINDOW, WINDOW_MODEL = "AEG030_529_9000", "AEG030_529"
 PART_ID = 9000  # part header 0x08
-GARDEN_DEPTH = 50.0  # m under the street's road surface (blender_build_garden.CLIP_TOP keeps the garden below it)
 STREET_DOOR = (-295.88, 1.62, 195.02)  # street FLVER frame: the W101 hedge-maze door activator
 GARDEN_DOOR = (6.074, 1.62, -35.75)  # garden FLVER frame: its exit door volume
-GARDEN_ORIGIN = (STREET_DOOR[0] - GARDEN_DOOR[0], -GARDEN_DEPTH, STREET_DOOR[2] - GARDEN_DOOR[2])  # street frame
+# Street frame. Until 2026-10-25 the garden sat 50 m under the street door (GARDEN_DEPTH), where Ryan could see up
+# through the underside of the street from inside it. Now it is at road level (garden floor = street floor), world
+# (-340, 94, 100) in tile 41_36's half nearest ours, north-west of the street over the beach: checked against our
+# street mesh and vanilla l60 terrain of tiles 40-42 x 35-37, no street geometry within 25 m of the maze, terrain under
+# it and 40 m round it below 23 m (sea and beach), and no vertex of the garden asset (below CLIP_TOP) under terrain or
+# in the street. Doors warp the 117 m between with emevd's fade-out warp.
+GARDEN_ORIGIN = (-215.39, 0.0, 307.25)
 WINDOW_CENTRE = (-164.777, 1.558, 200.745)  # street FLVER frame (w101_quest_window.py prints it)
 OTHER, SPHERE = 0xFFFFFFFF, 2
 SHADOW_SOURCES = (0x0A, 0x0C, 0x0D, 0x0E)  # entity data flags (msb_add_sky.py)
 SHADOW_DEST = 0x11
-# (name, frame, FLVER position, facing: 0 = the frame's +z, radius, entity id, region id at 0x2C)
+# (name, frame, FLVER position, facing, radius, entity id, region id at 0x2C); facing 0 = towards the frame's -z in game,
+# 180 = towards +z (see msb_add_room.REGIONS)
 REGIONS = [
     ("W101_Garden_door", "street", (-295.3, 2.3, 195.02), 0.0, 2.0, 1042362804, 9204),
-    ("W101_Garden_in", "garden", (6.007, 1.68, -31.95), 0.0, 0.5, 1042362805, 9205),
+    ("W101_Garden_in", "garden", (6.007, 1.68, -31.95), 180.0, 0.5, 1042362805, 9205),
     ("W101_Garden_exit", "garden", (6.074, 2.4, -35.75), 0.0, 1.5, 1042362806, 9206),
-    ("W101_Garden_out", "street", (-291.5, 1.68, 195.0), 88.9, 0.5, 1042362807, 9207),
+    ("W101_Garden_out", "street", (-291.5, 1.68, 195.0), -91.1, 0.5, 1042362807, 9207),
 ]
 
 

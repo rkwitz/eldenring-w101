@@ -8,10 +8,10 @@ elevator") and under the Church of the Crucible (m61_51_46_00), so every interio
 in Wizard101) gets a WeatherOverride box with 2000.
 
 Torrent: HorseRideOverride regions (type 53, override 1 = riding not allowed, 2 = allowed), as vanilla puts in boss
-rooms (m60_35_51_00 "lake fort boss room no-horse area"). Ryan wants to ride up to a door on Torrent and arrive on
-foot: a no-riding box around every door trigger, street side and inside, dismounts the player as they ride in, and
-the door events (emevd.rattlebones_doors) only warp once the player is off the mount; the tower rooms and the house
-are no-riding throughout (the garden is outdoors: Torrent can be summoned there again).
+rooms (m60_35_51_00 "lake fort boss room no-horse area"). The tower rooms and the house are no-riding throughout, so
+riding in through a door (emevd.rattlebones_doors warps a mounted player too) puts the player on foot inside; the
+garden is outdoors and stays rideable. The 5 m no-riding boxes round the door triggers of the first version knocked
+Ryan off Torrent before he reached the door (2026-10-25); rerunning removes them (REMOVED).
 
 Each region is a byte copy of those vanilla regions (box shape) with name, position, rotation, size, region id and
 type index set; new types go in their place in the type-ordered region list (35 after the patrol points, 53 before
@@ -46,14 +46,7 @@ ROOMS = [  # (key, part, footprint centre (FLVER), size x, size z, floor height)
     ("H4", "AEG030_557_9000", (0.0, -25.25), 38.0, 79.0, 0.0),
 ]
 GARDEN = ("G", "AEG030_555_9000", (6.0, 0.0), 90.0, 90.0, -1.0)
-DOOR_BOX = 5.0  # no-riding box around each door trigger
-DOORS = [  # (key, part, trigger centre (FLVER), floor height): emevd door triggers outside the no-riding rooms
-    ("T2d", STREET, (-164.9, 192.0), 0.32),
-    ("T1d", STREET, (-105.12, 19.17), 0.32),
-    ("H4d", STREET, (-127.2, 149.32), 0.29),
-    ("Gd", STREET, (-295.3, 195.02), 1.61),
-    ("Gx", "AEG030_555_9000", (6.074, -35.75), 1.62),
-]
+REMOVED = ["W101_NoRide_T2d", "W101_NoRide_T1d", "W101_NoRide_H4d", "W101_NoRide_Gd", "W101_NoRide_Gx"]  # door boxes
 FIRST_REGION_ID = 9230
 
 
@@ -61,7 +54,6 @@ def boxes():
     """[(name, region type, part, centre (x, z), size x, size z, floor)]"""
     out = [(f"W101_NoRain_{k}", WEATHER, p, c, sx, sz, f) for k, p, c, sx, sz, f in ROOMS + [GARDEN]]
     out += [(f"W101_NoRide_{k}", HORSE, p, c, sx, sz, f) for k, p, c, sx, sz, f in ROOMS]
-    out += [(f"W101_NoRide_{k}", HORSE, p, c, DOOR_BOX, DOOR_BOX, f) for k, p, c, f in DOORS]
     return out
 
 
@@ -88,8 +80,40 @@ def insert_region(lists, entry, kind):
     return at
 
 
+def remove_region(lists, name):
+    """Drop region `name`, remapping every region index the map's events hold and renumbering its type's indices."""
+    regions, events = _list(lists, "POINT_PARAM_ST").entries, _list(lists, "EVENT_PARAM_ST").entries
+    at = next(k for k, e in enumerate(regions) if entry_name(e) == name)
+    kind = u32(regions[at], 0x08)
+    for k, e in enumerate(events):
+        e = bytearray(e)
+        common = q(e, 0x18)
+        index = struct.unpack_from("<i", e, common + 4)[0]
+        assert index != at, f"event {entry_name(e)} uses {name}"
+        if index > at:
+            struct.pack_into("<i", e, common + 4, index - 1)
+        if u32(e, 0x0C) == PATROL_EVENT:
+            td = q(e, 0x20)
+            old = struct.unpack_from("<64h", e, td + 16)
+            assert at not in old
+            struct.pack_into("<64h", e, td + 16, *[i - 1 if i > at else i for i in old])
+        events[k] = bytes(e)
+    del regions[at]
+    n = 0
+    for k, e in enumerate(regions):
+        if u32(e, 0x08) == kind:
+            e = bytearray(e)
+            struct.pack_into("<i", e, 0x0C, n)
+            regions[k] = bytes(e)
+            n += 1
+    print(f"{name}: removed")
+
+
 def place_indoor(raw, vanilla_dir):
     header, lists = read_msb(raw)
+    for name in REMOVED:
+        if any(entry_name(e) == name for e in _list(lists, "POINT_PARAM_ST").entries):
+            remove_region(lists, name)
     templates = {}
     for kind, (file, name) in TEMPLATES.items():
         _, vanilla = read_msb((Path(vanilla_dir) / file).read_bytes())

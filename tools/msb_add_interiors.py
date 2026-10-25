@@ -40,16 +40,17 @@ INTERIORS = [
     ("AEG030_519_9001", "AEG030_519", 9201, (T1_DOOR[0], -DEPTH, T1_DOOR[2])),
     ("AEG030_557_9000", "AEG030_557", 9202, (H4_DOOR[0] - H4_INSIDE_DOOR[0], -DEPTH, H4_DOOR[2] - H4_INSIDE_DOOR[2])),
 ]
-# (name, frame, FLVER position, facing: 0 = the frame's +z, radius, entity id, region id at 0x2C)
+# (name, frame, FLVER position, facing, radius, entity id, region id at 0x2C); facing 0 = towards the frame's -z in game,
+# 180 = towards +z (see msb_add_room.REGIONS)
 REGIONS = [
     ("W101_Blackhope_door", "street", (-105.12, 1.0, 19.17), 0.0, 1.5, 1042362816, 9210),
-    ("W101_Blackhope_in", "AEG030_519_9001", (-0.085, 0.05, -8.86), 0.0, 0.5, 1042362817, 9211),
+    ("W101_Blackhope_in", "AEG030_519_9001", (-0.085, 0.05, -8.86), 180.0, 0.5, 1042362817, 9211),
     ("W101_Blackhope_exit", "AEG030_519_9001", (0.0, 0.6, -12.6), 0.0, 1.2, 1042362818, 9212),
-    ("W101_Blackhope_out", "street", (-105.15, 0.38, 21.62), 0.0, 0.5, 1042362819, 9213),
+    ("W101_Blackhope_out", "street", (-105.15, 0.38, 21.62), 180.0, 0.5, 1042362819, 9213),
     ("W101_FearOfFire_door", "street", (-127.2, 1.0, 149.32), 0.0, 1.5, 1042362820, 9214),
-    ("W101_FearOfFire_in", "AEG030_557_9000", (0.202, 0.05, 8.405), 180.0, 0.5, 1042362821, 9215),
+    ("W101_FearOfFire_in", "AEG030_557_9000", (0.202, 0.05, 8.405), 0.0, 0.5, 1042362821, 9215),
     ("W101_FearOfFire_exit", "AEG030_557_9000", (-0.219, 0.6, 11.0), 0.0, 1.2, 1042362822, 9216),
-    ("W101_FearOfFire_out", "street", (-127.09, 0.35, 146.8), 180.0, 0.5, 1042362823, 9217),
+    ("W101_FearOfFire_out", "street", (-127.09, 0.35, 146.8), 0.0, 0.5, 1042362823, 9217),
 ]
 
 

@@ -52,7 +52,8 @@ SATURATION, BRIGHTNESS = 1.3, 1.1  # same colour boost as the classic street (dd
 # light near full brightness white (Ryan's test 2026-10-23: "the light is white, it should be blue"). The texture is
 # darkened to a quarter and saturated instead, which keeps W101's pale blue panes (rendered comparison, 0.22-0.25).
 WINDOW_SATURATION, WINDOW_BRIGHTNESS = 1.8, 0.25
-# The garden sits msb_add_garden.GARDEN_DEPTH (50) m under the street, so nothing of it may reach the street's ground:
+# The garden used to sit 50 m under the street (since 2026-10-25 it is at road level, msb_add_garden.GARDEN_ORIGIN), so
+# nothing of it could reach the street's ground:
 # its giant backdrop (cliff, city wall tower, trees up to 192 m tall) is cut off at CLIP_TOP m above the garden floor.
 CLIP_TOP = 48.0
 

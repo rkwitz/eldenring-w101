@@ -152,30 +152,35 @@ RATTLEBONES_DOORS = (  # (event id, trigger region, arrival region[, character t
 
 LOAD_SCREEN_FLAG = 1042366900  # set right before every door warp; the HUD overlay shows its load screen and clears it
 STREET_YAW = -27.011917  # AEG030_518_9000 (the street) and every room part are turned by this about y
-ARRIVAL_YAW = {  # arrival region -> its rotation y in m60_42_36_00 (msb_add_room / _garden / _interiors facings)
-    1042362801: STREET_YAW, 1042362803: STREET_YAW + 180.0,  # Rattlebones in (room +z) / out (street -z)
-    1042362805: STREET_YAW, 1042362807: STREET_YAW + 88.9,  # garden in / out
-    1042362817: STREET_YAW, 1042362819: STREET_YAW,  # Lady Blackhope in / out (street +z)
-    1042362821: STREET_YAW + 180.0, 1042362823: STREET_YAW + 180.0,  # Fear of Fire in (room -z) / out
+ARRIVAL_YAW = {  # arrival region -> its rotation y in m60_42_36_00 (msb_add_room / _garden / _interiors facings):
+    # in game the player faces a region's rotation, and the camera yaw of 2008[4] uses the same convention (vanilla
+    # common event 950 turns the camera to about its Melina regions' rotation); every arrival faces away from its door
+    1042362801: STREET_YAW + 180.0, 1042362803: STREET_YAW,  # Rattlebones in (into the room) / out (onto the street)
+    1042362805: STREET_YAW + 180.0, 1042362807: STREET_YAW - 91.1,  # garden in / out
+    1042362817: STREET_YAW + 180.0, 1042362819: STREET_YAW + 180.0,  # Lady Blackhope in / out
+    1042362821: STREET_YAW, 1042362823: STREET_YAW,  # Fear of Fire in / out
 }
 CAMERA_PITCH = 5.0  # as common event 950 after its warp
+LOAD_SCREEN_LEAD = 0.75  # seconds between LOAD_SCREEN_FLAG on and the warp, so the HUD's load screen is up first
+ARRIVAL_SETTLE = 1.0  # seconds after the warp before the door listens again
 
 
 def rattlebones_doors(d, doors=RATTLEBONES_DOORS):
     """New events (one per door, started from the top of event 0) that wait for the player (10000) to be in the
-    door's trigger region (3[2], as title_on_door_exit) AND not riding Torrent (4[32] with 0: Ryan rides up to a door
-    and arrives on foot; msb_add_indoor.py's no-riding boxes round every door trigger dismount him as he rides in, and
-    the warp waits until he is off), then set LOAD_SCREEN_FLAG (2003[66]) for the HUD's load screen, move them to the
-    arrival region (2004[41] with target type 1 = region and dummy poly -1, as common event 950 places the player for
-    the Melina cutscene in the same map, no loading screen) and restart (1000[4] with 1), like Wizard101's door
-    activators. After the warp, 2008[4] SetCameraAngle (pitch, world yaw; as common event 950 does after its warp)
-    turns the camera to look where the arrival region faces (ARRIVAL_YAW): the warp turns the player but not the
-    camera, and ER moves the player relative to the camera, so holding forward through a door carried them straight
-    on into the other side's trigger and back (Lady Blackhope's and Fear of Fire's doors, whose rooms face the
-    other way from their street doors: the "glitching" exit, 2026-10-24). A door with a 4th entry (a boss's entity
-    id) only works while that character is dead (4[0] dead in the
-    same condition group 1): the player can't leave the boss room until the boss is beaten (he is back after a rest,
-    and so is the lock). Existing events with these ids are replaced, so running it again is harmless."""
+    door's trigger region (3[2], as title_on_door_exit), mounted or not: Ryan rides up to a door and through it, and
+    the no-riding boxes inside the rooms (msb_add_indoor.py) dismount him on arrival; the street-side door boxes are
+    gone (2026-10-25). Then set LOAD_SCREEN_FLAG (2003[66]) for the HUD's load screen, wait LOAD_SCREEN_LEAD seconds
+    (1001[0]) so the screen is up before anything moves (the instant warp showed none, 2026-10-25), and move the
+    player to the arrival region with 2004[74] "Warp Character and Copy Floor with Fade-Out" (warp type 1 = region,
+    dummy poly -1, floor copied from the player, no bonfire effect, camera reset behind him; packed as vanilla common
+    event 6901 does): unlike the short warp 2004[41] it also reaches the garden 117 m off. After the warp, 2008[4]
+    SetCameraAngle (pitch, world yaw; as common event 950 does after its warp) turns the camera to look where the
+    arrival region faces (ARRIVAL_YAW), away from the door just come through, so holding forward walks on into the
+    room instead of back into the other side's trigger. Wait ARRIVAL_SETTLE seconds and restart (1000[4] with 1),
+    like Wizard101's door activators. A door with a 4th entry (a boss's entity id) only works while that character is
+    dead (4[0] dead in the same condition group 1): the player can't leave the boss room until the boss is beaten
+    (he is back after a rest, and so is the lock). Existing events with these ids are replaced, so running it again
+    is harmless."""
     e = Emevd(d)
     ids = {door[0] for door in doors}
     events = [ev for ev in events_of(e) if ev["id"] not in ids]
@@ -186,17 +191,18 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS):
         ins0.insert(slot, {"bank": 2000, "id": 0, "args": struct.pack("<iIi", 0, event_id, 0), "layer": -1})
         wait = [
             _i(3, 2, "<bBxxIIi", 1, 1, 10000, trigger, 1),  # IF player in the door's area (group 1)
-            _i(4, 32, "<bxxxIBxxx", 1, 10000, 0),  # IF player not riding Torrent (group 1)
         ]
         if boss:
             wait.append(_i(4, 0, "<bxxxIBBxxf", 1, boss[0], 1, 0, 1.0))  # IF the boss is dead (group 1)
         body = wait + [
             _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
             _i(2003, 66, "<BxxxIBxxx", 0, LOAD_SCREEN_FLAG, 1),  # load screen flag on (the HUD clears it)
-            _i(2004, 41, "<IIIi", 10000, 1, arrival, -1),  # warp to region
+            _i(1001, 0, "<f", LOAD_SCREEN_LEAD),  # wait for the HUD's screen
+            _i(2004, 74, "<IBxxxIiIBBxx", 10000, 1, arrival, -1, 10000, 0, 1),  # fade out, warp to region
         ]
-        if arrival in ARRIVAL_YAW:  # camera behind the player, looking where the arrival faces
+        if arrival in ARRIVAL_YAW:  # camera looking where the arrival faces
             body.append(_i(2008, 4, "<ff", CAMERA_PITCH, (ARRIVAL_YAW[arrival] + 180.0) % 360.0 - 180.0))
+        body.append(_i(1001, 0, "<f", ARRIVAL_SETTLE))
         body.append(_i(1000, 4, "<Bxxx", 1))  # End Unconditionally: restart
         events.append({"id": event_id, "rest": 0, "pars": [], "ins": body})
     return build(e, events)
@@ -331,7 +337,7 @@ def phase_one_only(d, boss=SERAPH, event_id=PHASE_ONE_EVENT):
 
 
 def all_bosses(d):
-    """Every door warp (riding check, load-screen flag) and every boss of Unicorn Way: msb_add_boss.py's four."""
+    """Every door warp (load-screen flag, fade-out warp) and every boss of Unicorn Way: msb_add_boss.py's four."""
     for doors in (RATTLEBONES_DOORS, GARDEN_DOORS, INTERIOR_DOORS):
         d = rattlebones_doors(d, doors)
     for event_id, boss, arena, sigil, name, animation, masks in BOSSES:
