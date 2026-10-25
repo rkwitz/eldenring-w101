@@ -19,3 +19,7 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_
 [profile.release]
 panic = "abort"
 strip = true
+
+# hudhook with RenderContext::capture_screen added (vendor/hudhook, changes marked "w101_orbs:").
+[patch.crates-io]
+hudhook = { path = "vendor/hudhook" }

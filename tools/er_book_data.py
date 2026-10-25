@@ -24,7 +24,8 @@ row (item id - upgrade level), P armour, A talisman, G goods, M spell (goods id)
   A: icon, wt;  E: icon;  G: icon, type (goodsType), max
   M: fp, slots, req = int,fai,arc, school (the W101 school tab: Fire Ice Storm Myth Life Death Balance Astral),
      erschool (Elden Ring's own school)
-er_item_text.tsv: `<cat>\\t<id>\\t<one-line Info text>`.
+er_item_text.tsv: `<cat>\\t<id>\\t<one-line Info text>`; category C: a cookbook's full caption (its recipes), line
+breaks as "\\n".
 """
 
 import io
@@ -157,6 +158,18 @@ def stats(regulation, defs, msgbnd, out):
             text = (text or "").strip()
             if text and not text.startswith("[ERROR]"):
                 texts[(cat, text_id)] = re.sub(r"\s+", " ", text)
+    # The cookbooks' full captions (their recipe lists), category C, line breaks written as "\\n".
+    goods_names, captions = {}, {}
+    for path in sorted(files, key=lambda p: ("_dlc" in p, p)):
+        stem = path.replace("\\", "/").rsplit("/", 1)[-1].removesuffix(".fmg").split("_dlc")[0]
+        if stem in ("GoodsName", "GoodsCaption"):
+            table = goods_names if stem == "GoodsName" else captions
+            for text_id, text in read_fmg(files[path]).items():
+                if text and not text.startswith("[ERROR]"):
+                    table[text_id] = text.strip()
+    for text_id, name in goods_names.items():
+        if "Cookbook" in name and captions.get(text_id):
+            texts[("C", text_id)] = captions[text_id].replace("\r", "").replace("\n", "\\n")
     with open(out / "er_item_text.tsv", "w", encoding="utf-8", newline="\n") as f:
         for (cat, text_id), text in sorted(texts.items()):
             f.write(f"{cat}\t{text_id}\t{text}\n")

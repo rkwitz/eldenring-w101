@@ -16,6 +16,7 @@ mod input;
 mod itemdata;
 mod layout;
 mod loadscreen;
+mod steam;
 mod model;
 mod names;
 mod pages;
@@ -223,6 +224,7 @@ impl ImguiRenderLoop for Orbs {
 
     fn before_render<'a>(&'a mut self, ctx: &mut imgui::Context, render: &'a mut dyn RenderContext) {
         self.book.load_art(render);
+        self.book.capture(render, self.settings.bookmap);
         // Elden Ring hides and confines the cursor; the open book needs it.
         ctx.io_mut().mouse_draw_cursor = false; // the book draws its own
         if self.book.open {
@@ -249,13 +251,17 @@ impl ImguiRenderLoop for Orbs {
             settings_path: &settings_path,
         };
         self.book.frame(ui, &mut cx);
-        if game.is_some() && game::event_flag(loadscreen::DOOR_FLAG) == Some(true) {
-            game::set_event_flag(loadscreen::DOOR_FLAG, false);
+        // Polled every frame: the screen goes up on the first frame the door flag is on. The flag is cleared when
+        // the screen starts to fade (or right away when the loading screen is turned off).
+        if game.is_some() && !self.loadscreen.holding() && game::event_flag(loadscreen::DOOR_FLAG) == Some(true) {
             if self.settings.loadscreen {
                 self.loadscreen.show();
+            } else {
+                game::set_event_flag(loadscreen::DOOR_FLAG, false);
             }
         }
-        self.loadscreen.draw(ui, &self.book.textures);
+        let busy = game.is_none() || faded > 0.3 || stats.is_none();
+        self.loadscreen.draw(ui, &self.book.textures, busy);
         self.perf.frame(begin.elapsed().as_secs_f32());
     }
 

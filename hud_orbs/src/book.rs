@@ -127,7 +127,15 @@ pub struct Book {
     /// Per pages::ACHIEVEMENTS entry, read with the sheet.
     achieved: Vec<Option<bool>>,
     last_frame: Instant,
+    /// Screen copies for the map page: frames counted (the world is copied every 10th frame while the book is
+    /// shut), whether a copy of the world from before the map opened exists, whether the map was copied this frame.
+    frames: u64,
+    world_ready: bool,
+    map_shot: bool,
 }
+
+/// The copy of the screen from before Elden Ring's map opened, drawn behind the book while the map is on its page.
+const WORLD_PICTURE: &str = "@screen/world";
 
 /// What the book needs from the rest of the overlay each frame.
 pub struct Context<'a> {
@@ -160,8 +168,19 @@ fn badge(canvas: &Canvas, r: [f32; 4], text: &str) {
                 &TextStyle::new("WizardFancy", 0.0, fade(YELLOW)), false);
 }
 
-/// The book's mouse cursor (Elden Ring hides the system one): an arrow with a dark outline.
-fn draw_cursor(draw: &hudhook::imgui::DrawListMut, p: [f32; 2]) {
+/// Wizard101's wand cursor (GUI/cursor.dds, from GUI/Cursors.xml's "Default").
+pub const CURSOR: &str = "GUI/cursor.png";
+
+/// The book's mouse cursor (Elden Ring hides the system one): Wizard101's star wand, its hot spot at the star's
+/// tip (5, 5 of the 45-pixel cursor.cur); an arrow until the picture has loaded.
+fn draw_cursor(draw: &hudhook::imgui::DrawListMut, textures: &Textures, p: [f32; 2], screen_h: f32) {
+    if let Some((wand, _)) = textures.get(CURSOR) {
+        let size = 42.0 * (screen_h / 1080.0).max(0.75);
+        let hot = size * 5.0 / 45.0;
+        let at = [p[0] - hot, p[1] - hot];
+        draw.add_image(wand, at, [at[0] + size, at[1] + size]).build();
+        return;
+    }
     let k = 1.2;
     let pts = [p, [p[0], p[1] + 20.0 * k], [p[0] + 5.0 * k, p[1] + 15.0 * k], [p[0] + 14.0 * k, p[1] + 14.0 * k]];
     let dark = ImColor32::from_rgba(20, 12, 4, 255);
@@ -212,6 +231,9 @@ impl Book {
             flasks_logged: false,
             achieved: Vec::new(),
             last_frame: Instant::now(),
+            frames: 0,
+            world_ready: false,
+            map_shot: false,
         }
     }
 
@@ -273,6 +295,34 @@ impl Book {
                 }
                 None => tracing::warn!("character picture {slot}: texture upload failed"),
             }
+        }
+    }
+
+    /// Asks the renderer for this frame's screen copies (before the frame is drawn): while Elden Ring's map is open,
+    /// the map, to draw on the map page; otherwise the world (every frame while the book is open, every 10th while
+    /// it is shut), so that the last copy from before the map opened can stand behind the book. `enabled`: the
+    /// bookmap setting.
+    pub fn capture(&mut self, render: &mut dyn RenderContext, enabled: bool) {
+        self.frames += 1;
+        self.map_shot = false;
+        if !enabled {
+            self.world_ready = false;
+            return;
+        }
+        match self.map {
+            MapState::Idle if self.open || self.frames % 10 == 0 => {
+                if let Some(id) = render.capture_screen(0) {
+                    self.textures.set(WORLD_PICTURE, id, [1.0, 1.0]);
+                    self.world_ready = true;
+                }
+            }
+            MapState::Open => {
+                if let Some(id) = render.capture_screen(1) {
+                    self.textures.set(pages::MAP_PICTURE, id, [1.0, 1.0]);
+                    self.map_shot = true;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -348,6 +398,12 @@ impl Book {
         self.preview_show(Tab::Map, 0);
         self.set_open(false);
         self.map = MapState::Open;
+    }
+
+    /// Shows the crafting page's cookbooks (the preview renderer).
+    #[allow(dead_code)]
+    pub fn preview_cookbooks(&mut self) {
+        self.state.cookbooks = true;
     }
 
     /// Shows pet `pet` (the preview renderer).
@@ -576,6 +632,10 @@ impl Book {
             settings,
             map_opening: matches!(self.map, MapState::Opening(_)),
             map_open: map_view,
+            map_picture: (map_view && self.world_ready && self.map_shot).then(|| {
+                let [w, h] = ui.io().display_size;
+                w / h.max(1.0)
+            }),
             achieved: &self.achieved,
         };
         if let Some(page) = self.layouts.get(page_name) {
@@ -615,9 +675,16 @@ impl Book {
             }
         }
         wanted.extend(view.images.iter().map(|i| i.1.clone()));
+        wanted.push(CURSOR.into());
         self.textures.want(wanted);
 
         let draw = ui.get_foreground_draw_list();
+        if map_view && view.picture.is_some() {
+            // The map is on the page: the world as it was when the map opened, behind the book.
+            if let Some((world, _)) = self.textures.get(WORLD_PICTURE) {
+                draw.add_image(world, [0.0, 0.0], [width, height]).build();
+            }
+        }
         if let Some(h) = view.hole.filter(|_| map_view) {
             // Only the map shows through the book: the rest of the screen around the book is covered.
             let dark = ImColor32::from_rgba(12, 9, 6, 255);
@@ -674,10 +741,12 @@ impl Book {
             if let Some((_, lines)) = view.tips.iter().rev().find(|(r, _)| layout::inside(mouse, *r)) {
                 self.draw_tip(&canvas, lines, mouse, [width, height]);
             }
-            draw_cursor(&draw, pointer.pos);
-        } else if !view.hole.is_some_and(|h| layout::inside(mouse, h)) && layout::inside(mouse, [0.0, 0.0, BOOK[0], BOOK[1]]) {
+            draw_cursor(&draw, &self.textures, pointer.pos, height);
+        } else if !view.hole.or(view.picture).is_some_and(|h| layout::inside(mouse, h))
+            && layout::inside(mouse, [0.0, 0.0, BOOK[0], BOOK[1]])
+        {
             // Over the book's frame around the map: the book's cursor, for its tabs.
-            draw_cursor(&draw, pointer.pos);
+            draw_cursor(&draw, &self.textures, pointer.pos, height);
         }
         (tab_hit, page_hit, in_model)
     }
@@ -955,10 +1024,15 @@ impl Book {
                     .collect();
                 tracing::info!("flask items (even = empty, odd = filled): {} (max {:?})", flasks.join(" "), sheet.flasks);
             }
-            self.achieved = pages::ACHIEVEMENTS
-                .iter()
-                .map(|(_, _, flag)| if *flag == 0 || cx.game.is_none() { None } else { game::event_flag(*flag) })
-                .collect();
+            // The player's Steam achievements (what Steam shows); the playthrough's boss flags only without Steam.
+            let names: Vec<&str> = pages::ACHIEVEMENTS.iter().map(|a| a.0).collect();
+            self.achieved = match crate::steam::achievements(&names) {
+                Some(steam) => steam,
+                None => pages::ACHIEVEMENTS
+                    .iter()
+                    .map(|(_, _, flag)| if *flag == 0 || cx.game.is_none() { None } else { game::event_flag(*flag) })
+                    .collect(),
+            };
         }
     }
 }

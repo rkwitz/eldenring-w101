@@ -90,8 +90,15 @@ impl Game {
                     let field = |at: usize| u32::from_le_bytes(e[at..at + 4].try_into().unwrap());
                     (field(id_at), field(quantity_at))
                 })
-                .filter(|(id, _)| *id != u32::MAX && *id != 0)
-                .collect()
+                .filter(|(id, n)| *id != u32::MAX && *id != 0 && *n > 0)
+                .fold(Vec::<(u32, u32)>::new(), |mut out, (id, n)| {
+                    // Several copies of a weapon or armour piece are separate entries: one row each, summed.
+                    match out.iter_mut().find(|(seen, _)| *seen == id) {
+                        Some(entry) => entry.1 += n,
+                        None => out.push((id, n)),
+                    }
+                    out
+                })
         };
         let items = list(
             offset_of!(PlayerGameData, equipment.equip_inventory_data.items_data.normal_items_head),

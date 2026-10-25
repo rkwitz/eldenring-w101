@@ -1,5 +1,5 @@
 """Hide Elden Ring's own HP, FP and stamina bars and rune counter, which the hud_orbs W101 globes replace, and move
-the quick-slot (equipment) panel right so it doesn't sit behind the globes.
+the quick-slot (equipment) panel up, above the globes.
 
 Usage: python er_hud_hide_bars.py path\\to\\ELDEN RING\\Game\\menu path\\to\\mod\\menu
 
@@ -9,9 +9,10 @@ script still updates them but they are drawn invisibly:
 - 01_000_fe.gfx, PlayerHUD > Gauge: HP, MP (FP), HPRegain (the recoverable-HP sliver) and SP (stamina). Enemy and
   ally tags also have placements named HP, so only the sprite that places SP is touched.
 - 01_001_fe_soul.gfx: the root's Soul clip (rune counter).
-The quick slots are PlayerHUD's ItemPanel and ItemPanel2 (pouch); in the 1920x1080 movie their icons start at x 28,
-and the mana globe's right edge (156 of Wizard101's 768-pixel height, at hud_orbs scale 1) is at x 219, so both move
-right by ITEM_SHIFT. The movie scales with the screen like the globes, so this holds at any 16:9 resolution.
+The quick slots are PlayerHUD's ItemPanel and ItemPanel2 (pouch); in the 1920x1080 movie the slot cross reaches down
+to about y 1045, and the globes' tops (Wizard101 y 570 of 768 at hud_orbs scale 1, bottom 723) are at y 865, so both
+panels move up by ITEM_RAISE and keep Elden Ring's own x. The movie scales with the screen like the globes, so this
+holds at any 16:9 resolution.
 """
 import struct
 import sys
@@ -19,13 +20,13 @@ import zlib
 from pathlib import Path
 
 HIDE = "hide"
-ITEM_SHIFT = 200.0  # movie pixels; icons then start at x 228
+ITEM_RAISE = 200.0  # movie pixels; the cross then ends at about y 845, just above the globes
 # movie: [(a name that marks the right sprite or root timeline, {placement name: edit}, placements to expect)];
 # an edit is HIDE or (dx, dy) in movie pixels.
 TARGETS = {
     "01_000_fe.gfx": [
         (b"SP", {b"HP": HIDE, b"MP": HIDE, b"HPRegain": HIDE, b"SP": HIDE}, 4),
-        (b"ItemPanel", {b"ItemPanel": (ITEM_SHIFT, 0.0), b"ItemPanel2": (ITEM_SHIFT, 0.0)}, 2),
+        (b"ItemPanel", {b"ItemPanel": (0.0, -ITEM_RAISE), b"ItemPanel2": (0.0, -ITEM_RAISE)}, 2),
     ],
     "01_001_fe_soul.gfx": [(b"Soul", {b"Soul": HIDE}, 2)],  # root Soul and the Soul inside it
 }

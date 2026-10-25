@@ -282,6 +282,8 @@ pub struct View {
     pub tab_row: Option<[f32; 4]>,
     /// A cut-out in the book (page pixels) where the game shows through.
     pub hole: Option<[f32; 4]>,
+    /// Where a picture of the game's screen is drawn on the page (the map page), page pixels.
+    pub picture: Option<[f32; 4]>,
 }
 
 impl View {
@@ -326,14 +328,14 @@ impl Textures {
     }
 
     /// Queues images to load on the next `load_wanted` (render thread, before the frame).
-    /// Registers a texture made elsewhere (the character pictures, "@model/...").
+    /// Registers a texture made elsewhere (the character pictures, "@model/...", and screen copies, "@screen/...").
     pub fn set(&mut self, name: &str, texture: TextureId, size: [f32; 2]) {
         self.map.insert(name.to_string(), (texture, size));
     }
 
     pub fn want(&mut self, names: impl IntoIterator<Item = String>) {
         for name in names {
-            if name.starts_with("@model/") {
+            if name.starts_with('@') {
                 continue;
             }
             if !self.map.contains_key(&name) && !self.failed.contains(&name) && !self.wanted.contains(&name) {
@@ -620,6 +622,10 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
         if n.border.iter().any(Option::is_some) {
             canvas.border(&n.border, r, fade(ImColor32::WHITE, alpha));
         }
+        // A rendered image goes under the node's own art (the portrait ring is drawn over the character).
+        if let Some(img) = view.node_images.get(&i) {
+            canvas.image(img, r, [0.0, 0.0, 1.0, 1.0], fade(ImColor32::WHITE, alpha));
+        }
         if let Some(img) = &n.img {
             let uv = if n.is_button() {
                 let state = if greyed {
@@ -645,9 +651,6 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
                 }
                 None => canvas.image(img, r, uv, tint),
             }
-        }
-        if let Some(img) = view.node_images.get(&i) {
-            canvas.image(img, r, [0.0, 0.0, 1.0, 1.0], fade(ImColor32::WHITE, alpha));
         }
         if let Some(bar) = &n.bar {
             let f = view.progress.get(&i).copied().unwrap_or(n.position).clamp(0.0, 1.0);

@@ -25,6 +25,8 @@ mod sheet;
 mod itemdata;
 #[path = "../../src/quests.rs"]
 mod quests;
+#[path = "../../src/steam.rs"]
+mod steam;
 #[path = "../../src/model.rs"]
 mod model;
 mod input;
@@ -39,6 +41,7 @@ use imgui::{DrawCmd, DrawCmdParams, TextureId};
 
 struct Render {
     textures: Vec<RgbaImage>,
+    captures: [Option<TextureId>; 2],
 }
 
 impl hudhook::RenderContext for Render {
@@ -52,6 +55,32 @@ impl hudhook::RenderContext for Render {
         let image = RgbaImage::from_raw(width, height, data.to_vec()).ok_or("bad texture size")?;
         self.textures[texture_id.id() - 1] = image;
         Ok(())
+    }
+
+    /// Stand-ins for the game's frame: a sky-and-hills "world" (slot 0) and a parchment "map" with a grid (slot 1).
+    fn capture_screen(&mut self, slot: usize) -> Option<TextureId> {
+        if let Some(id) = self.captures[slot.min(1)] {
+            return Some(id);
+        }
+        let (w, h) = (480u32, 270u32);
+        let image = RgbaImage::from_fn(w, h, |x, y| {
+            let (fx, fy) = (x as f32 / w as f32, y as f32 / h as f32);
+            if slot == 0 {
+                let hill = 0.62 + 0.06 * (fx * 9.0).sin();
+                if fy < hill { image::Rgba([(90.0 + 80.0 * fy) as u8, (120.0 + 70.0 * fy) as u8, 200, 255]) }
+                else { image::Rgba([60, (110.0 - 40.0 * fy) as u8, 50, 255]) }
+            } else if x % 40 < 2 || y % 40 < 2 {
+                image::Rgba([120, 95, 60, 255])
+            } else if (fx - 0.5).abs() < 0.01 && (fy - 0.5).abs() < 0.02 {
+                image::Rgba([200, 30, 30, 255])
+            } else {
+                image::Rgba([(196.0 - 30.0 * fy) as u8, (176.0 - 20.0 * fx) as u8, 128, 255])
+            }
+        });
+        self.textures.push(image);
+        let id = TextureId::new(self.textures.len());
+        self.captures[slot.min(1)] = Some(id);
+        Some(id)
     }
 }
 
@@ -154,7 +183,7 @@ fn main() {
         RgbaImage::from_raw(tex.width, tex.height, tex.data.to_vec()).unwrap()
     };
     ctx.fonts().tex_id = TextureId::new(usize::MAX);
-    let mut render = Render { textures: Vec::new() };
+    let mut render = Render { textures: Vec::new(), captures: [None, None] };
     let mut book = book::Book::new();
     book.load(&folder.join("book"), &mut render);
     let backdrop = image::open(folder.join("preview_backdrop.png")).ok().map(|i| i.to_rgba8());
@@ -179,6 +208,7 @@ fn main() {
         ("6_map", pages::Tab::Map, 0, [0.0, 0.0], ""),
         ("6b_map_open", pages::Tab::Map, 0, [0.0, 0.0], "map"),
         ("7_crafting", pages::Tab::Crafting, 0, [0.0, 0.0], ""),
+        ("7b_crafting_cookbook", pages::Tab::Crafting, 0, [0.0, 0.0], "cookbooks"),
         ("8_help", pages::Tab::Help, 1, [0.0, 0.0], ""),
         ("9_settings", pages::Tab::Settings, 0, [0.0, 0.0], ""),
         ("10_dialogue", pages::Tab::Character, 0, [0.0, 0.0], "talk:Ceren Nightchant"),
@@ -191,6 +221,9 @@ fn main() {
         if show == "map" {
             book.preview_map();
         }
+        if show == "cookbooks" {
+            book.preview_cookbooks();
+        }
         if let Some(pet) = show.strip_prefix("pet:") {
             book.preview_pet(pet.parse().unwrap());
         }
@@ -202,6 +235,7 @@ fn main() {
                 }
             }
             book.load_art(&mut render);
+            book.capture(&mut render, true);
             ctx.io_mut().mouse_pos = if mouse == [0.0, 0.0] { [width - 2.0, 2.0] } else { [mouse[0] * width, mouse[1] * height] };
             ctx.io_mut().delta_time = 0.2;
             let ui = ctx.new_frame();

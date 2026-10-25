@@ -114,7 +114,7 @@ impl Renderer {
 }
 
 fn worker(parts: PathBuf, shared: Arc<(Mutex<Shared>, Condvar)>) {
-    let mut cache = Cache { folder: parts, files: HashMap::new() };
+    let mut cache = Cache { folder: parts, files: HashMap::new(), posed: None };
     let (lock, wake) = &*shared;
     loop {
         let (slot, request) = {
@@ -271,6 +271,26 @@ pub struct Texture {
     h: usize,
     /// sRGB colour and alpha.
     px: Vec<[u8; 4]>,
+    /// Halved copies, down to 8 texels (cache-friendly sampling of far-away or small triangles).
+    mips: Vec<Texture>,
+}
+
+fn halve(px: &[[u8; 4]], w: usize, h: usize) -> (Vec<[u8; 4]>, usize, usize) {
+    let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+    let mut next = vec![[0u8; 4]; nw * nh];
+    for y in 0..nh {
+        for x in 0..nw {
+            let mut s = [0u32; 4];
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let p = px[(2 * y + dy).min(h - 1) * w + (2 * x + dx).min(w - 1)];
+                for i in 0..4 {
+                    s[i] += p[i] as u32;
+                }
+            }
+            next[y * nw + x] = s.map(|v| (v / 4) as u8);
+        }
+    }
+    (next, nw, nh)
 }
 
 const MAX_TEXTURE: usize = 1024;
@@ -308,42 +328,47 @@ fn dds(b: &[u8]) -> Option<Texture> {
         .collect();
     let (mut w, mut h) = (w, h);
     while (w > MAX_TEXTURE || h > MAX_TEXTURE) && w >= 2 && h >= 2 {
-        let (nw, nh) = (w / 2, h / 2);
-        let mut next = vec![[0u8; 4]; nw * nh];
-        for y in 0..nh {
-            for x in 0..nw {
-                let mut s = [0u32; 4];
-                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                    let p = px[(2 * y + dy) * w + 2 * x + dx];
-                    for i in 0..4 {
-                        s[i] += p[i] as u32;
-                    }
-                }
-                next[y * nw + x] = s.map(|v| (v / 4) as u8);
-            }
-        }
-        (px, w, h) = (next, nw, nh);
+        (px, w, h) = halve(&px, w, h);
     }
-    Some(Texture { w, h, px })
+    let mut mips = Vec::new();
+    let (mut level, mut lw, mut lh) = (px.clone(), w, h);
+    while lw >= 16 && lh >= 16 {
+        (level, lw, lh) = halve(&level, lw, lh);
+        mips.push(Texture { w: lw, h: lh, px: level.clone(), mips: vec![] });
+    }
+    Some(Texture { w, h, px, mips })
 }
 
 impl Texture {
-    /// Bilinear, wrapping; sRGB 0-1.
+    /// The level for `lod` (0 = full size).
+    fn level(&self, lod: usize) -> &Texture {
+        if lod == 0 { self } else { self.mips.get(lod - 1).unwrap_or_else(|| self.mips.last().unwrap_or(self)) }
+    }
+
+    #[inline]
+    fn texel(&self, xi: i64, yi: i64) -> [u8; 4] {
+        let xi = if self.w.is_power_of_two() { (xi & (self.w as i64 - 1)) as usize } else { xi.rem_euclid(self.w as i64) as usize };
+        let yi = if self.h.is_power_of_two() { (yi & (self.h as i64 - 1)) as usize } else { yi.rem_euclid(self.h as i64) as usize };
+        self.px[yi * self.w + xi]
+    }
+
+    /// Bilinear, wrapping; sRGB 0-255.
     fn sample(&self, u: f32, v: f32) -> [f32; 4] {
-        let x = (u - u.floor()) * self.w as f32 - 0.5;
-        let y = (v - v.floor()) * self.h as f32 - 0.5;
+        let x = u * self.w as f32 - 0.5;
+        let y = v * self.h as f32 - 0.5;
         let (x0, y0) = (x.floor(), y.floor());
         let (fx, fy) = (x - x0, y - y0);
-        let at = |xi: f32, yi: f32| {
-            let xi = (xi as i64).rem_euclid(self.w as i64) as usize;
-            let yi = (yi as i64).rem_euclid(self.h as i64) as usize;
-            self.px[yi * self.w + xi]
-        };
-        let (a, b, c, d) = (at(x0, y0), at(x0 + 1.0, y0), at(x0, y0 + 1.0), at(x0 + 1.0, y0 + 1.0));
+        let (xi, yi) = (x0 as i64, y0 as i64);
+        let (a, b, c, d) = (self.texel(xi, yi), self.texel(xi + 1, yi), self.texel(xi, yi + 1), self.texel(xi + 1, yi + 1));
         [0, 1, 2, 3].map(|i| {
-            ((a[i] as f32 * (1.0 - fx) + b[i] as f32 * fx) * (1.0 - fy) + (c[i] as f32 * (1.0 - fx) + d[i] as f32 * fx) * fy)
-                / 255.0
+            (a[i] as f32 * (1.0 - fx) + b[i] as f32 * fx) * (1.0 - fy) + (c[i] as f32 * (1.0 - fx) + d[i] as f32 * fx) * fy
         })
+    }
+
+    /// Nearest texel, wrapping; sRGB 0-255 (while turning).
+    fn nearest(&self, u: f32, v: f32) -> [f32; 4] {
+        let t = self.texel((u * self.w as f32).floor() as i64, (v * self.h as f32).floor() as i64);
+        t.map(|c| c as f32)
     }
 }
 
@@ -563,6 +588,8 @@ struct Part {
 struct Cache {
     folder: PathBuf,
     files: HashMap<String, Option<Arc<Part>>>,
+    /// The posed triangles of the last look drawn: turning redraws the same look.
+    posed: Option<(Look, Arc<Vec<Batch>>)>,
 }
 
 impl Cache {
@@ -684,77 +711,159 @@ fn bind_pose(bones: &[Bone]) -> Vec<(M3, [f32; 3])> {
     (0..bones.len()).map(|i| get(i, bones, &mut out, 0)).collect()
 }
 
-/// How much each bone follows the left and right arm (1 under L_/R_UpperArm, half for shoulder armour bones).
-fn arm_share(bones: &[Bone]) -> Vec<[f32; 2]> {
-    (0..bones.len())
-        .map(|i| {
-            let mut j = i as i32;
-            for _ in 0..64 {
-                if j < 0 || j as usize >= bones.len() {
-                    break;
-                }
-                match bones[j as usize].name.as_str() {
-                    "L_UpperArm" => return [1.0, 0.0],
-                    "R_UpperArm" => return [0.0, 1.0],
-                    _ => {}
-                }
-                j = bones[j as usize].parent;
-            }
-            let n = bones[i].name.as_str();
-            if n.starts_with("L_Shoulder") {
-                [0.5, 0.0]
-            } else if n.starts_with("R_Shoulder") {
-                [0.0, 0.5]
-            } else {
-                [0.0, 0.0]
-            }
-        })
-        .collect()
+/// A rotation about an axis (row-vector convention, as `apply`): turns vectors from `cross(axis, ...)` sense,
+/// i.e. a positive angle turns `d` toward `n` for the axis `cross(d, n)`.
+fn rot_axis(axis: [f32; 3], a: f32) -> M3 {
+    let [x, y, z] = norm(axis);
+    let (s, c) = a.sin_cos();
+    let k = 1.0 - c;
+    // The column-vector Rodrigues matrix, transposed for row vectors.
+    [
+        [c + x * x * k, y * x * k + z * s, z * x * k - y * s],
+        [x * y * k - z * s, c + y * y * k, z * y * k + x * s],
+        [x * z * k + y * s, y * z * k - x * s, c + z * z * k],
+    ]
 }
 
-/// How far the arms come down from the bind pose (which holds them 45 degrees out), radians.
-const ARM_DOWN: f32 = 0.58;
+/// A standing pose for Elden Ring's player skeleton, as joint rotations in the bind pose's space (the bind pose is
+/// an A-pose: arms 45 degrees down and out, palms down). Each rotation turns its bone and everything under it about
+/// the bone's own joint. Arms hang at the sides, a little forward; the elbows bend, the right one more, so the right
+/// hand holds the weapon in front of the thigh; the right fingers close around the grip, the left ones relax; the
+/// feet stand a little apart.
+fn pose_rotation(name: &str, world: &(M3, [f32; 3])) -> Option<M3> {
+    let side = |n: &str| if n.starts_with("L_") { 1.0 } else { -1.0 };
+    let along = world.0[0];
+    match name {
+        "L_UpperArm" | "R_UpperArm" => Some(mul(&rot_z(-0.62 * side(name)), &rot_x(0.10))),
+        // The deltoid helpers follow the upper arm halfway.
+        "L_Shoulder" | "R_Shoulder" => Some(mul(&rot_z(-0.31 * side(name)), &rot_x(0.05))),
+        "L_Forearm" => Some(rot_axis(cross(along, [0.0, 0.0, -1.0]), 0.35)),
+        "R_Forearm" => Some(rot_axis(cross(along, [0.0, 0.0, -1.0]), 0.6)),
+        "L_Thigh" | "R_Thigh" => Some(rot_z(0.05 * side(name))),
+        _ => {
+            // Fingers (not the thumbs, Finger0*): curl toward the palm, about the axis the fingers spread along.
+            let finger = name.strip_prefix("L_Finger").or_else(|| name.strip_prefix("R_Finger"))?;
+            if finger.starts_with('0') {
+                return None;
+            }
+            let right = name.starts_with("R_");
+            let amount = match (right, finger.len()) {
+                (true, 1) => 1.0,
+                (true, _) => 0.8,
+                (false, _) => 0.25,
+            };
+            Some(rot_axis([0.0, 0.0, if right { 1.0 } else { -1.0 }], amount))
+        }
+    }
+}
 
+/// The posed body skeleton: per bone of the body FLVER, the transform from its bind position to its posed one
+/// (`p * rotation + offset`).
 struct Pose {
-    /// Shoulder pivots and rotations of the left and right arm.
-    pivot: [[f32; 3]; 2],
-    rot: [M3; 2],
+    names: HashMap<String, usize>,
+    bind: Vec<(M3, [f32; 3])>,
+    delta: Vec<(M3, [f32; 3])>,
     /// The right hand's grip point after posing.
     grip: [f32; 3],
 }
 
+const IDENTITY: M3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
 impl Pose {
     fn new(body: Option<&Flver>) -> Pose {
-        let mut pivot = [[0.172, 1.391, 0.034], [-0.172, 1.391, 0.034]];
-        let mut grip = [-0.598, 0.965, 0.016];
-        if let Some(f) = body {
-            let world = bind_pose(&f.bones);
-            let find = |n: &str| f.bones.iter().position(|b| b.name == n);
-            if let (Some(l), Some(r)) = (find("L_UpperArm"), find("R_UpperArm")) {
-                pivot = [world[l].1, world[r].1];
+        let Some(f) = body else {
+            return Pose { names: HashMap::new(), bind: vec![], delta: vec![], grip: [-0.25, 0.95, -0.15] };
+        };
+        let bind = bind_pose(&f.bones);
+        let mut delta: Vec<Option<(M3, [f32; 3])>> = vec![None; f.bones.len()];
+        fn get(i: usize, f: &Flver, bind: &[(M3, [f32; 3])], delta: &mut Vec<Option<(M3, [f32; 3])>>, depth: usize)
+               -> (M3, [f32; 3]) {
+            if let Some(d) = delta[i] {
+                return d;
             }
-            if let Some(h) = find("R_Hand") {
-                // R_Weapon sits 9 cm along the hand.
-                grip = add(world[h].1, scale(world[h].0[0], 0.09));
+            let b = &f.bones[i];
+            let pivot = bind[i].1;
+            let q = pose_rotation(&b.name, &bind[i]).unwrap_or(IDENTITY);
+            // Turn about the joint, then follow the parent.
+            let mut r = q;
+            let mut t = sub(pivot, apply(pivot, &q));
+            if b.parent >= 0 && (b.parent as usize) < f.bones.len() && depth < 64 {
+                let (pr, pt) = get(b.parent as usize, f, bind, delta, depth + 1);
+                r = mul(&r, &pr);
+                t = add(apply(t, &pr), pt);
             }
+            delta[i] = Some((r, t));
+            (r, t)
         }
-        // Left arm (+x) turns clockwise seen from the front, the right arm the other way.
-        let rot = [rot_z(-ARM_DOWN), rot_z(ARM_DOWN)];
-        let grip = add(apply(sub(grip, pivot[1]), &rot[1]), pivot[1]);
-        Pose { pivot, rot, grip }
+        let delta: Vec<(M3, [f32; 3])> = (0..f.bones.len()).map(|i| get(i, f, &bind, &mut delta, 0)).collect();
+        let names: HashMap<String, usize> = f.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+        let mut grip = [-0.25, 0.95, -0.15];
+        if let Some(&h) = names.get("R_Hand") {
+            // R_Weapon sits 9 cm along the hand.
+            let g = add(bind[h].1, scale(bind[h].0[0], 0.09));
+            grip = add(apply(g, &delta[h].0), delta[h].1);
+        }
+        Pose { names, bind, delta, grip }
     }
 
-    fn vertex(&self, p: [f32; 3], n: [f32; 3], share: [f32; 2]) -> ([f32; 3], [f32; 3]) {
-        let keep = (1.0 - share[0] - share[1]).max(0.0);
-        let mut op = scale(p, keep);
-        let mut on = scale(n, keep);
-        for s in 0..2 {
-            if share[s] > 0.0 {
-                op = add(op, scale(add(apply(sub(p, self.pivot[s]), &self.rot[s]), self.pivot[s]), share[s]));
-                on = add(on, scale(apply(n, &self.rot[s]), share[s]));
-            }
+    /// For each bone of a parts FLVER, the body bone that moves it: the one of the same name, else that of its
+    /// nearest named ancestor, else the deforming body bone nearest its bind position. (Armour files carry partial
+    /// skeletons; the gauntlets' forearm bones have no parents.)
+    fn map(&self, f: &Flver) -> Vec<Option<usize>> {
+        if self.delta.is_empty() {
+            return vec![None; f.bones.len()];
         }
-        (op, on)
+        let own = bind_pose(&f.bones);
+        (0..f.bones.len())
+            .map(|i| {
+                let mut j = i as i32;
+                for _ in 0..64 {
+                    if j < 0 || j as usize >= f.bones.len() {
+                        break;
+                    }
+                    if let Some(&k) = self.names.get(&f.bones[j as usize].name) {
+                        return Some(k);
+                    }
+                    j = f.bones[j as usize].parent;
+                }
+                let p = own[i].1;
+                self.names
+                    .iter()
+                    .filter(|(n, _)| !n.starts_with("Ctrl") && !n.starts_with("FC_") && !n.contains("Finger"))
+                    .map(|(_, &k)| {
+                        let d = sub(self.bind[k].1, p);
+                        (dot(d, d), k)
+                    })
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, k)| k)
+            })
+            .collect()
+    }
+
+    /// A skinned vertex: the weighted blend of its bones' bind-to-posed transforms.
+    fn vertex(&self, p: [f32; 3], n: [f32; 3], bones: Option<&[u16; 4]>, weights: Option<&[f32; 4]>,
+              map: &[Option<usize>]) -> ([f32; 3], [f32; 3]) {
+        let (Some(b), Some(w)) = (bones, weights) else { return (p, n) };
+        let total: f32 = w.iter().sum();
+        let mut op = [0.0; 3];
+        let mut on = [0.0; 3];
+        let mut used = 0.0;
+        for k in 0..4 {
+            let wk = if total > 0.0 { w[k] / total } else if k == 0 { 1.0 } else { 0.0 };
+            if wk <= 0.0 {
+                continue;
+            }
+            let Some(Some(bone)) = map.get(b[k] as usize) else { continue };
+            let (r, t) = &self.delta[*bone];
+            op = add(op, scale(add(apply(p, r), *t), wk));
+            on = add(on, scale(apply(n, r), wk));
+            used += wk;
+        }
+        if used < 1e-4 {
+            return (p, n);
+        }
+        // Weights on bones that could not be found stay put.
+        (add(op, scale(p, 1.0 - used)), add(on, scale(n, 1.0 - used)))
     }
 }
 
@@ -829,11 +938,6 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
     }
     let body = parts.first().filter(|(s, _, _)| s.starts_with("fc_")).and_then(|(_, p, _)| p.flvers.first());
     let pose = Pose::new(body);
-    // The armour files' skeletons are partial (the gauntlets' forearm bones have no parents), so which bones follow
-    // the arms comes from the body's full skeleton, by name.
-    let by_name: HashMap<&str, [f32; 2]> = body
-        .map(|b| b.bones.iter().map(|x| x.name.as_str()).zip(arm_share(&b.bones)).collect())
-        .unwrap_or_default();
     let mut out = Vec::new();
     for (stem, part, weapon) in &parts {
         let is_face = stem.starts_with("fg_");
@@ -841,11 +945,7 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
         // A weapon's main model only (the others are sheaths and such).
         let flvers = if *weapon { &part.flvers[..part.flvers.len().min(1)] } else { &part.flvers[..] };
         for f in flvers {
-            let share: Vec<[f32; 2]> = arm_share(&f.bones)
-                .into_iter()
-                .zip(&f.bones)
-                .map(|(own, b)| by_name.get(b.name.as_str()).copied().unwrap_or(own))
-                .collect();
+            let map = pose.map(f);
             for m in &f.meshes {
                 if m.tris.is_empty() || m.group.is_some_and(|g| g < 128 && look.hide & (1u128 << g) != 0) {
                     continue;
@@ -864,18 +964,7 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
                     let (p, n) = if *weapon {
                         weapon_vertex(m.pos[i], m.nrm[i], pose.grip)
                     } else {
-                        let mut s = [0.0f32; 2];
-                        if let (Some(b), Some(w)) = (m.bones.get(i), m.weights.get(i)) {
-                            let total: f32 = w.iter().sum();
-                            for k in 0..4 {
-                                if let Some(bs) = share.get(b[k] as usize) {
-                                    let wk = if total > 0.0 { w[k] / total } else if k == 0 { 1.0 } else { 0.0 };
-                                    s[0] += bs[0] * wk;
-                                    s[1] += bs[1] * wk;
-                                }
-                            }
-                        }
-                        pose.vertex(m.pos[i], m.nrm[i], s)
+                        pose.vertex(m.pos[i], m.nrm[i], m.bones.get(i), m.weights.get(i), &map)
                     };
                     pos.push(p);
                     nrm.push(n);
@@ -914,11 +1003,115 @@ fn linear_to_srgb(c: f32) -> f32 {
     c.max(0.0).powf(1.0 / 2.2)
 }
 
+/// Lighting and the sRGB <-> linear tables.
+struct Shade {
+    fast: bool,
+    light: [f32; 3],
+    fill: [f32; 3],
+    to_linear: [f32; 256],
+    to_srgb: Vec<f32>,
+}
+
+const SRGB_STEPS: usize = 4096;
+
+impl Shade {
+    fn new(light: [f32; 3], fill: [f32; 3], fast: bool) -> Shade {
+        Shade {
+            fast,
+            light,
+            fill,
+            to_linear: std::array::from_fn(|i| srgb_to_linear(i as f32 / 255.0)),
+            to_srgb: (0..=SRGB_STEPS).map(|i| linear_to_srgb(i as f32 / SRGB_STEPS as f32)).collect(),
+        }
+    }
+
+    fn srgb(&self, linear: f32) -> f32 {
+        self.to_srgb[((linear * SRGB_STEPS as f32) as usize).min(SRGB_STEPS)]
+    }
+}
+
+/// Draws one batch's triangles into the rows `y0..y1` (`colour` and `depth` hold just those rows).
+#[allow(clippy::too_many_arguments)]
+fn raster(b: &Batch, screen: &[[f32; 3]], normals: &[[f32; 3]], sw: usize, y0: usize, y1: usize,
+          colour: &mut [[f32; 4]], depth: &mut [f32], shade: &Shade) {
+    let flat = [b.colour[0], b.colour[1], b.colour[2]].map(srgb_to_linear);
+    for t in &b.tris {
+        let [a, bb, c] = t.map(|i| i as usize);
+        let (Some(&p0), Some(&p1), Some(&p2)) = (screen.get(a), screen.get(bb), screen.get(c)) else { continue };
+        let miny = p0[1].min(p1[1]).min(p2[1]).floor().max(y0 as f32) as usize;
+        let maxy = (p0[1].max(p1[1]).max(p2[1]).ceil() as i64).min(y1 as i64 - 1);
+        if maxy < miny as i64 {
+            continue;
+        }
+        let area = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
+        if area.abs() < 1e-6 {
+            continue;
+        }
+        let minx = p0[0].min(p1[0]).min(p2[0]).floor().max(0.0) as usize;
+        let maxx = (p0[0].max(p1[0]).max(p2[0]).ceil() as i64).min(sw as i64 - 1);
+        if maxx < minx as i64 {
+            continue;
+        }
+        let inv = 1.0 / area;
+        // The mip level whose texels are about a pixel on screen.
+        let tex = b.texture.as_ref().map(|t| {
+            let (ua, ub, uc) = (b.uv[a], b.uv[bb], b.uv[c]);
+            let uv_area = ((ub[0] - ua[0]) * (uc[1] - ua[1]) - (uc[0] - ua[0]) * (ub[1] - ua[1])).abs()
+                * (t.w * t.h) as f32;
+            let lod = (0.5 * (uv_area / area.abs()).max(1.0).log2()) as usize;
+            t.level(lod)
+        });
+        // Edge functions step linearly along x.
+        let (d0x, d1x) = (-(p2[1] - p1[1]) * inv, -(p0[1] - p2[1]) * inv);
+        for y in miny..=maxy as usize {
+            let py = y as f32 + 0.5;
+            let px = minx as f32 + 0.5;
+            let mut w0 = ((p1[0] - px) * (p2[1] - py) - (p2[0] - px) * (p1[1] - py)) * inv;
+            let mut w1 = ((p2[0] - px) * (p0[1] - py) - (p0[0] - px) * (p2[1] - py)) * inv;
+            let row = (y - y0) * sw;
+            for x in minx..=maxx as usize {
+                let (u0, u1) = (w0, w1);
+                w0 += d0x;
+                w1 += d1x;
+                let u2 = 1.0 - u0 - u1;
+                if u0 < 0.0 || u1 < 0.0 || u2 < 0.0 {
+                    continue;
+                }
+                let z = u0 * p0[2] + u1 * p1[2] + u2 * p2[2];
+                let at = row + x;
+                if z >= depth[at] {
+                    continue;
+                }
+                let albedo = match tex {
+                    Some(tex) => {
+                        let u = u0 * b.uv[a][0] + u1 * b.uv[bb][0] + u2 * b.uv[c][0];
+                        let v = u0 * b.uv[a][1] + u1 * b.uv[bb][1] + u2 * b.uv[c][1];
+                        let s = if shade.fast { tex.nearest(u, v) } else { tex.sample(u, v) };
+                        if b.alpha_test && s[3] < 127.5 {
+                            continue;
+                        }
+                        [0, 1, 2].map(|i| shade.to_linear[s[i] as usize & 255])
+                    }
+                    None => flat,
+                };
+                depth[at] = z;
+                let mut n = norm(add(add(scale(normals[a], u0), scale(normals[bb], u1)), scale(normals[c], u2)));
+                if n[2] > 0.0 {
+                    n = scale(n, -1.0); // the back of a single-sided cloth faces the camera
+                }
+                let lit = 0.5 + 0.85 * dot(n, shade.light).max(0.0) + 0.3 * dot(n, shade.fill).max(0.0);
+                colour[at] = [shade.srgb(albedo[0] * lit), shade.srgb(albedo[1] * lit), shade.srgb(albedo[2] * lit), 1.0];
+            }
+        }
+    }
+}
+
 /// Draws the request: 2x supersampled, then averaged down; transparent background.
 fn draw(cache: &mut Cache, r: &Request) -> Frame {
     let [w, h] = [r.size[0].max(8) as usize, r.size[1].max(8) as usize];
+    // 2x supersampled; while turning, drawn at 70% and stretched, for speed.
     let ss = if r.fast { 1 } else { 2 };
-    let (sw, sh) = (w * ss, h * ss);
+    let (sw, sh) = if r.fast { ((w * 7 / 10).max(8), (h * 7 / 10).max(8)) } else { (w * 2, h * 2) };
     let mut look = r.look.clone();
     if r.framing == Framing::Portrait {
         // The portrait shows the face: no helm.
@@ -926,12 +1119,21 @@ fn draw(cache: &mut Cache, r: &Request) -> Frame {
         look.hide = 0;
         look.weapon = None;
     }
-    let batches = batches(cache, &look);
+    let batches = match &cache.posed {
+        Some((l, b)) if *l == look => b.clone(),
+        _ => {
+            // Outer layers first (weapon, armour, then hair, face, body): what they cover fails the depth test
+            // before it is shaded.
+            let b = Arc::new(batches(cache, &look).into_iter().rev().collect::<Vec<_>>());
+            cache.posed = Some((look.clone(), b.clone()));
+            b
+        }
+    };
     // View: turn by yaw around the vertical axis through the body; camera looks along +Z (the character faces
     // -Z), x to the right, y up.
     let (centre, height) = match r.framing {
         Framing::Full => ([0.0, 0.9], 1.92),
-        Framing::Portrait => ([0.0, 1.55], 0.5),
+        Framing::Portrait => ([0.0, 1.56], 0.44),
     };
     let k = sh as f32 / height;
     let turn = rot_y(r.yaw);
@@ -956,70 +1158,39 @@ fn draw(cache: &mut Cache, r: &Request) -> Frame {
             }
         }
     }
-    for b in &batches {
-        let screen: Vec<[f32; 3]> = b.pos.iter().map(|p| to_screen(*p)).collect();
-        let normals: Vec<[f32; 3]> = b.nrm.iter().map(|n| norm(apply(*n, &turn))).collect();
-        for t in &b.tris {
-            let [a, bb, c] = t.map(|i| i as usize);
-            let (p0, p1, p2) = (screen[a], screen[bb], screen[c]);
-            let area = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
-            if area.abs() < 1e-6 {
-                continue;
-            }
-            let minx = p0[0].min(p1[0]).min(p2[0]).floor().max(0.0) as usize;
-            let maxx = (p0[0].max(p1[0]).max(p2[0]).ceil() as i64).min(sw as i64 - 1);
-            let miny = p0[1].min(p1[1]).min(p2[1]).floor().max(0.0) as usize;
-            let maxy = (p0[1].max(p1[1]).max(p2[1]).ceil() as i64).min(sh as i64 - 1);
-            if maxx < 0 || maxy < 0 {
-                continue;
-            }
-            for y in miny..=maxy as usize {
-                let py = y as f32 + 0.5;
-                for x in minx..=maxx as usize {
-                    let px = x as f32 + 0.5;
-                    let w0 = ((p1[0] - px) * (p2[1] - py) - (p2[0] - px) * (p1[1] - py)) / area;
-                    let w1 = ((p2[0] - px) * (p0[1] - py) - (p0[0] - px) * (p2[1] - py)) / area;
-                    let w2 = 1.0 - w0 - w1;
-                    if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
-                        continue;
-                    }
-                    let z = w0 * p0[2] + w1 * p1[2] + w2 * p2[2];
-                    let at = y * sw + x;
-                    if z >= depth[at] {
-                        continue;
-                    }
-                    let mut albedo = [b.colour[0], b.colour[1], b.colour[2], 1.0];
-                    if let Some(tex) = &b.texture {
-                        let u = w0 * b.uv[a][0] + w1 * b.uv[bb][0] + w2 * b.uv[c][0];
-                        let v = w0 * b.uv[a][1] + w1 * b.uv[bb][1] + w2 * b.uv[c][1];
-                        albedo = tex.sample(u, v);
-                    }
-                    if b.alpha_test && albedo[3] < 0.5 {
-                        continue;
-                    }
-                    depth[at] = z;
-                    let mut n = norm(add(add(scale(normals[a], w0), scale(normals[bb], w1)), scale(normals[c], w2)));
-                    if n[2] > 0.0 {
-                        n = scale(n, -1.0); // the back of a single-sided cloth faces the camera
-                    }
-                    let lit = 0.5 + 0.85 * dot(n, light).max(0.0) + 0.3 * dot(n, fill).max(0.0);
-                    colour[at] = [
-                        linear_to_srgb(srgb_to_linear(albedo[0]) * lit),
-                        linear_to_srgb(srgb_to_linear(albedo[1]) * lit),
-                        linear_to_srgb(srgb_to_linear(albedo[2]) * lit),
-                        1.0,
-                    ];
+    // Project once, then rasterize in horizontal bands, one thread each.
+    let projected: Vec<(Vec<[f32; 3]>, Vec<[f32; 3]>)> = batches
+        .iter()
+        .map(|b| (b.pos.iter().map(|p| to_screen(*p)).collect(), b.nrm.iter().map(|n| norm(apply(*n, &turn))).collect()))
+        .collect();
+    // Half the cores: the game keeps the rest.
+    let threads = std::thread::available_parallelism().map_or(2, |n| n.get() / 2).clamp(2, 6);
+    let rows = sh.div_ceil(threads);
+    let shade = Shade::new(light, fill, r.fast);
+    std::thread::scope(|scope| {
+        for (band, (colour, depth)) in colour.chunks_mut(rows * sw).zip(depth.chunks_mut(rows * sw)).enumerate() {
+            let (batches, projected, shade) = (&batches, &projected, &shade);
+            scope.spawn(move || {
+                let y0 = band * rows;
+                let y1 = (y0 + rows).min(sh);
+                for (b, (screen, normals)) in batches.iter().zip(projected) {
+                    raster(b, screen, normals, sw, y0, y1, colour, depth, shade);
                 }
-            }
+            });
         }
-    }
+    });
     let mut rgba = vec![0u8; w * h * 4];
     for y in 0..h {
         for x in 0..w {
             let mut s = [0.0f32; 4];
             for dy in 0..ss {
                 for dx in 0..ss {
-                    let c = colour[(y * ss + dy) * sw + x * ss + dx];
+                    let (cx, cy) = if r.fast {
+                        ((x * sw / w).min(sw - 1), (y * sh / h).min(sh - 1))
+                    } else {
+                        (x * ss + dx, y * ss + dy)
+                    };
+                    let c = colour[cy * sw + cx];
                     // Premultiplied while averaging.
                     s[0] += c[0] * c[3];
                     s[1] += c[1] * c[3];
@@ -1039,7 +1210,8 @@ fn draw(cache: &mut Cache, r: &Request) -> Frame {
             if r.framing == Framing::Portrait {
                 // Round, for the portrait circle (soft edge).
                 let (dx, dy) = (x as f32 + 0.5 - w as f32 / 2.0, y as f32 + 0.5 - h as f32 / 2.0);
-                let radius = w.min(h) as f32 * 0.42;
+                // Inside the ring of Art_Character_Cover02 (its hole is 0.375 of the width).
+                let radius = w.min(h) as f32 * 0.37;
                 a *= (radius - (dx * dx + dy * dy).sqrt()).clamp(0.0, 1.0);
             }
             rgba[o + 3] = (a * 255.0).round().clamp(0.0, 255.0) as u8;

@@ -10,13 +10,16 @@ pub struct Settings {
     pub level: bool,
     /// Wizard101 loading screens on the mod's door warps.
     pub loadscreen: bool,
+    /// The map page draws Elden Ring's map on the page from a copy of the screen, over the world as it was when
+    /// the map opened (0: the page is cut out to show the map, and the rest of the screen is covered).
+    pub bookmap: bool,
 }
 
 /// `key = value` lines: left and bottom (extra gap from the screen's bottom-left corner, in Wizard101 pixels; 0 is
 /// exactly where Wizard101 puts the globes), scale (1 = Wizard101's size on a 768-pixel-tall screen) and debug (1
 /// shows the raw numbers and logs every candidate stat value once a second) and level (0 hides the level number beside the experience bar).
 pub fn load_settings(path: &Path) -> Settings {
-    let mut settings = Settings { left: 0.0, bottom: 0.0, scale: 1.0, debug: false, level: true, loadscreen: true };
+    let mut settings = Settings { left: 0.0, bottom: 0.0, scale: 1.0, debug: false, level: true, loadscreen: true, bookmap: true };
     for line in std::fs::read_to_string(path).unwrap_or_default().lines() {
         let Some((key, value)) = line.split_once('=') else { continue };
         let value = value.trim();
@@ -27,6 +30,7 @@ pub fn load_settings(path: &Path) -> Settings {
             "debug" => settings.debug = value == "1",
             "level" => settings.level = value != "0",
             "loadscreen" => settings.loadscreen = value != "0",
+            "bookmap" => settings.bookmap = value != "0",
             _ => {}
         }
     }
@@ -41,9 +45,10 @@ pub fn save_settings(path: &Path, s: &Settings) -> std::io::Result<()> {
          # scale: 1 = Wizard101's size on a 768-pixel-tall screen\n\
          # level: 0 hides the level number beside the experience bar\n\
          # loadscreen: 0 turns off the Wizard101 loading screen on door warps\n\
+         # bookmap: 0 shows Elden Ring's map through a window in the map page instead of on it\n\
          # debug: 1 logs the raw values once a second\n\
-         left = {}\nbottom = {}\nscale = {}\nlevel = {}\nloadscreen = {}\ndebug = {}\n",
-        s.left, s.bottom, s.scale, s.level as u8, s.loadscreen as u8, s.debug as u8
+         left = {}\nbottom = {}\nscale = {}\nlevel = {}\nloadscreen = {}\nbookmap = {}\ndebug = {}\n",
+        s.left, s.bottom, s.scale, s.level as u8, s.loadscreen as u8, s.bookmap as u8, s.debug as u8
     );
     std::fs::write(path, text)
 }

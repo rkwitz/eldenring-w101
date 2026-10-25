@@ -155,6 +155,11 @@ impl ItemData {
         data
     }
 
+    /// A cookbook's full caption: what it is, then the recipes it teaches, one per line.
+    pub fn caption(&self, goods_id: u32) -> Option<String> {
+        self.text.get(&('C', goods_id)).map(|t| t.replace("\\n", "\n"))
+    }
+
     fn intern(&mut self, s: &str) -> &'static str {
         if let Some(k) = self.kinds.iter().find(|k| **k == s) {
             return k;

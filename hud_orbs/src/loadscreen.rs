@@ -13,8 +13,12 @@ use crate::layout::Textures;
 
 /// Set by the door events (m60_42_36_00.emevd) just before a door warp; cleared here.
 pub const DOOR_FLAG: u32 = 1042366900;
-const SHOW: f32 = 1.0;
+/// The door events: flag on, 0.75 s, fade-out and warp, fade-in about 1 s after the flag. The screen holds
+/// fully up this long from the flag, covering all of it.
+const SHOW: f32 = 1.8;
 const FADE: f32 = 0.35;
+/// The longest the screen waits for the game to come back from a warp (its own fade or loading) before fading out.
+const MAX_WAIT: f32 = 15.0;
 
 pub const IMAGE: &str = "GUI/LoadScreen_W01_WC_01.png";
 pub const BAR: &str = "GUI/Art/Art_Progress_Bar_Large.png";
@@ -23,23 +27,41 @@ pub const FILL: &str = "GUI/Bar/Bar_Exp01.png";
 #[derive(Default)]
 pub struct LoadScreen {
     shown_at: Option<Instant>,
+    /// When the fade-out began: after SHOW seconds, once the game has finished its warp.
+    fading_at: Option<Instant>,
 }
 
 impl LoadScreen {
+    /// Whether the screen is up and still holding (the door flag is left on until then).
+    pub fn holding(&self) -> bool {
+        self.shown_at.is_some() && self.fading_at.is_none()
+    }
+
     /// Shows the loading screen from now.
     pub fn show(&mut self) {
         tracing::info!("door warp: showing the loading screen");
         self.shown_at = Some(Instant::now());
+        self.fading_at = None;
     }
 
-
-    pub fn draw(&self, ui: &Ui, textures: &Textures) {
+    /// Draws the screen while it is up. `busy`: the game is still warping (faded out, loading, or no player yet);
+    /// the screen stays fully up until it is done, so it covers the whole warp.
+    pub fn draw(&mut self, ui: &Ui, textures: &Textures, busy: bool) {
         let Some(at) = self.shown_at else { return };
         let t = at.elapsed().as_secs_f32();
-        if t >= SHOW + FADE {
+        if self.fading_at.is_none() && t >= SHOW && (!busy || t >= MAX_WAIT) {
+            self.fading_at = Some(Instant::now());
+            // The warp is over: clear the door flag (it stays on while the screen is up).
+            crate::game::set_event_flag(DOOR_FLAG, false);
+        }
+        let alpha = match self.fading_at {
+            None => 1.0,
+            Some(f) => 1.0 - f.elapsed().as_secs_f32() / FADE,
+        };
+        if alpha <= 0.0 {
+            self.shown_at = None;
             return;
         }
-        let alpha = if t < SHOW { 1.0 } else { 1.0 - (t - SHOW) / FADE };
         let a = |c: ImColor32| ImColor32::from_rgba(c.r, c.g, c.b, (c.a as f32 * alpha) as u8);
         let [w, h] = ui.io().display_size;
         let draw = ui.get_foreground_draw_list();

@@ -62,8 +62,9 @@ pub struct State {
     pub sub: usize,
     /// The chosen pet (spirit ash).
     pub pet: usize,
-    /// Crafting: show cookbooks instead of materials.
+    /// Crafting: show cookbooks instead of materials, and which cookbook is open on the left page.
     pub cookbooks: bool,
+    pub cookbook: usize,
     /// The layout node of the chosen filter button (deck), to show it pressed.
     pub filter_node: Option<usize>,
     /// How many subs/pages the current tab has (for wrapping), set while binding.
@@ -94,6 +95,9 @@ pub struct Data<'a> {
     pub map_opening: bool,
     /// Elden Ring's map is open behind the book (the page is a window onto it).
     pub map_open: bool,
+    /// With the map open: a copy of the game's screen (the map) to draw on the page, and the screen's width /
+    /// height. None: the page is cut out to show the map behind it.
+    pub map_picture: Option<f32>,
     /// Per ACHIEVEMENTS entry: earned (its event flag), or None when not tracked / not readable.
     pub achieved: &'a [Option<bool>],
 }
@@ -331,6 +335,11 @@ pub fn click(tab: Tab, l: &Layout, id: usize, st: &mut State) -> Action {
         (Tab::Crafting, "Reagent_Toggle" | "Reagent_Toggle2") => {
             st.cookbooks = !st.cookbooks;
             st.page = 0;
+        }
+        (Tab::Crafting, _) if st.cookbooks && name.starts_with("Item_") => {
+            if let Ok(n) = name["Item_".len()..].parse::<usize>() {
+                st.cookbook = st.page * 8 + n.saturating_sub(1);
+            }
         }
         (Tab::Help, _) if name.starts_with("Tab_") => {
             if let Some(i) = HELP.iter().position(|(n, _, _)| *n == name) {
@@ -625,7 +634,7 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     grey(l, v, &["EquipButton", "SnackButton", "EquipJewelButton", "ToggleTalentDisplay", "PetTomeButton",
                  "PetBadgesButton"]);
     hide(l, v, &["wndRatingBkg", "wndAgingBkg", "eggHatchTimer", "_NOT_USED_SnackToggleWin", "ctrlGenetics", "cardBkg",
-                 "spellCard", "spriteSchoolIcon"]);
+                 "spellCard", "spellCardSmall1", "spellCardSmall2", "spellCardSmall3", "spriteSchoolIcon"]);
     // (name, kind, upgrade level, item)
     let mut pets: Vec<(String, String, Option<u32>, u32)> = Vec::new();
     if let Some(sheet) = d.sheet {
@@ -676,32 +685,104 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             v.progress.extend(l.find("prgrExperience").map(|p| (p, 1.0)));
         }
     }
-    // The picture fills the left page: Wizard101's portrait frame, enlarged, with the item's picture in it.
-    let frame = [62.0, 40.0, 372.0, 350.0];
-    if let Some(back) = l.find("spritePortraitBack") {
-        v.rect.insert(back, frame);
+    // Laid out as PetStatsSpellbookPage is: the portrait (the item's picture) top left with its rating under it,
+    // the talents column below; the pet's stage over the stat block on the right. Labels and values use the
+    // page's own WizardFancy (0.5 for labels and values, 0.4 for list entries); prose uses WizardNormal, as
+    // Wizard101's descriptions do, since WizardFancy is all small capitals.
+    let label = TextStyle::new("WizardFancy", 0.5, BLACK);
+    let value = TextStyle::new("WizardFancy", 0.5, BLACK).right();
+    let heading = TextStyle::new("WizardFancy", 0.5, BLACK).centred();
+    let entry = TextStyle::new("WizardFancy", 0.4, BLACK);
+    let prose = TextStyle::new("WizardNormal", 0.42, BLACK).wrapped();
+    let rule = ImColor32::from_rgba(90, 60, 30, 110);
+    if let Some(p) = l.find("wndPortrait") {
+        let r = l.nodes[p].rect;
+        icon(v, d.items, *id, [r[0] + 8.0, r[1] + 8.0, r[2] - 8.0, r[3] - 8.0]);
     }
-    // Torrent's picture is the Spectral Steed Whistle's.
-    icon(v, d.items, *id, [frame[0] + 36.0, frame[1] + 36.0, frame[2] - 36.0, frame[3] - 36.0]);
+    match level {
+        Some(level) => {
+            v.show(l.find("wndRatingBkg"), true);
+            v.set(l.find("txtActiveRating"), centre(&format!("+{level}")));
+            v.set(l.find("txtOverallRating"), centre("/10"));
+        }
+        None => {}
+    }
+    // Beside the portrait, where Wizard101 shows the pet's card: what kind of companion it is.
+    let side = [236.0, 60.0, 368.0, 196.0];
+    v.add([side[0], side[1], side[2], side[1] + 24.0], kind.clone(), heading.clone());
+    v.fills.push(([side[0] + 10.0, side[1] + 27.0, side[2] - 10.0, side[1] + 28.5], rule));
+    let summon = if level.is_some() { "Summon at a Rebirth Monument" } else { "Call with the Spectral Steed Whistle" };
+    v.add([side[0] + 4.0, side[1] + 34.0, side[2] - 4.0, side[3]], summon, prose.clone().centred());
+
+    // The talents column (ctrlGenetics' place): Wizard101 lists a pet's talents one per line under a heading.
+    let column = l.find("ctrlGenetics").map(|i| l.nodes[i].rect).unwrap_or([76.0, 206.0, 369.0, 580.0]);
+    let talents: Vec<&str> = if level.is_some() {
+        vec!["Fights at your side", "Upgrade with Glovewort", "Recalled when you rest", "One summon at a time"]
+    } else {
+        vec!["Double jump", "Rides spiritsprings", "Outdoors only", "Heals on Rowa Raisins"]
+    };
+    let mut y = column[1] + 8.0;
+    v.add([column[0], y, column[2], y + 24.0], "Talents", heading.clone());
+    y += 30.0;
+    for t in &talents {
+        v.add([column[0] + 26.0, y, column[2] - 10.0, y + 22.0], *t, entry.clone());
+        v.fills.push(([column[0] + 12.0, y + 8.0, column[0] + 18.0, y + 14.0], ImColor32::from_rgb(120, 70, 20)));
+        y += 26.0;
+    }
+    y += 10.0;
+    v.add([column[0], y, column[2], y + 24.0], "Lore", heading.clone());
+    y += 30.0;
     let tip = d.items.tooltip(*id, 1, d.names, false);
     let about = tip.last().filter(|_| tip.len() > 1).cloned().unwrap_or_default();
-    v.add([frame[0] + 6.0, frame[3] + 12.0, frame[2] - 6.0, 580.0], about,
-          TextStyle::new("WizardFancy", 0.4, BLACK).wrapped());
+    v.add([column[0] + 12.0, y, column[2] - 10.0, column[3]], about, prose.clone());
+
+    // The stage line over the bars, as Wizard101 names a pet's age there.
+    v.show(l.find("wndAgingBkg"), true);
+    hide(l, v, &["lblBaby", "lblTeen", "lblAdult", "lblAncient", "lblEpic", "lblMega", "lblUltra"]);
+    if let Some(bar) = l.find("prgrAging").and_then(|b| l.nodes[b].parent) {
+        v.show(Some(bar), false);
+    }
+    let stage = match level {
+        Some(0) => "Unrefined".to_string(),
+        Some(10) => "Fully Upgraded".to_string(),
+        Some(n) => format!("Upgraded +{n}"),
+        None => "Steed".to_string(),
+    };
+    v.set(l.find("lblCurrentLevel"), centre(&stage));
+
+    // The stat block: label left, value right, a rule under each, as PetStatBlockControl draws its stats.
     if let Some(block) = l.find("ctrlStatBlock") {
         let r = l.nodes[block].rect;
-        // PetStatsSpellbookPage's own text: WizardFancy at 0.5 (labels, names) and 0.4 (the talent lists).
-        let title = TextStyle::new("WizardFancy", 0.5, BLACK).centred();
-        let body = TextStyle::new("WizardFancy", 0.4, BLACK).wrapped();
-        v.add([r[0] + 20.0, r[1] + 16.0, r[2] - 20.0, r[1] + 42.0], if level.is_some() { "Spirit Ash" } else { "Torrent" }, title);
-        let text = if level.is_some() {
-            format!("Summon {name} near a Rebirth Monument. Upgrade it with Grave or Ghost Glovewort at Roderika's \
-                     side in the Roundtable Hold.\n\nSpirit ashes owned: {}", pets.iter().filter(|p| p.2.is_some()).count())
-        } else {
-            "Torrent, the spectral steed. Call him with the Spectral Steed Whistle while outdoors; he can double \
-             jump and ride spiritsprings."
-                .to_string()
+        v.add([r[0], r[1] + 12.0, r[2], r[1] + 36.0], "Stats", heading.clone());
+        let owned = pets.iter().filter(|p| p.2.is_some()).count();
+        let rows: Vec<(&str, String)> = match level {
+            Some(level) => vec![
+                ("Upgrade", format!("+{level} / 10")),
+                ("Summoned", "Rebirth Monuments".into()),
+                ("Upgraded by", "Roderika".into()),
+                ("Spirit ashes", owned.to_string()),
+            ],
+            None => vec![
+                ("Mount", "Torrent".into()),
+                ("Summoned", "Whistle".into()),
+                ("Double jump", "Yes".into()),
+                ("Spiritsprings", "Yes".into()),
+                ("Spirit ashes", owned.to_string()),
+            ],
         };
-        v.add([r[0] + 24.0, r[1] + 50.0, r[2] - 24.0, r[3] - 16.0], text, body);
+        let mut y = r[1] + 44.0;
+        for (name, val) in rows {
+            v.add([r[0] + 24.0, y, r[0] + 170.0, y + 24.0], name, label.clone());
+            v.add([r[0] + 150.0, y, r[2] - 24.0, y + 24.0], val, value.clone());
+            v.fills.push(([r[0] + 20.0, y + 27.0, r[2] - 20.0, y + 28.5], rule));
+            y += 34.0;
+        }
+        let note = if level.is_some() {
+            "Spirit ashes are summoned near Rebirth Monuments, and grow stronger with Grave or Ghost Glovewort."
+        } else {
+            "Torrent comes when you blow the whistle outdoors, and fades away indoors and in most boss fights."
+        };
+        v.add([r[0] + 24.0, y + 6.0, r[2] - 24.0, r[3] - 10.0], note, prose.clone());
     }
 }
 
@@ -941,6 +1022,18 @@ pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
 
 /// The part of the map page that is cut out to show Elden Ring's map while it is open.
 pub const MAP_HOLE: [f32; 4] = [36.0, 56.0, 724.0, 524.0];
+/// The copy of the game's screen while its map is open (book.rs).
+pub const MAP_PICTURE: &str = "@screen/map";
+
+/// The map's place on the page: the screen's shape (`aspect` = width / height), as big as fits in MAP_HOLE with a
+/// margin of page around it, as if the map were printed on the book's two pages.
+pub fn map_rect(aspect: f32) -> [f32; 4] {
+    let h = MAP_HOLE;
+    let (room_w, room_h) = (h[2] - h[0] - 16.0, h[3] - h[1] - 16.0);
+    let (w, ht) = if room_w / room_h > aspect { (room_h * aspect, room_h) } else { (room_w, room_w / aspect) };
+    let (cx, cy) = ((h[0] + h[2]) / 2.0, (h[1] + h[3]) / 2.0);
+    [cx - w / 2.0, cy - ht / 2.0, cx + w / 2.0, cy + ht / 2.0]
+}
 
 fn map(l: &Layout, d: &Data, v: &mut View) {
     v.set(l.find("ZoneName"), centre("The Lands Between"));
@@ -949,7 +1042,17 @@ fn map(l: &Layout, d: &Data, v: &mut View) {
     hide(l, v, &["txtGoHomeTimer", "txtGotoDormTimer"]);
     grey(l, v, &["GoHomeButton", "GotoDormButton"]);
     if d.map_open {
-        v.hole = Some(MAP_HOLE);
+        // The whole map screen, scaled onto the page in its own shape; or, without a copy of the screen, a window
+        // of that shape onto the map behind the book.
+        let r = map_rect(d.map_picture.unwrap_or(16.0 / 9.0));
+        match d.map_picture {
+            Some(_) => {
+                v.fills.push(([r[0] - 6.0, r[1] - 6.0, r[2] + 6.0, r[3] + 6.0], ImColor32::from_rgb(74, 46, 24)));
+                v.images.push((r, MAP_PICTURE.into(), [0.0, 0.0, 1.0, 1.0]));
+                v.picture = Some(r);
+            }
+            None => v.hole = Some(r),
+        }
         v.add([MAP_HOLE[0], MAP_HOLE[3] + 4.0, MAP_HOLE[2], MAP_HOLE[3] + 26.0],
               "Close the map as usual, or click another tab of the book", TextStyle::new("WizardFancy", 0.45, BLACK).centred());
         return;
@@ -999,17 +1102,37 @@ fn crafting(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     let Some(sheet) = d.sheet else { return };
     let kit = sheet.key_items.iter().any(|(id, _)| d.names.item(*id) == "Crafting Kit");
     v.set(l.find("labelItemHighlighted"), centre(if kit { "Crafting Kit" } else { "No Crafting Kit yet" }));
-    let mut list: Vec<(String, u32)> = if st.cookbooks {
-        sheet.key_items.iter().map(|(id, n)| (d.names.item(*id), *n)).filter(|(n, _)| n.contains("Cookbook")).collect()
+    let mut list: Vec<(String, u32, u32)> = if st.cookbooks {
+        sheet.key_items.iter().map(|(id, n)| (d.names.item(*id), *n, *id)).filter(|(n, _, _)| n.contains("Cookbook")).collect()
     } else {
-        sheet.items.iter().filter(|(id, _)| is_material(*id)).map(|(id, n)| (d.names.item(*id), *n)).collect()
+        sheet.items.iter().filter(|(id, _)| is_material(*id)).map(|(id, n)| (d.names.item(*id), *n, *id)).collect()
     };
     list.sort();
+    if st.cookbooks && !list.is_empty() {
+        // The chosen cookbook (click one on the right), open on the left page: its text and recipes.
+        st.cookbook = st.cookbook.min(list.len() - 1);
+        let (name, _, id) = &list[st.cookbook];
+        hide(l, v, &["portrait_background", "card_background", "IngredientBackground"]);
+        // The potion doodle down the left edge would sit under the text.
+        for (i, n) in l.nodes.iter().enumerate() {
+            if n.name == "Doodle" && n.rect[2] < 200.0 {
+                v.show(Some(i), false);
+            }
+        }
+        v.set(l.find("labelItemHighlighted"), centre(name));
+        let text = d.items.caption(id & 0x0FFF_FFFF).unwrap_or_else(|| "This cookbook's pages are blank.".into());
+        // Long recipe lists in smaller type, so they fit the page.
+        let size = if text.lines().count() > 12 { 0.34 } else { 0.4 };
+        v.add([84.0, 168.0, 332.0, 566.0], text, TextStyle::new("WizardNormal", size, BLACK).wrapped());
+    }
     let page = paging(l, v, st, list.len(), rows.len(), ("PageNumber", "leftscroll", "rightscroll"));
     for (i, row) in rows.iter().enumerate() {
         match list.get(page * rows.len() + i) {
-            Some((name, count)) => {
+            Some((name, count, _)) => {
                 let r = l.nodes[*row].rect;
+                if st.cookbooks && page * rows.len() + i == st.cookbook {
+                    v.checked.insert(*row);
+                }
                 v.add([r[0] + 22.0, r[1], r[2] - 52.0, r[3]], name.clone(), TextStyle::new("WizardFancy", 0.42, LIGHT_YELLOW));
                 if !st.cookbooks {
                     v.add([r[2] - 56.0, r[1], r[2] - 18.0, r[3]], format!("x{count}"),

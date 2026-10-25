@@ -45,8 +45,10 @@ PAGES = [
     "SpellBookPrefsWindow", "CharStatsSpellbookPage", "InventorySpellbookPage", "PetStatsSpellbookPage",
     "DeckConfiguration", "QuestListWindow", "MapSpellbookPage", "RecipeWindow", "HelpSpellbookPage", "Settings", "QuestInfoWindow",
 ]
-# The Wizard City loading screen and the loading bar.
-EXTRA_ART = ["GUI/LoadScreen_W01_WC_01.dds", "GUI/Art/Art_Progress_Bar_Large.dds", "GUI/Art/Art_Progress_Bar01.dds"]
+# The Wizard City loading screen, the loading bar, and the wand mouse cursor (GUI/Cursors.xml "Default"; its
+# cursor.cur twin puts the hot spot at 5, 5 of 45).
+EXTRA_ART = ["GUI/LoadScreen_W01_WC_01.dds", "GUI/Art/Art_Progress_Bar_Large.dds", "GUI/Art/Art_Progress_Bar01.dds",
+             "GUI/cursor.dds"]
 FONT_FILE = re.compile(r"([A-Za-z0-9_]+)\.xml$")
 
 
