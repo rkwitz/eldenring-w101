@@ -184,22 +184,28 @@ def unlit_material(vanilla, brightness=1.0):
             "gx": plain["gx"], "textures": [("M_A__NoLight_snp_Texture2D_1_AlbedoMap_0", scale)]}
 
 
-EMISSIVE_MATBIN = r"Map_m12_00\matxml\m12_00_680"  # shader M[AMSN_V]_Emissive.spx, alpha ref 0, no colour params
+EMISSIVE_ASSET = r"asset\aeg\aeg099\aeg099_332.geombnd.dcx"  # vanilla asset (game folder) with one M[AMSN_V]_Emissive
 
 
-def emissive_material(vanilla):
-    """Material template for `split_materials(opaque=...)` that shows the texture as light: matbin shader
-    M[AMSN_V]_Emissive.spx, the street's own deferred M_AMSN_V shader (whose FLVER texture paths we know the game
-    uses) plus an EmissiveMap. The texture goes in the EmissiveMap, the AlbedoMap gets a flat black texture (so sun,
-    sky light and shadows add nothing visible) and the NormalMap the flat normal. M[A]_NoLight drew one flat colour
-    (white at power 1, grey at 0.256) in game: it never sampled our texture. Brightness = the texture's own values."""
-    plain = _material_template(vanilla, 2)
-    assert plain["gx"][:4] == b"GX00" and len(plain["gx"]) == 64, "unexpected GX list on vanilla material 2"
-    scale = struct.pack("<2f", 1.0, 1.0) + bytes(16)
+def emissive_material(emissive_vanilla):
+    """Material template for `split_materials(opaque=...)` that shows the texture as light, unshaded: a copy of
+    vanilla asset aeg099_332's only material (`emissive_vanilla` = its FLVER, from EMISSIVE_ASSET): matbin
+    Map_Preset AEG099_332 (shader M[AMSN_V]_Emissive.spx, deferred, the street's M_AMSN_V family plus an EmissiveMap),
+    its flags and its GX list, which carries a GXMD block of three per-material parameters (a colour and two floats)
+    that the matbin does not have. Our earlier copies (2026-10-22/23) gave the shader a bare GX00 list instead and
+    drew one flat white whatever the texture, as did M[A]_NoLight with a bare list. The texture goes in the
+    EmissiveMap, the AlbedoMap gets a flat black texture (so sun, ambient, SSAO and shadows add nothing) and the
+    NormalMap the flat normal. Each texture entry is marked like vanilla entries that carry a path (bytes 01 01 after
+    the scale, as in aeg099_820). If our path were ignored, the matbin's own textures (AET099_334) would show."""
+    vanilla = _material_template(emissive_vanilla, 0)
+    assert vanilla["mtd"].lower().endswith("aeg099_332.matxml") and vanilla["gx"][:4] == b"GXMD", vanilla["mtd"]
+    rest = struct.pack("<2f", 1.0, 1.0) + b"\x01\x01" + bytes(14)
     prefix = "M_AMSN_V__Emissive_snp_Texture2D_"
-    return {"mtd": rf"N:\GR\data\Material\mtd\{EMISSIVE_MATBIN}.matxml", "flags": plain["flags"], "gx": plain["gx"],
-            "textures": [(prefix + "2_AlbedoMap_0", scale, BLACK), (prefix + "1_NormalMap_0", scale),
-                         (prefix + "4_EmissiveMap_0", scale)]}
+    assert [k for k, _ in vanilla["textures"]] == [prefix + n for n in ("2_AlbedoMap_0", "1_NormalMap_0",
+                                                                        "4_EmissiveMap_0")]
+    return {"mtd": vanilla["mtd"], "flags": vanilla["flags"], "gx": vanilla["gx"],
+            "textures": [(prefix + "2_AlbedoMap_0", rest, BLACK), (prefix + "1_NormalMap_0", rest),
+                         (prefix + "4_EmissiveMap_0", rest)]}
 
 
 def black_name():

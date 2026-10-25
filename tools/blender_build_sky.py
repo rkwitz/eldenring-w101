@@ -7,15 +7,17 @@ on the zone. In each direction the dome sits just beyond the farthest Wizard101 
 up to ~700 m behind the giant backdrop trees), so it hides Elden Ring's land and sky outside the zone. The clouds are
 frozen (no UV scrolling in our material).
 
-The dome uses the street's own lit material (vanilla aeg030_518's m60_fort_220, shader M_AMSN_V), the one material
-whose texture we have seen in game on the dome (2026-10-21: the flat purple cap and the hull steps showed). Unlit
-M[A]_NoLight (m60_fort_001, WorldTree_309) and M[AMSN_V]_Emissive (m12_00_680) both drew one flat colour, grey or
-white, whatever the texture brightness (2026-10-22/23), so they are not used. Its normals are the faces' own, pointing
-in at the camera (with every normal pointing up, as before 2026-10-22, the walls were lit at grazing angles and
-mirrored Elden Ring's hazy sky). To light it, and the street and Rattlebones' room, evenly like Wizard101, this
-also writes gparams for every overworld light set and weather (gparam_fog.py) without fog, without the sun and other
-directional lights (so no shadows) and with a white ambient light from every side (FLAT_LIGHTING, AMBIENT). These
-edits apply to the whole overworld.
+The dome is drawn unshaded, like Wizard101's APPLY_REPLACE sky (SKY_MATERIAL "emissive"): an exact copy of the one
+material of vanilla asset aeg099_332 (flver_textures.emissive_material: matbin AEG099_332, shader M[AMSN_V]_Emissive,
+with that FLVER's flags and GXMD parameter block), the sky texture as its EmissiveMap and a black AlbedoMap, so
+light, ambient occlusion and shadows add nothing. Our earlier unlit tries (2026-10-22/23: M[A]_NoLight and
+m12_00_680) gave the shaders a bare GX list without the per-material parameters every vanilla emissive material
+carries, and drew one flat white or grey. The street's lit material (SKY_MATERIAL "lit") does show the texture, but
+lit, Ryan saw shading, "shadows" and the dome's triangles (2026-10-25). Normals point smoothly at the centre either
+way. Fog would still tint the dome, and Ryan wants even, Wizard101-like light, so this also writes gparams for every
+overworld light set and weather (gparam_fog.py) without fog, without the sun and other shadow-casting lights and
+with a white ambient light from every side (FLAT_LIGHTING, AMBIENT, OVERHEAD). These edits apply to the whole
+overworld.
 
 Writes, in the Smithbox project:
   asset/aeg/aeg030/aeg030_523.geombnd.dcx      the dome FLVER, centred on its own origin; part AEG030_523_9000 sits
@@ -57,12 +59,17 @@ PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset"
 GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset")
 STREET_GEOMBND = PROJECT / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx.before_textures"  # single-mesh FLVER template
 VANILLA = GAME / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx"  # its plain lit material
+EMISSIVE_VANILLA = GAME / flver_textures.EMISSIVE_ASSET  # the vanilla emissive material we copy
 AET_TEMPLATE = GAME / "aet" / "aet030" / "aet030_000.tpf.dcx"  # for its DCX type
 GEOMBND = PROJECT / "aeg" / "aeg030" / f"{ASSET}.geombnd.dcx"
 TEXTURES = [PROJECT / "aet" / "aet030" / f"{ASSET.replace('aeg', 'aet')}{suffix}.tpf.dcx" for suffix in ("", "_l")]
 SKY = ROOT / "reference" / "w101" / "converted_sky_classic"
 SKY_TEXTURE, CLOUD_TEXTURE = "WC_Skybox01_KH__19706315", "WC_Skybox_Clouds_KH__d376b071"
 STREET_OBJ = ROOT / "reference" / "w101" / "converted_classic" / "WC_Z06_Unicorn_Way_Classic.obj"
+SKY_MATERIAL = "emissive"  # "emissive": unshaded (see above); "lit": the street's material (shows the texture, shaded)
+# Emissive only: the sky texture's brightness as light (1.0 = as baked). Lower it (0.5, 0.25) if the sky is white or
+# glares; raise it (up to 1.0) if dark. If the sky shows a different, Elden Ring texture, tell Claude.
+SKY_BRIGHTNESS = 1.0
 SKY_SATURATION = 1.3  # pushes the pastel colours away from grey before Elden Ring's tone mapping (1.0 = as is)
 # Lighting for the whole overworld (gparam_fog.flat_lighting): True = no sun, no shadows, ambient light of intensity
 # AMBIENT from every side (raise it if everything is too dark, lower it if washed out; vanilla daylight sun is about
@@ -109,7 +116,8 @@ def build_sky():
     assert "#vc" in (SKY / "layer2.obj").read_text(), "layer2.obj has no vertex colours: convert it again (nif2obj.py)"
     image = sky_bake.bake(SKY / "layer1.obj", (SKY / "textures" / f"{SKY_TEXTURE}.dds").read_bytes(),
                           SKY / "layer2.obj", (SKY / "textures" / f"{CLOUD_TEXTURE}.dds").read_bytes())
-    dds = sky_bake.dxt1_dds(sky_bake.dim(image, 1.0, SKY_SATURATION), dither=1 / 64)
+    brightness = min(1.0, SKY_BRIGHTNESS) if SKY_MATERIAL == "emissive" else 1.0
+    dds = sky_bake.dxt1_dds(sky_bake.dim(image, brightness, SKY_SATURATION), dither=1 / 64)
     (SKY / "sky_baked.dds").write_bytes(dds)
 
     positions, uvs, faces = sky_bake.dome(radii)
@@ -118,7 +126,12 @@ def build_sky():
     # Smooth normals pointing at the dome's centre (its origin): with each face's own normal every triangle, and every
     # ring of them, caught the light a little differently and showed as facets and horizontal bands (2026-10-23).
     single, materials = flver_build.build_single_mesh(template, positions, uvs, faces, vertex_normal=inward)
-    flver = flver_textures.split_materials(single, vanilla, [0] * len(materials), [SKY_TEXTURE], alpha=set())
+    assert SKY_MATERIAL in ("emissive", "lit"), SKY_MATERIAL
+    opaque = None  # the street's lit material
+    if SKY_MATERIAL == "emissive":
+        opaque = flver_textures.emissive_material(flver_fix.flver_in_binder(EMISSIVE_VANILLA))
+    flver = flver_textures.split_materials(single, vanilla, [0] * len(materials), [SKY_TEXTURE], alpha=set(),
+                                           opaque=opaque)
 
     binder = Binder.from_path(STREET_GEOMBND)
     for entry in binder.entries:
@@ -126,9 +139,10 @@ def build_sky():
         if entry.name.lower().endswith(".flver"):
             entry.set_uncompressed_data(flver)
     binder.write(GEOMBND)
-    print(f"Wrote {GEOMBND}: {len(materials)} triangles")
+    print(f"Wrote {GEOMBND}: {len(materials)} triangles, {SKY_MATERIAL} material")
 
-    textures = [(flver_textures.texture_name(0), dds), (flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, 64))]
+    textures = [(flver_textures.texture_name(0), dds), (flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, 64)),
+                (flver_textures.black_name(), tpf.solid_dds(0, 0, 0))]
     _, dcx_type = decompress(AET_TEMPLATE)
     packed = compress(tpf.build_tpf(textures), dcx_type)
     for path in TEXTURES:
