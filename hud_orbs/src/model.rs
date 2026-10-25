@@ -46,6 +46,20 @@ pub struct Request {
     pub size: [u32; 2],
     /// Drawn without supersampling (while turning).
     pub fast: bool,
+    /// (centre height, view height) in metres, instead of the framing's own (the backpack's zoom).
+    pub view: Option<[f32; 2]>,
+}
+
+impl Framing {
+    /// (centre height, view height) in metres.
+    pub fn view(self, helm: bool) -> [f32; 2] {
+        match self {
+            Framing::Full => [0.9, 1.92],
+            // A hat reaches well above the head.
+            Framing::Portrait if helm => [1.66, 0.62],
+            Framing::Portrait => [1.56, 0.44],
+        }
+    }
 }
 
 pub struct Frame {
@@ -330,13 +344,39 @@ fn dds(b: &[u8]) -> Option<Texture> {
     while (w > MAX_TEXTURE || h > MAX_TEXTURE) && w >= 2 && h >= 2 {
         (px, w, h) = halve(&px, w, h);
     }
+    Some(with_mips(px, w, h))
+}
+
+fn with_mips(px: Vec<[u8; 4]>, w: usize, h: usize) -> Texture {
     let mut mips = Vec::new();
     let (mut level, mut lw, mut lh) = (px.clone(), w, h);
     while lw >= 16 && lh >= 16 {
         (level, lw, lh) = halve(&level, lw, lh);
         mips.push(Texture { w: lw, h: lh, px: level.clone(), mips: vec![] });
     }
-    Some(Texture { w, h, px, mips })
+    Texture { w, h, px, mips }
+}
+
+/// ER's eye albedo is only the white; the shader paints the iris and pupil from the `_3m` mask (green = iris and
+/// pupil, blue = not pupil, red = iris fibres). Baked here with a hazel iris.
+fn eye(white: &Texture, mask: &Texture) -> Texture {
+    const IRIS: [f32; 3] = [92.0, 64.0, 38.0];
+    let px = (0..white.w * white.h)
+        .map(|i| {
+            let (x, y) = (i % white.w, i / white.w);
+            let m = mask.px[(y * mask.h / white.h).min(mask.h - 1) * mask.w + (x * mask.w / white.w).min(mask.w - 1)];
+            let [g, b, r] = [m[1], m[2], m[0]].map(|v| v as f32 / 255.0);
+            let (iris, pupil) = (g * b, g * (1.0 - b));
+            let w = white.px[i];
+            let c: [u8; 3] = std::array::from_fn(|k| {
+                let iris_c = IRIS[k] * (0.75 + 0.6 * r);
+                let v = w[k] as f32 * (1.0 - iris - pupil) + iris_c * iris + 8.0 * pupil;
+                v.clamp(0.0, 255.0) as u8
+            });
+            [c[0], c[1], c[2], 255]
+        })
+        .collect();
+    with_mips(px, white.w, white.h)
 }
 
 impl Texture {
@@ -363,12 +403,6 @@ impl Texture {
         [0, 1, 2, 3].map(|i| {
             (a[i] as f32 * (1.0 - fx) + b[i] as f32 * fx) * (1.0 - fy) + (c[i] as f32 * (1.0 - fx) + d[i] as f32 * fx) * fy
         })
-    }
-
-    /// Nearest texel, wrapping; sRGB 0-255 (while turning).
-    fn nearest(&self, u: f32, v: f32) -> [f32; 4] {
-        let t = self.texel((u * self.w as f32).floor() as i64, (v * self.h as f32).floor() as i64);
-        t.map(|c| c as f32)
     }
 }
 
@@ -605,6 +639,7 @@ impl Cache {
         let path = self.folder.join(format!("{stem}_l.partsbnd.dcx"));
         let loaded = std::fs::read(&path).ok().and_then(dcx).map(|raw| {
             let mut part = Part { flvers: vec![], textures: HashMap::new() };
+            let mut masks: HashMap<String, Texture> = HashMap::new();
             for (name, data) in bnd4(&raw) {
                 let lower = name.to_ascii_lowercase();
                 if lower.ends_with(".flver") {
@@ -617,8 +652,17 @@ impl Cache {
                             if let Some(t) = dds(dds_bytes) {
                                 part.textures.insert(tex.to_ascii_lowercase(), Arc::new(t));
                             }
+                        } else if t.contains("eye_3m") {
+                            if let Some(m) = dds(dds_bytes) {
+                                masks.insert(t.replace("eye_3m", "eye_a"), m);
+                            }
                         }
                     }
+                }
+            }
+            for (name, mask) in masks {
+                if let Some(white) = part.textures.get(&name).cloned() {
+                    part.textures.insert(name, Arc::new(eye(&white, &mask)));
                 }
             }
             Arc::new(part)
@@ -917,7 +961,7 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
         }
         stem.to_string()
     };
-    let mut stems: Vec<(String, bool)> = vec![(format!("fc_{g}_0000"), false), ("fg_a_0100".into(), false)];
+    let mut stems: Vec<(String, bool)> = vec![(format!("fc_{g}_0000"), false), ("fg_a_0100".into(), false), ("fg_a_1500".into(), false)];
     if let Some(h) = look.hair {
         stems.push((format!("hr_a_{h:04}"), false));
     }
@@ -939,6 +983,8 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
     let body = parts.first().filter(|(s, _, _)| s.starts_with("fc_")).and_then(|(_, p, _)| p.flvers.first());
     let pose = Pose::new(body);
     let mut out = Vec::new();
+    // The eyes' posed bounds (they come before the armour).
+    let mut eyes: Option<([f32; 3], [f32; 3])> = None;
     for (stem, part, weapon) in &parts {
         let is_face = stem.starts_with("fg_");
         let is_hair = stem.starts_with("hr_");
@@ -946,6 +992,15 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
         let flvers = if *weapon { &part.flvers[..part.flvers.len().min(1)] } else { &part.flvers[..] };
         for f in flvers {
             let map = pose.map(f);
+            // Held weapons are shrunk to a wand's size (at most WEAPON_LENGTH from end to end), like W101's.
+            let fit = if *weapon {
+                let (lo, hi) = f.meshes.iter().flat_map(|m| m.pos.iter()).fold((0.0f32, 0.0f32), |(lo, hi), p| {
+                    (lo.min(p[1]), hi.max(p[1]))
+                });
+                (WEAPON_LENGTH / (hi - lo).max(1e-3)).min(1.0)
+            } else {
+                1.0
+            };
             for m in &f.meshes {
                 if m.tris.is_empty() || m.group.is_some_and(|g| g < 128 && look.hide & (1u128 << g) != 0) {
                     continue;
@@ -962,12 +1017,27 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
                 let mut nrm = Vec::with_capacity(m.pos.len());
                 for i in 0..m.pos.len() {
                     let (p, n) = if *weapon {
-                        weapon_vertex(m.pos[i], m.nrm[i], pose.grip)
+                        weapon_vertex(scale(m.pos[i], fit), m.nrm[i], pose.grip)
                     } else {
                         pose.vertex(m.pos[i], m.nrm[i], m.bones.get(i), m.weights.get(i), &map)
                     };
                     pos.push(p);
                     nrm.push(n);
+                }
+                let mut tris = m.tris.clone();
+                if stem.starts_with("fg_a_15") {
+                    for p in &pos {
+                        let b = eyes.get_or_insert((*p, *p));
+                        b.0 = [0, 1, 2].map(|i| b.0[i].min(p[i]));
+                        b.1 = [0, 1, 2].map(|i| b.1[i].max(p[i]));
+                    }
+                } else if let (true, Some((lo, hi))) = (stem.starts_with("hd_"), eyes) {
+                    // Masks and blindfolds over the eyes are left off: the book's wizard looks out at you.
+                    tris.retain(|t| {
+                        let c = [0, 1, 2].map(|i| t.iter().map(|&v| pos[v as usize][i]).sum::<f32>() / 3.0);
+                        !(c[0] > lo[0] - 0.02 && c[0] < hi[0] + 0.02 && c[1] > lo[1] - 0.03 && c[1] < hi[1] + 0.03
+                            && c[2] > lo[2] - 0.08 && c[2] < hi[2])
+                    });
                 }
                 let own = stem.to_ascii_lowercase();
                 let texture = if is_hair { None } else { texture_for(&m.material, &own, &textures) };
@@ -975,7 +1045,7 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
                     pos,
                     nrm,
                     uv: m.uv.clone(),
-                    tris: m.tris.clone(),
+                    tris,
                     texture,
                     colour: if is_hair { look.hair_colour } else { [0.55, 0.52, 0.5] },
                     alpha_test: true,
@@ -985,6 +1055,9 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
     }
     out
 }
+
+/// Longest held weapon, metres (a W101 wand is about half the wizard's height).
+const WEAPON_LENGTH: f32 = 0.9;
 
 /// A weapon vertex: the model hangs from the grip (its origin), blade (-Y) down and a little forward and out.
 fn weapon_vertex(p: [f32; 3], n: [f32; 3], grip: [f32; 3]) -> ([f32; 3], [f32; 3]) {
@@ -1005,7 +1078,6 @@ fn linear_to_srgb(c: f32) -> f32 {
 
 /// Lighting and the sRGB <-> linear tables.
 struct Shade {
-    fast: bool,
     light: [f32; 3],
     fill: [f32; 3],
     to_linear: [f32; 256],
@@ -1015,9 +1087,8 @@ struct Shade {
 const SRGB_STEPS: usize = 4096;
 
 impl Shade {
-    fn new(light: [f32; 3], fill: [f32; 3], fast: bool) -> Shade {
+    fn new(light: [f32; 3], fill: [f32; 3]) -> Shade {
         Shade {
-            fast,
             light,
             fill,
             to_linear: std::array::from_fn(|i| srgb_to_linear(i as f32 / 255.0)),
@@ -1086,7 +1157,7 @@ fn raster(b: &Batch, screen: &[[f32; 3]], normals: &[[f32; 3]], sw: usize, y0: u
                     Some(tex) => {
                         let u = u0 * b.uv[a][0] + u1 * b.uv[bb][0] + u2 * b.uv[c][0];
                         let v = u0 * b.uv[a][1] + u1 * b.uv[bb][1] + u2 * b.uv[c][1];
-                        let s = if shade.fast { tex.nearest(u, v) } else { tex.sample(u, v) };
+                        let s = tex.sample(u, v);
                         if b.alpha_test && s[3] < 127.5 {
                             continue;
                         }
@@ -1106,17 +1177,17 @@ fn raster(b: &Batch, screen: &[[f32; 3]], normals: &[[f32; 3]], sw: usize, y0: u
     }
 }
 
+const PORTRAIT_PITCH: f32 = 0.2;
+
 /// Draws the request: 2x supersampled, then averaged down; transparent background.
 fn draw(cache: &mut Cache, r: &Request) -> Frame {
     let [w, h] = [r.size[0].max(8) as usize, r.size[1].max(8) as usize];
     // 2x supersampled; while turning, drawn at 70% and stretched, for speed.
     let ss = if r.fast { 1 } else { 2 };
-    let (sw, sh) = if r.fast { ((w * 7 / 10).max(8), (h * 7 / 10).max(8)) } else { (w * 2, h * 2) };
+    let (sw, sh) = if r.fast { (w, h) } else { (w * 2, h * 2) };
     let mut look = r.look.clone();
     if r.framing == Framing::Portrait {
-        // The portrait shows the face: no helm.
-        look.armour.retain(|a| !a.starts_with("hd_"));
-        look.hide = 0;
+        // The portrait shows the head as worn (hat on), without the weapon.
         look.weapon = None;
     }
     let batches = match &cache.posed {
@@ -1131,15 +1202,17 @@ fn draw(cache: &mut Cache, r: &Request) -> Frame {
     };
     // View: turn by yaw around the vertical axis through the body; camera looks along +Z (the character faces
     // -Z), x to the right, y up.
-    let (centre, height) = match r.framing {
-        Framing::Full => ([0.0, 0.9], 1.92),
-        Framing::Portrait => ([0.0, 1.56], 0.44),
-    };
+    let helm = look.armour.iter().any(|a| a.starts_with("hd_"));
+    let [cy, height] = r.view.unwrap_or_else(|| r.framing.view(helm));
+    let centre = [0.0, cy];
     let k = sh as f32 / height;
-    let turn = rot_y(r.yaw);
+    // The portrait looks up a little, under a hat's brim.
+    let pitch = if r.framing == Framing::Portrait && helm { PORTRAIT_PITCH } else { 0.0 };
+    let turn = mul(&rot_y(r.yaw), &rot_x(pitch));
     let to_screen = |p: [f32; 3]| -> [f32; 3] {
-        let q = apply(p, &turn);
-        [sw as f32 / 2.0 + (q[0] - centre[0]) * k, sh as f32 / 2.0 - (q[1] - centre[1]) * k, q[2]]
+        // Turned about the vertical axis through the feet and tilted about the view's centre.
+        let q = apply([p[0], p[1] - centre[1], p[2]], &turn);
+        [sw as f32 / 2.0 + (q[0] - centre[0]) * k, sh as f32 / 2.0 - q[1] * k, q[2]]
     };
     let light = norm([-0.45, 0.65, -0.6]);
     let fill = norm([0.6, 0.2, -0.4]);
@@ -1166,7 +1239,7 @@ fn draw(cache: &mut Cache, r: &Request) -> Frame {
     // Half the cores: the game keeps the rest.
     let threads = std::thread::available_parallelism().map_or(2, |n| n.get() / 2).clamp(2, 6);
     let rows = sh.div_ceil(threads);
-    let shade = Shade::new(light, fill, r.fast);
+    let shade = Shade::new(light, fill);
     std::thread::scope(|scope| {
         for (band, (colour, depth)) in colour.chunks_mut(rows * sw).zip(depth.chunks_mut(rows * sw)).enumerate() {
             let (batches, projected, shade) = (&batches, &projected, &shade);

@@ -29,6 +29,8 @@ mod quests;
 mod steam;
 #[path = "../../src/model.rs"]
 mod model;
+#[path = "../../src/markers.rs"]
+mod markers;
 mod input;
 mod game;
 
@@ -211,6 +213,7 @@ fn main() {
         ("7b_crafting_cookbook", pages::Tab::Crafting, 0, [0.0, 0.0], "cookbooks"),
         ("8_help", pages::Tab::Help, 1, [0.0, 0.0], ""),
         ("9_settings", pages::Tab::Settings, 0, [0.0, 0.0], ""),
+        ("11_markers", pages::Tab::Character, 0, [0.0, 0.0], "markers"),
         ("10_dialogue", pages::Tab::Character, 0, [0.0, 0.0], "talk:Ceren Nightchant"),
     ];
     for (name, tab, sub, mouse, show) in shots {
@@ -220,6 +223,9 @@ fn main() {
         book.preview_show(tab, sub);
         if show == "map" {
             book.preview_map();
+        }
+        if show == "markers" {
+            book.preview_closed();
         }
         if show == "cookbooks" {
             book.preview_cookbooks();
@@ -250,6 +256,7 @@ fn main() {
                 settings_path: Path::new("/tmp/book_preview_settings.ini"),
             };
             book.frame(ui, &mut cx);
+            book.draw_markers(ui, &cx);
             if frame == 1 {
                 book.preview_wait_models();
             }

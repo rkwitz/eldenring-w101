@@ -16,6 +16,7 @@ mod input;
 mod itemdata;
 mod layout;
 mod loadscreen;
+mod markers;
 mod steam;
 mod model;
 mod names;
@@ -251,6 +252,9 @@ impl ImguiRenderLoop for Orbs {
             settings_path: &settings_path,
         };
         self.book.frame(ui, &mut cx);
+        if !self.loadscreen.holding() {
+            self.book.draw_markers(ui, &cx);
+        }
         // Polled every frame: the screen goes up on the first frame the door flag is on. The flag is cleared when
         // the screen starts to fade (or right away when the loading screen is turned off).
         if game.is_some() && !self.loadscreen.holding() && game::event_flag(loadscreen::DOOR_FLAG) == Some(true) {

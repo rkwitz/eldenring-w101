@@ -49,6 +49,12 @@ PAGES = [
 # cursor.cur twin puts the hot spot at 5, 5 of 45).
 EXTRA_ART = ["GUI/LoadScreen_W01_WC_01.dds", "GUI/Art/Art_Progress_Bar_Large.dds", "GUI/Art/Art_Progress_Bar01.dds",
              "GUI/cursor.dds"]
+# Card frames (deck cards, reagent cards) and ToolTip.gui's bubble, drawn by the DLL's own code.
+EXTRA_ART += [f"GUI/Cards/School_{s}_Blnk.dds" for s in
+              ("Fire", "Ice", "Storm", "Myth", "Life", "Death", "Balance", "Shadow", "Moon", "Treasure")]
+EXTRA_ART += [f"GUI/Tooltip/bubble_{p}.png" for p in ("TL", "T", "TR", "L", "R", "BL", "B", "BR", "C")]
+# Quest markers over the quest givers (markers.rs): "!" offers a quest, the "?" medallion is a goal to talk to them.
+EXTRA_ART += ["GUI/QuestButtons/Quest_Start.dds", "GUI/QuestButtons/Art_Quest_Complete.dds"]
 FONT_FILE = re.compile(r"([A-Za-z0-9_]+)\.xml$")
 
 

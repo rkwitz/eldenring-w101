@@ -34,6 +34,7 @@ use crate::layout::{self, Canvas, Layout, TextStyle, Textures, View};
 use crate::model::{Framing, Look, Renderer, Request};
 use crate::names::Names;
 use crate::pages::{self, Action, Data, Tab, TABS};
+use crate::markers;
 use crate::quests::{Active, Quests, Talk};
 
 /// The book window (SpellBookPrefsWindow.gui, 800x600, centred) in Wizard101 pixels.
@@ -45,6 +46,17 @@ const TRAVEL: f32 = 30.0;
 /// Turning speed of the character picture: right stick (radians per second), mouse drag (radians per pixel).
 const TURN_STICK: f32 = 3.0;
 const TURN_MOUSE: f32 = 0.012;
+/// ToolTip.gui's frame pieces (tl, t, tr, l, r, bl, b, br, centre), its widest box, and the name's colour.
+const TIP_BUBBLE: [&str; 9] = ["GUI/Tooltip/bubble_TL.png", "GUI/Tooltip/bubble_T.png", "GUI/Tooltip/bubble_TR.png",
+    "GUI/Tooltip/bubble_L.png", "GUI/Tooltip/bubble_R.png", "GUI/Tooltip/bubble_BL.png", "GUI/Tooltip/bubble_B.png",
+    "GUI/Tooltip/bubble_BR.png", "GUI/Tooltip/bubble_C.png"];
+const MAX_TIP: f32 = 300.0;
+const TIP_TITLE: ImColor32 = ImColor32::from_rgb(110, 20, 20);
+
+/// The Backpack picture's own turning (radians per second), like Wizard101's slowly turning wizard.
+const SPIN: f32 = 0.7;
+/// How quickly the Backpack picture zooms to a category (per second).
+const ZOOM_RATE: f32 = 6.0;
 /// How often the quest flags are read.
 const QUEST_POLL: Duration = Duration::from_millis(250);
 /// How long after a talk press the quest flags are compared (the map's events update them on the same press).
@@ -54,6 +66,7 @@ const GOLD: ImColor32 = ImColor32::from_rgb(214, 170, 72);
 const PARCHMENT_DARK: ImColor32 = ImColor32::from_rgba(28, 18, 10, 236);
 const YELLOW: ImColor32 = ImColor32::from_rgb(255, 255, 0);
 const WHITE: ImColor32 = ImColor32::from_rgb(255, 255, 255);
+const BLACK: ImColor32 = ImColor32::from_rgb(0, 0, 0);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum MapState {
@@ -120,6 +133,15 @@ pub struct Book {
     model_textures: [Option<(hudhook::imgui::TextureId, [u32; 2])>; 2],
     yaw: f32,
     turned: Option<Instant>,
+    /// The Backpack's picture turns by itself (like Wizard101's): direction +1 / -1, 0 = stopped by a click. A drag
+    /// turns it by hand and sets the direction it carries on in.
+    spin: f32,
+    spin_last: f32,
+    /// How far the current drag has turned the picture (a click without turning stops / restarts the spin).
+    drag_turned: f32,
+    was_dragging: bool,
+    /// The Backpack picture's (centre height, view height) now, moving toward the category's zoom.
+    zoom: Option<[f32; 2]>,
     /// A book tab clicked while Elden Ring's map was open: shown once the map has closed.
     after_map: Option<Tab>,
     face_logged: bool,
@@ -226,6 +248,11 @@ impl Book {
             model_textures: [None, None],
             yaw: 0.0,
             turned: None,
+            spin: 1.0,
+            spin_last: 1.0,
+            drag_turned: 0.0,
+            was_dragging: false,
+            zoom: None,
             after_map: None,
             face_logged: false,
             flasks_logged: false,
@@ -264,6 +291,9 @@ impl Book {
         self.items = ItemData::load(&folder.join("er"));
         self.quests = Quests::load(&folder.join("quests.tsv"));
         self.quest_flags = self.quests.flags();
+        self.quest_flags.extend(markers::flags());
+        self.quest_flags.sort();
+        self.quest_flags.dedup();
         // The game's parts folder: next to eldenring.exe (W101_PARTS overrides, for the preview).
         let parts = std::env::var_os("W101_PARTS").map(PathBuf::from).or_else(|| {
             std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("parts")))
@@ -365,18 +395,53 @@ impl Book {
         if turn != 0.0 {
             self.yaw = (self.yaw + turn) % std::f32::consts::TAU;
             self.turned = Some(Instant::now());
+            self.drag_turned += turn.abs();
+            // Let go, it carries on the way it was turned.
+            self.spin_last = turn.signum();
+            if self.spin != 0.0 || stick.abs() > 0.2 {
+                self.spin = self.spin_last;
+            }
         }
-        let fast = self.turned.is_some_and(|t| t.elapsed() < Duration::from_millis(300));
+        if self.dragging && !self.was_dragging {
+            self.drag_turned = 0.0;
+        }
+        if !self.dragging && self.was_dragging {
+            if self.drag_turned < 0.02 {
+                // A click on the picture stops it, another starts it again.
+                self.spin = if self.spin == 0.0 { self.spin_last } else { 0.0 };
+            } else {
+                self.spin = self.spin_last;
+            }
+        }
+        self.was_dragging = self.dragging;
+        let full = view.node_images.values().any(|n| n == pages::MODEL_FULL);
+        let by_hand = self.dragging || self.turned.is_some_and(|t| t.elapsed() < Duration::from_millis(300));
+        let spinning = full && !by_hand && self.spin != 0.0;
+        if spinning {
+            self.yaw = (self.yaw + self.spin * SPIN * dt) % std::f32::consts::TAU;
+        }
+        // Wizard101's backpack zooms on what the category is worn on.
+        let target = if self.tab == Tab::Backpack { pages::backpack_zoom(self.state.sub) } else { Framing::Full.view(true) };
+        let zoom = self.zoom.get_or_insert(target);
+        let moving = (zoom[0] - target[0]).abs() + (zoom[1] - target[1]).abs() > 0.002;
+        if moving {
+            let k = 1.0 - (-dt * ZOOM_RATE).exp();
+            *zoom = [zoom[0] + (target[0] - zoom[0]) * k, zoom[1] + (target[1] - zoom[1]) * k];
+        } else {
+            *zoom = target;
+        }
+        let zoom = *zoom;
+        let fast = by_hand || spinning || moving;
         let Some(renderer) = self.model.as_mut() else { return };
         for (node, name) in &view.node_images {
-            let (slot, framing, yaw) = match name.as_str() {
-                pages::MODEL_FULL => (0, Framing::Full, self.yaw),
-                pages::MODEL_PORTRAIT => (1, Framing::Portrait, 0.3),
+            let (slot, framing, yaw, view) = match name.as_str() {
+                pages::MODEL_FULL => (0, Framing::Full, self.yaw, Some(zoom)),
+                pages::MODEL_PORTRAIT => (1, Framing::Portrait, 0.3, None),
                 _ => continue,
             };
             let r = page.nodes[*node].rect;
             let size = [((r[2] - r[0]) * s).round().max(8.0) as u32, ((r[3] - r[1]) * s).round().max(8.0) as u32];
-            renderer.request(slot, Request { look: look.clone(), framing, yaw, size, fast: fast && slot == 0 });
+            renderer.request(slot, Request { look: look.clone(), framing, yaw, size, fast: fast && slot == 0, view });
         }
     }
 
@@ -400,6 +465,13 @@ impl Book {
         self.map = MapState::Open;
     }
 
+    /// Closes the book for a gameplay frame (the preview renderer).
+    #[allow(dead_code)]
+    pub fn preview_closed(&mut self) {
+        self.set_open(false);
+        self.holding = false;
+    }
+
     /// Shows the crafting page's cookbooks (the preview renderer).
     #[allow(dead_code)]
     pub fn preview_cookbooks(&mut self) {
@@ -421,6 +493,18 @@ impl Book {
         if let Some(talk) = self.quests.talk(npc, &before, &after) {
             self.dialogue = Some(Dialogue { talk, line: 0, opened: Instant::now() - Duration::from_secs(1) });
         }
+    }
+
+    /// Draws the quest markers over the quest givers (markers.rs) in normal play, from the last quest flags read.
+    pub fn draw_markers(&mut self, ui: &Ui, cx: &Context) {
+        self.textures.want([markers::OFFER, markers::TALK].map(String::from));
+        if !cx.gameplay || self.blocking() || self.map != MapState::Idle || self.flags.is_empty() {
+            return;
+        }
+        let Some(game) = cx.game else { return };
+        let (Some(camera), Some(position)) = (game.camera(), game.position()) else { return };
+        let draw = ui.get_background_draw_list();
+        markers::draw(&draw, &self.textures, &camera, position, &self.flags, ui.time() as f32, ui.io().display_size);
     }
 
     /// Whether the game's keyboard, mouse and controller input are blocked.
@@ -675,7 +759,9 @@ impl Book {
             }
         }
         wanted.extend(view.images.iter().map(|i| i.1.clone()));
+        wanted.extend(view.frames.iter().flat_map(|f| f.1.iter().flatten().cloned()));
         wanted.push(CURSOR.into());
+        wanted.extend(TIP_BUBBLE.map(String::from));
         self.textures.want(wanted);
 
         let draw = ui.get_foreground_draw_list();
@@ -751,20 +837,22 @@ impl Book {
         (tab_hit, page_hit, in_model)
     }
 
-    /// A hover box beside the mouse: the title, then the lines, wrapped.
+    /// A hover box beside the mouse, in Wizard101's ToolTip.gui style: the speech-bubble frame (GUI/Tooltip/
+    /// bubble_*), WizardNormal at 0.4 in black, 8 px margins; the item's name first, then its lines, wrapped.
     fn draw_tip(&self, canvas: &Canvas, lines: &[String], mouse: [f32; 2], screen: [f32; 2]) {
         let Some(font) = self.fonts.get("WizardNormal") else { return };
-        let width = 300.0;
-        let pad = 10.0;
-        let title_h = 26.0;
         let scale = 0.4;
+        let pad = 8.0;
         let line_h = font.line_height * scale;
+        // As wide as the longest line needs, up to MAX_TIP.
+        let widest = lines.iter().map(|l| font.width(l) * scale).fold(0.0, f32::max);
+        let width = (widest + 2.0 * pad + 4.0).clamp(120.0, MAX_TIP);
+        let inner = width - 2.0 * pad;
         let rows: Vec<f32> = lines
             .iter()
-            .skip(1)
-            .map(|l| ((font.width(l) * scale / (width - 2.0 * pad)).ceil().max(1.0) + 0.3).floor() * line_h + 2.0)
+            .map(|l| (font.width(l) * scale / inner * 1.08).ceil().max(1.0) * line_h)
             .collect();
-        let height = pad * 2.0 + title_h + rows.iter().sum::<f32>();
+        let height = pad * 2.0 + rows.iter().sum::<f32>() + 4.0;
         // Page pixels of the screen's edges.
         let right = (screen[0] - canvas.origin[0]) / canvas.s;
         let bottom = (screen[1] - canvas.origin[1]) / canvas.s;
@@ -774,16 +862,14 @@ impl Book {
             x = mouse[0] - 12.0 - width;
         }
         let y = (mouse[1] + 8.0).min(bottom - height).max(top);
-        let (p0, p1) = (canvas.at(x, y), canvas.at(x + width, y + height));
-        canvas.draw.add_rect(p0, p1, PARCHMENT_DARK).filled(true).rounding(6.0 * canvas.s).build();
-        canvas.draw.add_rect(p0, p1, GOLD).rounding(6.0 * canvas.s).thickness(2.0 * canvas.s).build();
-        canvas.text(&lines[0], [x + pad, y + pad, x + width - pad, y + pad + title_h],
-                    &TextStyle::new("WizardFancy", 0.5, YELLOW), false);
-        let mut ly = y + pad + title_h;
-        for (line, h) in lines.iter().skip(1).zip(rows) {
-            canvas.text(line, [x + pad, ly, x + width - pad, ly + h], &TextStyle::new("WizardNormal", scale, WHITE).wrapped(),
-                        false);
-            ly += h;
+        canvas.border(&TIP_BUBBLE.map(|p| Some(p.to_string())), [x, y, x + width, y + height], ImColor32::WHITE);
+        let mut ly = y + pad;
+        for (i, (line, h)) in lines.iter().zip(rows).enumerate() {
+            // The name centred above the rest, like Wizard101's item tips.
+            let style = TextStyle::new("WizardNormal", scale, if i == 0 { TIP_TITLE } else { BLACK }).wrapped();
+            let style = if i == 0 { style.centred() } else { style };
+            canvas.text(line, [x + pad, ly, x + width - pad, ly + h], &style, false);
+            ly += h + if i == 0 { 4.0 } else { 0.0 };
         }
     }
 

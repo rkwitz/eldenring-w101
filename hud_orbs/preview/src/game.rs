@@ -7,7 +7,7 @@ pub struct Game;
 
 /// Quest flags the preview pretends are on.
 const FLAGS: &[u32] = &[10000800, 14000800, 105, 110, 1042366000, 1042366001, 1042366009, 1042366010, 1042366500 + 2, 1042366040, 1042366540,
-                        1042366541, 1042366100];
+                        1042366541, 1042366100, 1042366011, 1042366109];
 
 pub fn event_flag(flag: u32) -> Option<bool> {
     Some(FLAGS.contains(&flag))
@@ -21,7 +21,17 @@ impl Game {
     }
 
     pub fn position(&self) -> Option<([f32; 3], i32, i32)> {
-        Some(([0.0; 3], 0, 0))
+        // In front of Private Connelly, Olivia Dawnwillow further off (m60_42_36_00).
+        Some(([-20.0, 93.5, -110.0], 0x3C2A2400, 0x3C2A2400))
+    }
+
+    /// A camera behind the player looking up the street at the quest givers (physics space = chunk space here).
+    pub fn camera(&self) -> Option<crate::markers::Camera> {
+        let f = [0.02f32, 0.0, 1.0];
+        let n = (f[0] * f[0] + f[2] * f[2]).sqrt();
+        let f = [f[0] / n, 0.0, f[2] / n];
+        let matrix = [[f[2], 0.0, -f[0], 0.0], [0.0, 1.0, 0.0, 0.0], [f[0], 0.0, f[2], 0.0], [-19.0, 95.3, -115.0, 1.0]];
+        Some(crate::markers::Camera { matrix, fov: 0.85, player: [-20.0, 93.5, -110.0] })
     }
 
     pub fn sheet(&self) -> Option<Sheet> {

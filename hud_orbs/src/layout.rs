@@ -270,6 +270,8 @@ pub struct View {
     pub node_images: HashMap<usize, String>,
     /// Filled rectangles drawn after the nodes, under the images.
     pub fills: Vec<([f32; 4], ImColor32)>,
+    /// Nine-piece frames (tl, t, tr, l, r, bl, b, br, centre) drawn over the fills, under the images.
+    pub frames: Vec<([f32; 4], [Option<String>; 9])>,
     /// Images drawn after the nodes: (rect, image, uv).
     pub images: Vec<([f32; 4], String, [f32; 4])>,
     /// Windows drawn without their background image (their children still draw).
@@ -335,7 +337,8 @@ impl Textures {
 
     pub fn want(&mut self, names: impl IntoIterator<Item = String>) {
         for name in names {
-            if name.starts_with('@') {
+            // Textures made elsewhere ("@model/...", "@screen/..."); "@er/..." is Elden Ring's art on disk.
+            if name.starts_with('@') && !name.starts_with("@er/") {
                 continue;
             }
             if !self.map.contains_key(&name) && !self.failed.contains(&name) && !self.wanted.contains(&name) {
@@ -444,7 +447,7 @@ impl Canvas<'_, '_> {
     }
 
     /// A ControlWidget's border: corners at their own size, edges stretched between them, centre repeated.
-    fn border(&self, pieces: &[Option<String>; 9], r: [f32; 4], tint: ImColor32) {
+    pub fn border(&self, pieces: &[Option<String>; 9], r: [f32; 4], tint: ImColor32) {
         let size = |i: usize| pieces[i].as_deref().and_then(|p| self.textures.get(p)).map(|t| t.1).unwrap_or([0.0; 2]);
         let [x0, y0, x1, y1] = r;
         let (tl, tr, bl, br) = (size(0), size(2), size(5), size(7));
@@ -464,9 +467,18 @@ impl Canvas<'_, '_> {
             [x1 - br[0], y1 - br[1], x1, y1],
             [x0 + left, y0 + top, x1 - right, y1 - bottom],
         ];
-        for (piece, rect) in pieces.iter().zip(rects) {
+        for (i, (piece, rect)) in pieces.iter().zip(rects).enumerate() {
             if let Some(p) = piece {
-                self.image(p, rect, full, tint);
+                // Pieces sample half a texel in from their edges, so the sampler's wrap doesn't bleed
+                // the opposite edge in as a line.
+                let uv = match (i, size(i)) {
+                    (_, [w, h]) if w > 0.0 && h > 0.0 => {
+                        let (du, dv) = (0.5 / w, 0.5 / h);
+                        [du, dv, 1.0 - du, 1.0 - dv]
+                    }
+                    _ => full,
+                };
+                self.image(p, rect, uv, tint);
             }
         }
     }
@@ -500,41 +512,56 @@ impl Canvas<'_, '_> {
         let t = style.tracking;
         let width = r[2] - r[0];
         let height = r[3] - r[1];
-        let scale = if style.scale > 0.0 { style.scale } else { (height * 0.8 / font.line_height).max(0.1) };
-        let max_w = width / scale;
-        let mut lines = Vec::new();
-        for paragraph in plain.split('\n') {
-            let paragraph = paragraph.trim();
-            if style.wrap {
-                let mut line = String::new();
-                for word in paragraph.split_whitespace() {
-                    let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-                    if font.width_tracked(&candidate, t) > max_w && !line.is_empty() {
-                        lines.push(std::mem::take(&mut line));
-                        line = word.to_string();
-                    } else {
-                        line = candidate;
+        let base = if style.scale > 0.0 { style.scale } else { (height * 0.8 / font.line_height).max(0.1) };
+        let wrap_at = |scale: f32| -> Vec<String> {
+            let max_w = width / scale;
+            let mut lines = Vec::new();
+            for paragraph in plain.split('\n') {
+                let paragraph = paragraph.trim();
+                if style.wrap {
+                    let mut line = String::new();
+                    for word in paragraph.split_whitespace() {
+                        let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+                        if font.width_tracked(&candidate, t) > max_w && !line.is_empty() {
+                            lines.push(std::mem::take(&mut line));
+                            line = word.to_string();
+                        } else {
+                            line = candidate;
+                        }
                     }
+                    lines.push(line);
+                } else {
+                    lines.push(paragraph.to_string());
                 }
-                lines.push(line);
-            } else {
-                lines.push(paragraph.to_string());
+            }
+            while lines.len() > 1 && lines.last().is_some_and(|l| l.is_empty()) {
+                lines.pop();
+            }
+            lines
+        };
+        // Wrapped text: smaller (down to 60%) until it fits its box's height.
+        let mut scale = base;
+        let mut lines = wrap_at(scale);
+        if style.wrap {
+            while lines.len() as f32 * font.line_height * scale > height * 1.05 && scale > base * 0.6 {
+                scale *= 0.93;
+                lines = wrap_at(scale);
             }
         }
-        // One-line text: shrink to fit (down to 60%), then cut with "...".
-        let mut scale = scale;
+        // One-line text: shrink to fit (down to 50%), then cut with "..."; lines taller than the box shrink too.
         if !style.wrap {
             let widest = lines.iter().map(|l| font.width_tracked(l, t)).fold(0.0, f32::max) * scale;
             if widest > width && widest > 0.0 {
-                scale *= (width / widest).max(0.6);
+                scale *= (width / widest).max(0.5);
+            }
+            let tall = lines.len() as f32 * font.line_height * scale;
+            if tall > height * 1.3 && tall > 0.0 {
+                scale *= (height * 1.3 / tall).max(0.6);
             }
             let max_w = width / scale;
             for line in lines.iter_mut() {
                 *line = font.fit(line, max_w.max(1.0), t);
             }
-        }
-        while lines.len() > 1 && lines.last().is_some_and(|l| l.is_empty()) {
-            lines.pop();
         }
         let line_h = font.line_height * scale;
         let total = line_h * lines.len() as f32;
@@ -688,6 +715,9 @@ pub fn draw_extra(view: &View, canvas: &Canvas) {
     for (r, colour) in &view.fills {
         canvas.draw.add_rect(canvas.at(r[0], r[1]), canvas.at(r[2], r[3]), fade(*colour, canvas.alpha))
             .filled(true).rounding(3.0 * canvas.s).build();
+    }
+    for (r, pieces) in &view.frames {
+        canvas.border(pieces, *r, ImColor32::WHITE);
     }
     for (r, img, uv) in &view.images {
         canvas.image(img, *r, *uv, ImColor32::WHITE);

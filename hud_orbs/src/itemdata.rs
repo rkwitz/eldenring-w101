@@ -54,6 +54,7 @@ pub struct ItemData {
     weapons: HashMap<u32, Weapon>,
     reinforce: HashMap<u32, ([f32; 5], [f32; 5])>,
     armour: HashMap<u32, Armour>,
+    talisman_weights: HashMap<u32, f32>,
     icons: HashMap<(char, u32), u32>,
     spells: HashMap<u32, Spell>,
     text: HashMap<(char, u32), String>,
@@ -124,6 +125,9 @@ impl ItemData {
                     data.icons.insert(('P', id), num("icon") as u32);
                 }
                 'A' | 'E' => {
+                    if cat == 'A' {
+                        data.talisman_weights.insert(id, num("wt"));
+                    }
                     data.icons.insert((cat, id), num("icon") as u32);
                 }
                 'G' => {
@@ -198,6 +202,20 @@ impl ItemData {
         let row = weapon_id - weapon_id % 100;
         let w = self.weapons.get(&row).or_else(|| self.weapons.get(&(row - row % 10000)))?;
         (w.model > 0).then_some(w.model)
+    }
+
+    /// A weapon's weight, from its param ID (with or without upgrade / affinity).
+    pub fn weapon_weight(&self, weapon_id: u32) -> f32 {
+        let row = weapon_id - weapon_id % 100;
+        self.weapons.get(&row).or_else(|| self.weapons.get(&(row - row % 10000))).map_or(0.0, |w| w.weight)
+    }
+
+    pub fn armour(&self, protector_id: u32) -> Option<&Armour> {
+        self.armour.get(&protector_id)
+    }
+
+    pub fn talisman_weight(&self, accessory_id: u32) -> f32 {
+        self.talisman_weights.get(&accessory_id).copied().unwrap_or(0.0)
     }
 
     /// An armour piece's parts file stem (e.g. "bd_m_1520") and hidden mesh groups.

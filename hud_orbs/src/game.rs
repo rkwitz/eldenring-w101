@@ -59,6 +59,24 @@ impl Game {
         read::<usize>(self.world_chr_man).and_then(|wcm| read::<usize>(wcm + PLAYER))
     }
 
+    /// The game camera (CSCamera's first perspective camera: rows right, up, forward, position; vertical fov in
+    /// radians) and the player's physics position, in the same space as the camera; None when they can't be read.
+    pub fn camera(&self) -> Option<crate::markers::Camera> {
+        use eldenring::cs::{CSCam, CSCamera, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
+        use std::mem::offset_of;
+        let player = self.player()?;
+        let modules = read::<usize>(player + offset_of!(ChrIns, modules))?;
+        let physics = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics))?;
+        let [px, py, pz, _] = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position))?;
+        let camera = from_singleton::static_of::<CSCamera>()?;
+        let camera = read::<usize>(camera.as_ptr() as usize)?;
+        let cam = read::<usize>(camera + offset_of!(CSCamera, pers_cam_1))?;
+        let matrix = read::<[[f32; 4]; 4]>(cam + offset_of!(CSCam, matrix))?;
+        let fov = read::<f32>(cam + offset_of!(CSCam, fov))?;
+        let ok = matrix.iter().flatten().chain(&[px, py, pz]).all(|v| v.is_finite() && v.abs() < 1.0e6);
+        (ok && (0.1..3.0).contains(&fov)).then_some(crate::markers::Camera { matrix, fov, player: [px, py, pz] })
+    }
+
     /// The player's character sheet for the spellbook, from PlayerGameData; None without a character.
     pub fn sheet(&self) -> Option<Sheet> {
         use eldenring::cs::{EquipInventoryDataListEntry, EquipMagicData, PlayerGameData};
