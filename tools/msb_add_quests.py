@@ -61,10 +61,7 @@ def place_quests(raw):
             print(f"{name}: entity {entity}")
 
     # 2. givers and cages (assets)
-    assets = [(f"{model}_{9000 + k}", frame, local, facing, model, entity)
-              for k, (slug, frame, local, facing, model, entity) in enumerate(Q.NPCS)]
-    assets += [(f"{Q.CAGE_MODEL}_{9100 + c}", "street", local, 0.0, Q.CAGE_MODEL, entity)
-               for c, (local, entity) in enumerate(Q.CAGES)]
+    assets = Q.quest_assets()
     used_part_ids = {struct.unpack_from("<i", e, 0x08)[0] for e in parts.entries
                      if entry_name(e) not in {a[0] for a in assets}}
     for k, (name, frame, local, facing, model, entity) in enumerate(assets):

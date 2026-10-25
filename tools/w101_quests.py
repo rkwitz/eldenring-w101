@@ -45,7 +45,7 @@ NPCS = [  # (slug, frame, position, facing degrees, placeholder asset model, ent
     ("private_connelly", "street", (26.543, -0.016, 22.2), 180.0, "AEG217_220", 1042361870),  # W101 NPC04
     ("ceren_nightchant", "street", (-41.857, 0.289, 85.837), 180.0, "AEG110_324", 1042361871),  # NPC01
     ("olivia_dawnwillow", "street", (-20.198, -1.374, 86.55), 180.0, "AEG024_169", 1042361872),  # NPC03
-    ("lady_oriel", "garden", (5.974, 1.68, 0.94), 180.0, "AEG099_010", 1042361873),  # NPC02 (floats 4 m up in W101)
+    ("lady_oriel", "garden", (5.974, -0.7, 0.94), 180.0, "AEG099_010", 1042361873),  # NPC02, on the sunken centre floor
     ("private_oryan", "street", (-125.714, -0.711, 88.655), 90.0, "AEG217_220", 1042361874),  # at house H1's door
 ]
 NPC_INDEX = {slug: k for k, (slug, *_rest) in enumerate(NPCS)}
@@ -62,13 +62,23 @@ CAGES = [
 # Goal regions (spheres): (slug, frame, position, radius, entity id, region id). Frames as msb_add_interiors.py.
 REGIONS = [
     ("street_start", "street", (26.543, 1.0, 22.2), 12.0, 1042362830, 9220),  # around Connelly at the entrance
-    ("hedge_maze", "garden", (5.974, 1.68, 0.94), 14.0, 1042362831, 9221),  # around Lady Oriel
+    ("hedge_maze", "garden", (5.974, 0.3, 0.94), 14.0, 1042362831, 9221),  # around Lady Oriel
     ("T1", "AEG030_519_9001", (-0.085, 1.0, -8.86), 4.0, 1042362832, 9222),  # Blackhope room arrival
     ("H4", "AEG030_557_9000", (0.202, 1.0, 8.405), 4.0, 1042362833, 9223),  # Thief's House arrival
     ("near_ceren", "street", (-41.857, 1.0, 85.837), 15.0, 1042362834, 9224),
     ("near_oryan", "street", (-125.714, 1.0, 88.655), 6.0, 1042362835, 9225),
 ]
 REGION_ENTITY = {r[0]: r[4] for r in REGIONS}
+
+
+def quest_assets():
+    """[(part name, frame, position, facing, model, entity)] of the giver and cage assets msb_add_quests.py places.
+    footprint_clear.py keeps these part names (it would otherwise sink them 1000 m with the vanilla clutter)."""
+    out = [(f"{model}_{9000 + k}", frame, local, facing, model, entity)
+           for k, (_slug, frame, local, facing, model, entity) in enumerate(NPCS)]
+    out += [(f"{CAGE_MODEL}_{9100 + c}", "street", local, 0.0, CAGE_MODEL, entity)
+            for c, (local, entity) in enumerate(CAGES)]
+    return out
 REGION_ENTITY["T2"] = 1042362808  # msb_add_boss.py: W101_Rattlebones_arena, sphere over the whole room
 
 

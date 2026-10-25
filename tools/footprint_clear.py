@@ -41,7 +41,10 @@ MARGIN = 6  # metres around the W101 surfaces
 SINK = 1000.0
 CELL = 1.0
 KEEP = ("AEG030_5",  # our own assets: street, sky, rooms, garden, windows (aeg030_5xx)
-        "AEG099_060", "AEG099_090", "AEG110_064", "AEG008_262_1000", "AEG092_102_1000")
+        "AEG099_060", "AEG099_090", "AEG110_064", "AEG008_262_1000", "AEG092_102_1000",
+        # the quest givers and Bone Cages (vanilla models, our part names: w101_quests.quest_assets)
+        "AEG217_220_9000", "AEG110_324_9001", "AEG024_169_9002", "AEG099_010_9003", "AEG217_220_9004",
+        "AEG270_120_9100", "AEG270_120_9101", "AEG270_120_9102", "AEG270_120_9103")
 MAP_PIECE, COLLISION, ASSET = 0, 5, 13
 DUMMY_ASSET, DUMMY_ENEMY = 9, 10  # corpses, skulls and other set dressing placed as dummies
 SFX_REGIONS = (5, 6)  # SFX and WindSFX regions (embers, ash, mist)
