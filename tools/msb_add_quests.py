@@ -1,10 +1,12 @@
 """Map side of the Unicorn Way quests (tools/w101_quests.py; events: emevd.py --quests) in m60_42_36_00:
 
-  - entity ids on the 10 street mobs (c4180_9000..9003, c3500_9000..9003, c3450_9000..9001 -> w101_quests.MOBS),
-    so the kill-count events can watch them; nothing else about them changes
-  - the quest givers: one placeholder asset each (w101_quests.NPCS: vanilla statues / an armour stand, to be swapped
-    for converted W101 NPC meshes later by changing the model), with the entity id the talk action button uses
-  - the four Bone Cages (placeholder prison cage asset, w101_quests.CAGES), which the cage events disable when opened
+  - entity ids on the street mobs (w101_quests.MOB_PARTS -> MOBS): set on the 10 originals if they have none,
+    checked on the copies msb_more_mobs.py numbered; nothing else about them changes
+  - the quest givers: one invisible asset each (w101_quests.GIVER_MODEL, vanilla's empty AEG099_990), with the
+    entity id the talk action button uses. The visible placeholders of earlier rounds (OLD_GIVER_MODELS) are turned
+    into it in place: same-length part name, model index, instance counts (the old models stay listed, unused)
+  - the four Bone Cages (placeholder prison cage asset, w101_quests.CAGES), which the cage events keep disabled
+    except while their goal is current
   - the goal spheres (w101_quests.REGIONS), Other-type regions like the door regions
 
 Assets are copies of the street part (as msb_add_garden.put_asset) placed in the frame of the street, the garden or an
@@ -19,8 +21,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from msb_add_garden import STREET, entity_ids, put_asset, put_regions, run  # noqa: E402
-from msb_floor import ENTITY_DATA_FIELD, _list, entry_name, find, read_msb, set_transform, transform, write_msb  # noqa: E402
+from msb_add_garden import STREET, STREET_MODEL, entity_ids, put_asset, put_regions, run  # noqa: E402
+from msb_floor import (ENTITY_DATA_FIELD, _list, _set_name, add_model, entry_name, find, read_msb, set_transform,  # noqa: E402
+                       transform, write_msb)
 import w101_quests as Q  # noqa: E402
 
 FRAMES = {"street": STREET, "garden": "AEG030_555_9000", "AEG030_519_9001": "AEG030_519_9001",
@@ -51,14 +54,34 @@ def place_quests(raw):
     # 1. mob entity ids
     taken = entity_ids(lists)
     for kind, ids in Q.MOBS.items():
-        for k, entity in enumerate(ids):
-            name = Q.MOB_PARTS[kind] % k
+        for name, entity in zip(Q.MOB_PARTS[kind], ids, strict=True):
             i = names.index(name)
             old = entity_of_part(parts.entries[i])
-            assert old in (0, entity), f"{name} already has entity id {old}"
+            assert old in (0, entity), f"{name} already has entity id {old}, expected {entity}"
             assert old == entity or entity not in taken, f"entity id {entity} is taken"
             parts.entries[i] = set_entity(parts.entries[i], entity)
-            print(f"{name}: entity {entity}")
+        print(f"{kind}: {len(ids)} mobs")
+
+    # 1b. earlier rounds' visible giver placeholders -> the invisible giver model, in place
+    models = _list(lists, "MODEL_PARAM_ST").entries
+    touched = set()
+    for k, (slug, _frame, _local, _facing, model, _entity) in enumerate(Q.NPCS):
+        old, new = f"{Q.OLD_GIVER_MODELS[k]}_{9000 + k}", f"{model}_{9000 + k}"
+        if old == new or old not in names:
+            continue
+        assert new not in names and len(new) == len(old), (old, new)
+        i = names.index(old)
+        e = bytearray(parts.entries[i])
+        touched.add(struct.unpack_from("<i", e, 0x14)[0])
+        _set_name(e, new)
+        struct.pack_into("<i", e, 0x14, add_model(lists, model, STREET_MODEL))
+        parts.entries[i] = bytes(e)
+        names[i] = new
+        print(f"{old} -> {new} ({slug})")
+    for m in touched:
+        e = bytearray(models[m])
+        struct.pack_into("<i", e, 0x18, sum(struct.unpack_from("<i", x, 0x14)[0] == m for x in parts.entries))
+        models[m] = bytes(e)
 
     # 2. givers and cages (assets)
     assets = Q.quest_assets()

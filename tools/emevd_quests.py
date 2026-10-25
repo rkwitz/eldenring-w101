@@ -12,11 +12,13 @@ Events, in id order (all flags in w101_quests' docstring):
           goal's own condition (talk press / player in the sphere / kill counter >= N / every cage flag / the boss
           alive and then dead) and set the goal flag; the second-to-last goal also sets "ready", the last one sets
           "complete" and assigns the next quests. One-goal quests are ready as soon as they are assigned.
-  kill    one per (defeat goal, enemy): END if the goal is done; wait for the goal to be current and the enemy alive,
-          then for it to die; count it (2003[31], 4 bits) unless the goal finished meanwhile; END (the rest restart
-          watches the respawned enemy again).
-  cage    one per Bone Cage: if already opened, disable the asset and END; else wait for Finding Out Why, the press,
-          set the cage flag and disable the asset (the fairy is free).
+  kill    one per defeat goal, with the enemy's entity id as its parameter, started once per enemy of the goal's
+          kind (2000[0] slot k, as vanilla's per-enemy events): END if the goal is done; wait for the goal to be
+          current and the enemy alive, then for it to die; count it (2003[31], 4 bits) unless the goal finished
+          meanwhile; END (the rest restart watches the respawned enemy again).
+  cage    one per Bone Cage: disabled (not drawn, no collision) at load; if already opened, END; else wait for
+          Finding Out Why (the cage goal has no goals before it, so it is current from the assignment until every
+          cage is open), enable it, wait for the press, set the cage flag, disable it again (the fairy is free).
 Waiting on the flags first and on the button press last means a giver's quest prompt only exists while that event
 can use it; the talk event's prompt is always there.
 
@@ -121,7 +123,7 @@ def quest_events():
                     if_button(0, Q.TALK_BUTTON, npc_entity(target)))
         events.append(body + assign(q["slug"]) + [END])
     counters = Q.counters()
-    kills = []
+    kills = []  # (instructions, parameters, enemies)
     for q in Q.QUESTS:  # goals
         slug, goals = q["slug"], q["goals"]
         for i, g in enumerate(goals, 1):
@@ -135,9 +137,10 @@ def quest_events():
             elif g["type"] == "defeat":
                 counter = counters[(slug, i)]
                 body.append(if_value(0, counter, 4, GE, g["count"]))
-                for mob in Q.MOBS[g["target"]]:
-                    kills.append([end_if_flag(flag)] + current + [
-                        if_dead(0, mob, 0), if_dead(0, mob, 1), skip_if_flag(1, flag), increment(counter), END])
+                kill = [end_if_flag(flag)] + current + [
+                    if_dead(0, 0, 0), if_dead(0, 0, 1), skip_if_flag(1, flag), increment(counter), END]
+                alive = len(current) + 1  # the two if_dead lines take the enemy (parameter 0 -> args offset 4)
+                kills.append((kill, [(alive, 4, 0, 4, 1), (alive + 1, 4, 0, 4, 1)], Q.MOBS[g["target"]]))
             elif g["type"] == "boss":
                 boss = Q.BOSSES[g["target"]]
                 body += [if_dead(0, boss, 0), if_dead(0, boss, 1)]
@@ -156,11 +159,15 @@ def quest_events():
     events += kills
     for c, (_local, entity) in enumerate(Q.CAGES):  # cages
         flag = Q.CAGE_FLAG + c
-        events.append([skip_if_flag(2, flag, 0), asset_enabled(entity, 0), END,
-                       wait_flag(Q.assigned("finding_out_why")), if_button(0, Q.TALK_BUTTON, entity),
-                       set_flag(flag), asset_enabled(entity, 0), END])
+        events.append([asset_enabled(entity, 0), end_if_flag(flag), wait_flag(Q.assigned("finding_out_why")),
+                       asset_enabled(entity, 1), if_button(0, Q.TALK_BUTTON, entity), set_flag(flag),
+                       asset_enabled(entity, 0), END])
     assert len(events) <= 100, f"{len(events)} events do not fit in {Q.EVENT_BASE}..+99"
-    return [(Q.EVENT_BASE + k, body) for k, body in enumerate(events)]
+    out = []
+    for k, ev in enumerate(events):
+        body, pars, instances = ev if isinstance(ev, tuple) else (ev, [], [None])
+        out.append((Q.EVENT_BASE + k, body, pars, instances))
+    return out
 
 
 def add_quests(d):
@@ -171,11 +178,15 @@ def add_quests(d):
     ins0[:] = [i for i in ins0 if not ((i["bank"], i["id"]) == (2000, 0)
                                       and struct.unpack_from("<I", i["args"], 4)[0] in ours)]
     new = quest_events()
-    for slot, (event_id, _body) in enumerate(new):
-        ins0.insert(slot, _i(2000, 0, "<iIi", 0, event_id, 0))
-    for event_id, body in new:
-        events.append({"id": event_id, "rest": 1, "pars": [], "ins": body})
-    print(f"{len(new)} quest events {new[0][0]}..{new[-1][0]}")
+    inits = []
+    for event_id, _body, _pars, instances in new:
+        for slot, arg in enumerate(instances):  # one parameter (an entity id) or none (0, as before)
+            inits.append(_i(2000, 0, "<iIi" if arg is None else "<iII", slot if arg is not None else 0, event_id,
+                            0 if arg is None else arg))
+    ins0[0:0] = inits
+    for event_id, body, pars, _instances in new:
+        events.append({"id": event_id, "rest": 1, "pars": pars, "ins": body})
+    print(f"{len(new)} quest events {new[0][0]}..{new[-1][0]}, {len(inits)} starts")
     return build(e, events)
 
 

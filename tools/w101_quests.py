@@ -25,32 +25,46 @@ CAGE_FLAG = 1042366540
 TALK_FLAG = 1042366600
 EVENT_BASE = 1042363800  # our EMEVD events 1042363800..1042363899 (free in this map)
 
-# Characters (MSB entity ids). The 10 street mobs get these ids from msb_add_quests.py, in part-name order.
+# Characters (MSB entity ids): 5 street mobs per patrol path (round 6: the 10 originals got 4 copies each, msb_more_mobs.py).
+# MOB_PARTS lists the part names in the same order as MOBS; msb_add_quests.py sets the ids on the 10 originals
+# (c....._9000..) and checks the copies, which msb_more_mobs.py already numbered.
+def _mob_ids(*ranges):
+    return [i for a, b in ranges for i in range(a, b + 1)]
+
+
 MOBS = {
-    "lost_soul": [1042360860, 1042360861, 1042360862, 1042360863],  # c4180_9000..9003 Spirit Jellyfish
-    "skeletal_pirate": [1042360864, 1042360865, 1042360866, 1042360867],  # c3500_9000..9003
-    "dark_fairy": [1042360868, 1042360869],  # c3450_9000..9001 Winged Misbegotten
+    "lost_soul": _mob_ids((1042360860, 1042360863), (1042360870, 1042360885)),  # c4180 Spirit Jellyfish
+    "skeletal_pirate": _mob_ids((1042360864, 1042360867), (1042360886, 1042360901)),  # c3500
+    "dark_fairy": _mob_ids((1042360868, 1042360869), (1042360902, 1042360909)),  # c3450 Winged Misbegotten
 }
-MOB_PARTS = {"lost_soul": "c4180_90%02d", "skeletal_pirate": "c3500_90%02d", "dark_fairy": "c3450_90%02d"}
+MOB_MODELS = {"lost_soul": "c4180", "skeletal_pirate": "c3500", "dark_fairy": "c3450"}
+MOB_PARTS = {kind: [f"{MOB_MODELS[kind]}_{9000 + k}" for k in range(len(ids))] for kind, ids in MOBS.items()}
 BOSSES = {
     "rattlebones": 1042360850,  # msb_add_boss.py
     "lady_blackhope": 1042360851,  # bosses helper (T1); change here if it uses another id
     "fear_of_fire": 1042360852,  # bosses helper (H4)
 }
 
-# Quest givers = placeholder assets with an action button, in this order (npc index for TALK_FLAG). Positions are in
+# Quest givers = invisible assets with an action button, in this order (npc index for TALK_FLAG). Positions are in
 # the frame's own FLVER coordinates (= W101 (x, z, y) * 0.01): street = AEG030_518_9000, garden = AEG030_555_9000.
-TALK_BUTTON = 9000  # ActionButtonParam "Examine" (vanilla uses it on assets, m10_00 event 10003732); 6000 = "Talk"
-NPCS = [  # (slug, frame, position, facing degrees, placeholder asset model, entity id)
-    ("private_connelly", "street", (26.543, -0.016, 22.2), 180.0, "AEG217_220", 1042361870),  # W101 NPC04
-    ("ceren_nightchant", "street", (-41.857, 0.289, 85.837), 180.0, "AEG110_324", 1042361871),  # NPC01
-    ("olivia_dawnwillow", "street", (-20.198, -1.374, 86.55), 180.0, "AEG024_169", 1042361872),  # NPC03
-    ("lady_oriel", "garden", (5.974, -0.7, 0.94), 180.0, "AEG099_010", 1042361873),  # NPC02, on the sunken centre floor
-    ("private_oryan", "street", (-125.714, -0.711, 88.655), 90.0, "AEG217_220", 1042361874),  # at house H1's door
+# GIVER_MODEL AEG099_990 is vanilla's empty asset (FLVER with no mesh and no vertices, no collision file); vanilla
+# puts action buttons on it, e.g. common_func event 90005750 (item pick-up, m11_10 AEG099_990_9000). The visible
+# vanilla placeholders of rounds 3-5 (OLD_GIVER_MODELS: statues, an armour stand) are renamed to it in place by
+# msb_add_quests.py. Swap GIVER_MODEL per NPC for converted W101 NPC meshes later.
+TALK_BUTTON = 9000  # ActionButtonParam "Examine": centred on the entity (dummyPoly -1), radius 1 m, height -0.5..+1 m
+GIVER_MODEL = "AEG099_990"
+NPCS = [  # (slug, frame, position, facing degrees, asset model, entity id)
+    ("private_connelly", "street", (26.543, -0.016, 22.2), 180.0, GIVER_MODEL, 1042361870),  # W101 NPC04
+    ("ceren_nightchant", "street", (-41.857, 0.289, 85.837), 180.0, GIVER_MODEL, 1042361871),  # NPC01
+    ("olivia_dawnwillow", "street", (-20.198, -1.374, 86.55), 180.0, GIVER_MODEL, 1042361872),  # NPC03
+    ("lady_oriel", "garden", (5.974, -0.7, 0.94), 180.0, GIVER_MODEL, 1042361873),  # NPC02, on the sunken centre floor
+    ("private_oryan", "street", (-125.714, -0.711, 88.655), 90.0, GIVER_MODEL, 1042361874),  # at house H1's door
 ]
+OLD_GIVER_MODELS = ["AEG217_220", "AEG110_324", "AEG024_169", "AEG099_010", "AEG217_220"]  # same order as NPCS
 NPC_INDEX = {slug: k for k, (slug, *_rest) in enumerate(NPCS)}
 
-# The four quest Bone Cages (W101 WC-FairyCage02..05), placeholder cage asset, entity ids.
+# The four quest Bone Cages (W101 WC-FairyCage02..05), placeholder cage asset, entity ids. The cage events keep them
+# disabled (not drawn, no collision) except while Finding Out Why's cage goal is current.
 CAGE_MODEL = "AEG270_120"  # "Round metal prison cage"
 CAGES = [
     ((-237.463, -0.999, 141.741), 1042361880),
