@@ -67,16 +67,18 @@ SKY = ROOT / "reference" / "w101" / "converted_sky_classic"
 SKY_TEXTURE, CLOUD_TEXTURE = "WC_Skybox01_KH__19706315", "WC_Skybox_Clouds_KH__d376b071"
 STREET_OBJ = ROOT / "reference" / "w101" / "converted_classic" / "WC_Z06_Unicorn_Way_Classic.obj"
 SKY_MATERIAL = "emissive"  # "emissive": unshaded (see above); "lit": the street's material (shows the texture, shaded)
-# Emissive only: the sky texture's brightness as light (1.0 = as baked). Lower it (0.5, 0.25) if the sky is white or
-# glares; raise it (up to 1.0) if dark. If the sky shows a different, Elden Ring texture, tell Claude.
+# Emissive only. SKY_GLOW scales the light the sky gives off (vanilla glowing assets use 1.0, which looked far too
+# dark on 2026-10-25): raise it (8, 16) if still dark, lower it (2, 1) if white or glaring. SKY_BRIGHTNESS (<= 1)
+# darkens the texture itself; keep it at 1.0 and tune SKY_GLOW.
+SKY_GLOW = 4.0
 SKY_BRIGHTNESS = 1.0
 SKY_SATURATION = 1.3  # pushes the pastel colours away from grey before Elden Ring's tone mapping (1.0 = as is)
 # Lighting for the whole overworld (gparam_fog.flat_lighting): True = no sun, no shadows, ambient light of intensity
 # AMBIENT from every side (raise it if everything is too dark, lower it if washed out; vanilla daylight sun is about
 # 0.5). False = Elden Ring's own lighting (fog stays off either way).
 FLAT_LIGHTING = True
-AMBIENT = 0.8  # 0.5 looked very dark (2026-10-23)
-OVERHEAD = 0.3  # a soft, shadowless white light straight down (directional light 1), 0 = none
+AMBIENT = 1.5  # 0.5 looked very dark (2026-10-23), 0.8 still "like lighting is off" (2026-10-25)
+OVERHEAD = 0.8  # a soft, shadowless white light straight down (directional light 1), 0 = none
 GAME_GPARAMS = GAME.parent / "param" / "drawparam"
 PROJECT_GPARAMS = PROJECT.parent / "param" / "drawparam"
 
@@ -129,7 +131,7 @@ def build_sky():
     assert SKY_MATERIAL in ("emissive", "lit"), SKY_MATERIAL
     opaque = None  # the street's lit material
     if SKY_MATERIAL == "emissive":
-        opaque = flver_textures.emissive_material(vanilla, flver_fix.flver_in_binder(EMISSIVE_VANILLA))
+        opaque = flver_textures.emissive_material(vanilla, flver_fix.flver_in_binder(EMISSIVE_VANILLA), SKY_GLOW)
     flver = flver_textures.split_materials(single, vanilla, [0] * len(materials), [SKY_TEXTURE], alpha=set(),
                                            opaque=opaque)
 
@@ -139,7 +141,7 @@ def build_sky():
         if entry.name.lower().endswith(".flver"):
             entry.set_uncompressed_data(flver)
     binder.write(GEOMBND)
-    print(f"Wrote {GEOMBND}: {len(materials)} triangles, {SKY_MATERIAL} material")
+    print(f"Wrote {GEOMBND}: {len(materials)} triangles, {SKY_MATERIAL} material, glow {SKY_GLOW}")
 
     textures = [(flver_textures.texture_name(0), dds), (flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, 64)),
                 (flver_textures.black_name(), tpf.solid_dds(0, 0, 0))]

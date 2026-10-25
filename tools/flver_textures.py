@@ -190,7 +190,30 @@ EMISSIVE_ASSET = r"asset\aeg\aeg099\aeg099_332.geombnd.dcx"  # vanilla asset (ga
 EMISSIVE_MATBIN = r"Map_m12_00\matxml\m12_00_680"  # old bare-GX variant, kept for callers that pass no emissive_vanilla
 
 
-def emissive_material(vanilla, emissive_vanilla=None):
+GXMD_SIZES = {1: 1, 2: 2, 3: 3, 4: 4, 0x0B: 5}  # GXMD parameter type -> float count (0x0B: colour r, g, b, a, power)
+
+
+def set_gxmd(gx, param, values):
+    """`gx` (a material's GX list) with GXMD parameter `param` (id) set to `values` (floats). The GXMD block is the
+    first item: tag, version, size, then a count and per parameter (id, type, floats)."""
+    gx = bytearray(gx)
+    assert gx[:4] == b"GXMD", "no GXMD block"
+    at = 16
+    for _ in range(struct.unpack_from("<i", gx, 12)[0]):
+        pid, kind = struct.unpack_from("<2i", gx, at)
+        count = GXMD_SIZES[kind]
+        if pid == param:
+            assert len(values) == count, (param, values)
+            struct.pack_into(f"<{count}f", gx, at + 8, *values)
+            return bytes(gx)
+        at += 8 + 4 * count
+    raise KeyError(f"GXMD parameter {param:#x} not found")
+
+
+EMISSIVE_GLOW_PARAM = 0xF4  # GXMD float 1.0 on every vanilla emissive material we read (and on no lit one): its glow
+
+
+def emissive_material(vanilla, emissive_vanilla=None, glow=1.0):
     """Material template for `split_materials(opaque=...)` that shows the texture as light, unshaded: a copy of
     vanilla asset aeg099_332's only material (`emissive_vanilla` = its FLVER, from EMISSIVE_ASSET; `vanilla`, the
     aeg030_518 FLVER, is then unused): matbin
@@ -216,7 +239,10 @@ def emissive_material(vanilla, emissive_vanilla=None):
     prefix = "M_AMSN_V__Emissive_snp_Texture2D_"
     assert [k for k, _ in vanilla["textures"]] == [prefix + n for n in ("2_AlbedoMap_0", "1_NormalMap_0",
                                                                         "4_EmissiveMap_0")]
-    return {"mtd": vanilla["mtd"], "flags": vanilla["flags"], "gx": vanilla["gx"],
+    # `glow` scales the emission through GXMD parameter 0xF4 (1.0 in vanilla aeg099_332, 376, 393, 820, 825; lit
+    # materials have no 0xF4). A texture can't go above 1.0, so this is the only way to make the sky glow brighter.
+    gx = set_gxmd(vanilla["gx"], EMISSIVE_GLOW_PARAM, [glow])
+    return {"mtd": vanilla["mtd"], "flags": vanilla["flags"], "gx": gx,
             "textures": [(prefix + "2_AlbedoMap_0", rest, BLACK), (prefix + "1_NormalMap_0", rest),
                          (prefix + "4_EmissiveMap_0", rest)]}
 
