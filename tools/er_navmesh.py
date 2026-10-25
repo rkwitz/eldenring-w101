@@ -26,8 +26,11 @@ tiles (no vanilla navmesh has a vertex outside its tile's +-128 m square; the st
 Vanilla tiles keep open boundary edges on the tile border (no streaming sets), so cut points are shared exactly.
 The first deploy (one mesh reaching 237 m outside m60_42_36) coincided with a load crash (2026-10-23).
 
+Only --append output loads: every mesh that replaced vanilla's faces crashed the game on load, the same street
+appended after vanilla's faces loads and enemies patrol it (2026-10-25).
+
 Usage:
-  python er_navmesh.py MAP.msb.dcx GAME/map/m60 OUT_DIR --asset AEG030_518_9000=aeg030_518_l.geomhkxbnd.dcx
+  python er_navmesh.py MAP.msb.dcx GAME/map/m60 OUT_DIR --append [--tiles 42,36 41,36] --asset AEG030_518_9000=aeg030_518_l.geomhkxbnd.dcx
          [--asset ...] [--recast recast_bake] [--preview out.png]
   writes OUT_DIR/m60_XX_ZZ_00/<tile>.nvmhktbnd.dcx and .nva.dcx for every tile the mesh touches.
 DCX input may be DFLT or KRAK (read with pyooz block by block, dcx_krak.py). Output is DFLT DCX, which the game
@@ -54,7 +57,7 @@ from msb_floor import _list, entry_name, read_msb, transform  # noqa: E402
 
 BOUNDARY = 0xFFFFFFFF
 EDGE_ORIGINAL = 4
-SEED_MODELS = ("c0000", "c3450", "c3500", "c4180", "c4960")  # player spawns + our enemies
+SEED_MODELS = "c"  # every character part (player spawns c0000, enemies, bosses) seeds the walkable pieces
 AGENT = dict(cell=0.3, cell_height=0.1, height=1.8, radius=0.4, climb=0.5, slope=50.0)  # n: normal characters
 AGENT_LARGE = dict(AGENT, height=3.0, radius=0.9)  # o: large characters (vanilla o meshes are coarser)
 TILE = 256.0
@@ -399,11 +402,8 @@ def aabb_tree(template_tree, verts, polys):
     return tree, boxes
 
 
-def build_hkx(template_bytes, verts, polys):
-    """Navmesh hkx bytes: the vanilla file's objects with the mesh, cache and tree replaced."""
-    tag, root = hkx_tag.read(template_bytes)
-    nm = root["namedVariants"][0]["variant"]
-    face_t, edge_t, vec_t = nm["faces"].type, nm["edges"].type, nm["vertices"].type
+def _topology(polys, face_t, edge_t, f0=0, e0=0, v0=0):
+    """Face and edge records for the polygons, numbered from face f0, edge e0, vertex v0."""
     owner = _edge_map(polys)
     starts, n = [], 0
     for p in polys:
@@ -411,14 +411,25 @@ def build_hkx(template_bytes, verts, polys):
         n += len(p)
     faces, edges = [], []
     for f, p in enumerate(polys):
-        faces.append(Record(face_t, startEdgeIndex=starts[f], startUserEdgeIndex=-1, numEdges=len(p), numUserEdges=0,
-                            clusterIndex=-1, padding=0xCDCD))
+        faces.append(Record(face_t, startEdgeIndex=e0 + starts[f], startUserEdgeIndex=-1, numEdges=len(p),
+                            numUserEdges=0, clusterIndex=-1, padding=0xCDCD))
         for k in range(len(p)):
             a, b = p[k], p[(k + 1) % len(p)]
             opp = owner.get((b, a))
-            edges.append(Record(edge_t, a=a, b=b, oppositeEdge=starts[opp[0]] + opp[1] if opp else BOUNDARY,
-                                oppositeFace=opp[0] if opp else BOUNDARY, flags=EDGE_ORIGINAL, paddingByte=0,
+            edges.append(Record(edge_t, a=v0 + a, b=v0 + b,
+                                oppositeEdge=e0 + starts[opp[0]] + opp[1] if opp else BOUNDARY,
+                                oppositeFace=f0 + opp[0] if opp else BOUNDARY, flags=EDGE_ORIGINAL, paddingByte=0,
                                 userEdgeCost=0.0))
+    return faces, edges
+
+
+def build_hkx(template_bytes, verts, polys):
+    """Navmesh hkx bytes: the vanilla file's objects with the mesh, cache and tree replaced. Every replaced mesh
+    crashed the game on load (2026-10-23/24); use append_hkx."""
+    tag, root = hkx_tag.read(template_bytes)
+    nm = root["namedVariants"][0]["variant"]
+    face_t, edge_t, vec_t = nm["faces"].type, nm["edges"].type, nm["vertices"].type
+    faces, edges = _topology(polys, face_t, edge_t)
     nm["faces"] = Array(face_t, faces)
     nm["edges"] = Array(edge_t, edges)
     nm["vertices"] = Array(vec_t, [[v[0], v[1], v[2], 0.0] for v in verts])
@@ -437,6 +448,49 @@ def build_hkx(template_bytes, verts, polys):
     impl["tree"], _ = aabb_tree(impl["tree"], verts, polys)
     mediator["navMesh"] = nm
     return hkx_tag.write(tag, root, share_strings=True)
+
+
+def append_hkx(template_bytes, verts, polys):
+    """(hkx bytes, vanilla face count): the vanilla navmesh kept record for record, with our polygons appended as
+    faces F0.., edges E0.., vertices V0.. Something outside the hkx refers to vanilla face indices: a mesh that
+    renumbers them crashes the game on load, this one loads and enemies walk it (L6, 2026-10-25). Only the counts,
+    the clearance cache (vanilla's + ours), the y extent of the aabb and the search tree (rebuilt over all faces)
+    change. faceData/edgeData of the new faces are 0."""
+    tag, root = hkx_tag.read(template_bytes)
+    nm = root["namedVariants"][0]["variant"]
+    f0, e0, v0 = len(nm["faces"]), len(nm["edges"]), len(nm["vertices"])
+    face_t, edge_t, vec_t = nm["faces"].type, nm["edges"].type, nm["vertices"].type
+    faces, edges = _topology(polys, face_t, edge_t, f0, e0, v0)
+    local = [dict(a=e["a"] - v0, b=e["b"] - v0, oppositeEdge=e["oppositeEdge"] - e0 if e["oppositeEdge"] != BOUNDARY
+                  else BOUNDARY) for e in edges]
+    nm["faces"] = Array(face_t, list(nm["faces"]) + faces)
+    nm["edges"] = Array(edge_t, list(nm["edges"]) + edges)
+    nm["vertices"] = Array(vec_t, list(nm["vertices"]) + [[v[0], v[1], v[2], 0.0] for v in verts])
+    nm["faceData"] = Array(nm["faceData"].type, list(nm["faceData"]) + [0] * len(faces))
+    nm["edgeData"] = Array(nm["edgeData"].type, list(nm["edgeData"]) + [0] * len(edges))
+    lo, hi, ys = nm["aabb"]["min"], nm["aabb"]["max"], [v[1] for v in verts]
+    r = abs(lo[3]) or 2.4
+    nm["aabb"] = Record(nm["aabb"].type, min=[lo[0], min(lo[1], min(ys) - r), lo[2], lo[3]],
+                        max=[hi[0], max(hi[1], max(ys) + r), hi[2], hi[3]])
+    for data in nm["clearanceCacheSeedingDataSet"]["cacheDatas"]:
+        old = data["initialCache"]
+        mine = clearance_cache(old, verts, polys, local)
+        cache = Record(old.type, old)
+        base = len(old["edgePairClearances"])
+        for key, extra in (("faceOffsets", [base + o for o in mine["faceOffsets"]]),
+                           ("edgePairClearances", list(mine["edgePairClearances"])),
+                           ("mcpData", list(mine["mcpData"])), ("vertexClearances", list(mine["vertexClearances"]))):
+            cache[key] = Array(old[key].type, list(old[key]) + extra)
+        cache["uncalculatedFacesLowerBound"] = f0 + len(polys)
+        data["initialCache"] = cache
+    all_e = nm["edges"]
+    all_v = [list(v[:3]) for v in nm["vertices"]]
+    all_p = [[all_e[k]["a"] for k in range(f["startEdgeIndex"], f["startEdgeIndex"] + f["numEdges"])] for f in nm["faces"]]
+    mediator = root["namedVariants"][1]["variant"]
+    impl = mediator["tree"]["treePtr"]
+    impl["tree"], _ = aabb_tree(impl["tree"], all_v, all_p)
+    mediator["navMesh"] = nm
+    return hkx_tag.write(tag, root, share_strings=True), f0
 
 
 def check_hkx(data):
@@ -526,8 +580,12 @@ def main():
     ap.add_argument("--recast", default=str(Path(__file__).parent / "recast_bake"))
     ap.add_argument("--preview")
     ap.add_argument("--home", default="42,36", help="tile the map and enemies belong to")
+    ap.add_argument("--append", action="store_true",
+                    help="keep each vanilla navmesh and append our faces (the only variant that loads in game)")
+    ap.add_argument("--tiles", nargs="+", help="only write these tiles, e.g. 42,36 41,36")
     args = ap.parse_args()
     home = tuple(int(x) for x in args.home.split(","))
+    only = {tuple(int(x) for x in t.split(",")) for t in args.tiles} if args.tiles else None
 
     map_raw = load_dcx(args.map)
     tris = placed_triangles(map_raw, [a.split("=", 1) for a in args.asset])
@@ -548,6 +606,9 @@ def main():
             print(f"{kind}: dropping {len(meshes[kind][tile][1])} sliver face(s) in tile {tile}")
             del meshes[kind][tile]
     for tile in sorted(set(meshes["n"]) | set(meshes["o"])):
+        if only is not None and tile not in only:
+            print(f"skipping tile {tile} (n {len(meshes['n'].get(tile, ([], []))[1])} faces)")
+            continue
         name = f"m60_{tile[0]:02d}_{tile[1]:02d}_00"
         model = int(f"{tile[0]:02d}{tile[1]:02d}00")
         bnd = load_dcx(Path(args.vanilla_m60, name, f"{name}.nvmhktbnd.dcx"))
@@ -558,10 +619,14 @@ def main():
             if kind in "no" and base.endswith(f"_{model}.hkx"):
                 verts, polys = meshes[kind].get(tile, ([], []))
                 assert polys, f"{name}: no {kind} faces (tiny sliver?); not handled"
-                out = build_hkx(data, verts, polys)
-                print(f"{name} {base}: {check_hkx(out)} faces/edges/vertices, {len(out)} bytes")
+                if args.append:
+                    out, f0 = append_hkx(data, verts, polys)
+                    print(f"{name} {base}: {f0} vanilla + {len(polys)} faces, {len(out)} bytes")
+                else:
+                    out, f0 = build_hkx(data, verts, polys), 0
+                    print(f"{name} {base}: {check_hkx(out)} faces/edges/vertices, {len(out)} bytes")
                 new[base] = out
-                counts[1 if kind == "n" else 3] = len(polys)
+                counts[1 if kind == "n" else 3] = f0 + len(polys)
         assert len(new) == 2, f"{name}: expected the n and o navmeshes, got {list(new)}"
         folder = Path(args.out_dir, name)
         folder.mkdir(parents=True, exist_ok=True)
