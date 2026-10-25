@@ -70,9 +70,16 @@ SKY_MATERIAL = "emissive"  # "emissive": unshaded (see above); "lit": the street
 # Emissive only. SKY_GLOW scales the light the sky gives off (vanilla glowing assets use 1.0, which looked far too
 # dark on 2026-10-25): raise it (8, 16) if still dark, lower it (2, 1) if white or glaring. SKY_BRIGHTNESS (<= 1)
 # darkens the texture itself; keep it at 1.0 and tune SKY_GLOW.
-SKY_GLOW = 4.0
+SKY_GLOW = 0.25  # 4.0 and 1.0 were blown out (2026-10-25)
 SKY_BRIGHTNESS = 1.0
-SKY_SATURATION = 1.3  # pushes the pastel colours away from grey before Elden Ring's tone mapping (1.0 = as is)
+SKY_SATURATION = 1.0  # pushes the colours away from grey (1.0 = as graded)
+# Ryan's Wizard101 screenshot of the Unicorn Way sky (2026-10-25), as mean colour by elevation (the screenshot's top
+# taken as 35 degrees up, its bottom as the horizon): lavender above, pink-white wisps, pale blue at the horizon. The
+# bake is recoloured to it (sky_bake.grade) keeping SKY_DETAIL of its swirls; None keeps the bake's own colours.
+SKY_TARGET = [(-30, (161, 183, 245)), (0, (161, 183, 245)), (3.5, (185, 193, 252)), (7, (220, 204, 254)),
+              (10.5, (238, 201, 254)), (14, (240, 190, 255)), (17.5, (235, 180, 253)), (21, (223, 166, 249)),
+              (24.5, (215, 155, 242)), (28, (208, 151, 237)), (35, (206, 151, 236)), (90, (206, 151, 236))]
+SKY_DETAIL = 0.5
 # Lighting for the whole overworld (gparam_fog.flat_lighting): True = no sun, no shadows, ambient light of intensity
 # AMBIENT from every side (raise it if everything is too dark, lower it if washed out; vanilla daylight sun is about
 # 0.5). False = Elden Ring's own lighting (fog stays off either way).
@@ -118,6 +125,8 @@ def build_sky():
     assert "#vc" in (SKY / "layer2.obj").read_text(), "layer2.obj has no vertex colours: convert it again (nif2obj.py)"
     image = sky_bake.bake(SKY / "layer1.obj", (SKY / "textures" / f"{SKY_TEXTURE}.dds").read_bytes(),
                           SKY / "layer2.obj", (SKY / "textures" / f"{CLOUD_TEXTURE}.dds").read_bytes())
+    if SKY_TARGET:
+        image = sky_bake.grade(image, SKY_TARGET, SKY_DETAIL)
     brightness = min(1.0, SKY_BRIGHTNESS) if SKY_MATERIAL == "emissive" else 1.0
     dds = sky_bake.dxt1_dds(sky_bake.dim(image, brightness, SKY_SATURATION), dither=1 / 64)
     (SKY / "sky_baked.dds").write_bytes(dds)

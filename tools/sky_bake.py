@@ -227,6 +227,20 @@ def _dxt1_blocks(rgb):
     return out.tobytes()
 
 
+def grade(rgb, target, detail=0.5):
+    """The sRGB image `rgb` (rows = dome elevation, ELEV_TOP..ELEV_BOTTOM) recoloured to a reference look: each row's
+    mean colour becomes `target` (sorted [(Wizard101 elevation in degrees, (r, g, b) 0..255)], interpolated, taken at
+    the Wizard101 elevation that row shows, see STRETCH) and its swirls and clouds (each texel's difference from its
+    row's mean) are kept at `detail` times their strength."""
+    rows = rgb.shape[0]
+    dome = ELEV_TOP - (np.arange(rows) + 0.5) / rows * (ELEV_TOP - ELEV_BOTTOM)
+    seen = np.interp(dome, *STRETCH)
+    elevations = [e for e, _ in target]
+    colour = np.stack([np.interp(seen, elevations, [c[k] / 255.0 for _, c in target]) for k in range(3)], -1)
+    mean = rgb.mean(1, keepdims=True)
+    return np.clip(colour[:, None, :] + (rgb - mean) * detail, 0.0, 1.0)
+
+
 def dim(rgb, factor, saturation=1.0):
     """The sRGB image `rgb` with its light (linear) intensity times `factor` and its colour pushed away from grey by
     `saturation` (1.0 keeps it): Elden Ring draws an unlit (emissive) texture far brighter than Wizard101 does, and its
