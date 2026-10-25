@@ -129,7 +129,7 @@ def build_sky():
     assert SKY_MATERIAL in ("emissive", "lit"), SKY_MATERIAL
     opaque = None  # the street's lit material
     if SKY_MATERIAL == "emissive":
-        opaque = flver_textures.emissive_material(flver_fix.flver_in_binder(EMISSIVE_VANILLA))
+        opaque = flver_textures.emissive_material(vanilla, flver_fix.flver_in_binder(EMISSIVE_VANILLA))
     flver = flver_textures.split_materials(single, vanilla, [0] * len(materials), [SKY_TEXTURE], alpha=set(),
                                            opaque=opaque)
 
