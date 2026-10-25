@@ -52,8 +52,11 @@ GHOST_PATH = "Path Ghost 01"  # the route msb_add_ghost.py gave the ghost
 FIRST_REGION_ID = 9100
 
 ASSET, DUMMY_ASSET, ENEMY, DUMMY_ENEMY = 13, 9, 2, 10
-KNOWN_PART_TYPES = {0, 2, 4, 5, 9, 10, 13}  # map piece, enemy, player, collision, dummy asset/enemy, asset
-KNOWN_EVENTS = {4: [8], 7: [4], 20: [], 23: [0]}  # event type -> part index offsets in its type data
+KNOWN_PART_TYPES = {0, 2, 4, 5, 9, 10, 11, 13}  # map piece, enemy, player, collision, dummy asset/enemy, connect
+# collision (its CollisionIndex counts collisions only, SoulsFormats MSBE), asset
+KNOWN_EVENTS = {4: [8], 7: [4], 15: list(range(0x10, 0x90, 4)), 20: [], 21: [0, 4], 23: [0], 24: [0]}
+# event type -> part index offsets in its type data: treasure, ObjAct, PlatoonInfo (32 group parts), PatrolInfo,
+# Mount (rider, mount), SignPool, RetryPoint (SoulsFormats MSBE EventParam)
 GROUP_DEFEAT_REWARD = 37
 
 

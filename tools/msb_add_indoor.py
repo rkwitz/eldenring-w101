@@ -19,7 +19,7 @@ the Other regions) and every region index the map's events hold is remapped (msb
 Boxes are given in a part's FLVER frame (centre of the floor footprint, size x/z, floor height); they start BELOW m
 under the floor and are HEIGHT m tall. Rerunning updates the boxes in place.
 
-Usage: python msb_add_indoor.py map.msb.dcx vanilla_dir out.msb.dcx
+Usage: python msb_add_indoor.py map.msb.dcx vanilla_dir out.msb.dcx [--door-boxes]
   vanilla_dir: uncompressed vanilla m60_38_50_00.msb and m60_35_51_00.msb
 """
 
@@ -46,7 +46,14 @@ ROOMS = [  # (key, part, footprint centre (FLVER), size x, size z, floor height)
     ("H4", "AEG030_557_9000", (0.0, -25.25), 38.0, 79.0, 0.0),
 ]
 GARDEN = ("G", "AEG030_555_9000", (6.0, 0.0), 90.0, 90.0, -1.0)
-REMOVED = ["W101_NoRide_T2d", "W101_NoRide_T1d", "W101_NoRide_H4d", "W101_NoRide_Gd", "W101_NoRide_Gx"]  # door boxes
+# --door-boxes: tight no-riding boxes on the door triggers themselves (DOOR_BOX m square, from 1 m under the trigger
+# centre, DOOR_HEIGHT m tall), for door events that wait for the player on foot (emevd.py --bosses --on-foot), in case
+# a mounted player can't be warped: he rides right up to the door and is set down in it. Without the option they are
+# removed (the round-4 5 m boxes knocked him off before the door).
+DOOR_TRIGGERS = [("T2d", "W101_Rattlebones_door"), ("T1d", "W101_Blackhope_door"), ("H4d", "W101_FearOfFire_door"),
+                 ("Gd", "W101_Garden_door"), ("Gx", "W101_Garden_exit")]
+REMOVED = [f"W101_NoRide_{k}" for k, _ in DOOR_TRIGGERS]
+DOOR_BOX, DOOR_HEIGHT, DOOR_REGION_ID = 3.0, 5.0, 9237  # region ids 9237-9241
 FIRST_REGION_ID = 9230
 
 
@@ -109,7 +116,7 @@ def remove_region(lists, name):
     print(f"{name}: removed")
 
 
-def place_indoor(raw, vanilla_dir):
+def place_indoor(raw, vanilla_dir, door_boxes=False):
     header, lists = read_msb(raw)
     for name in REMOVED:
         if any(entry_name(e) == name for e in _list(lists, "POINT_PARAM_ST").entries):
@@ -143,11 +150,30 @@ def place_indoor(raw, vanilla_dir):
         else:
             insert_region(lists, bytes(e), kind)
         print(f"{name}: type {kind}, box {size_x} x {size_z} x {HEIGHT} from {tuple(round(c, 2) for c in world)}")
+    if door_boxes:
+        street_ry = transform(parts[find(_list(lists, "PARTS_PARAM_ST"), STREET)])[1][1]
+        for n, (key, trigger) in enumerate(DOOR_TRIGGERS):
+            regions = _list(lists, "POINT_PARAM_ST").entries
+            x, y, z = struct.unpack_from("<3f", regions[next(k for k, e in enumerate(regions) if entry_name(e) == trigger)], 0x14)
+            e = bytearray(templates[HORSE])
+            _set_name(e, f"W101_NoRide_{key}")
+            assert DOOR_REGION_ID + n not in {struct.unpack_from("<i", r, 0x2C)[0] for r in regions}
+            struct.pack_into("<i", e, 0x0C, sum(u32(r, 0x08) == HORSE for r in regions))
+            struct.pack_into("<i", e, 0x2C, DOOR_REGION_ID + n)
+            struct.pack_into("<I", e, q(e, 0x50) + 4, 0)
+            struct.pack_into("<i", e, q(e, 0x58), NO_RIDING)
+            struct.pack_into("<3f", e, 0x14, x, y - 1.0, z)
+            struct.pack_into("<3f", e, 0x20, 0.0, street_ry, 0.0)
+            struct.pack_into("<3f", e, q(e, 0x48), DOOR_BOX, DOOR_BOX, DOOR_HEIGHT)
+            insert_region(lists, bytes(e), HORSE)
+            print(f"W101_NoRide_{key}: {DOOR_BOX} m no-riding box on {trigger}")
     check_grouped(lists)
     return write_msb(header, lists)
 
 
 if __name__ == "__main__":
+    door_boxes = "--door-boxes" in sys.argv
+    sys.argv = [a for a in sys.argv if a != "--door-boxes"]
     vanilla_dir = sys.argv[2]
     del sys.argv[2]
-    run(lambda raw: place_indoor(raw, vanilla_dir))
+    run(lambda raw: place_indoor(raw, vanilla_dir, door_boxes))

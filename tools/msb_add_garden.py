@@ -30,7 +30,8 @@ The garden is open to the sky but sits under the terrain and the street, which w
 IsShadowDest cleared (as msb_add_sky.py does for the dome), so it is lit by the sun as if it were outdoors.
 
 The window part (W101 node WC_Unicorn_T2_quest, see w101_quest_window.py) sits on the tower at WINDOW_CENTRE in the
-street frame; it casts no shadows.
+street frame; it casts no shadows. It has entity id WINDOW_ENTITY: emevd.window_off disables it at map load (Ryan,
+2026-10-25: no blue light until a quest there is active; a quest event can enable it with 2005[3]).
 
 Usage: python msb_add_garden.py map.msb.dcx out.msb.dcx   (DFLT DCX as Smithbox saves)
 """
@@ -59,6 +60,7 @@ GARDEN_DOOR = (6.074, 1.62, -35.75)  # garden FLVER frame: its exit door volume
 # in the street. Doors warp the 117 m between with emevd's fade-out warp.
 GARDEN_ORIGIN = (-215.39, 0.0, 307.25)
 WINDOW_CENTRE = (-164.777, 1.558, 200.745)  # street FLVER frame (w101_quest_window.py prints it)
+WINDOW_ENTITY = 1042361890  # so events can switch the window: emevd.window_off hides it until its quest is active
 OTHER, SPHERE = 0xFFFFFFFF, 2
 SHADOW_SOURCES = (0x0A, 0x0C, 0x0D, 0x0E)  # entity data flags (msb_add_sky.py)
 SHADOW_DEST = 0x11
@@ -85,9 +87,9 @@ def entity_ids(lists):
     return ids
 
 
-def put_asset(lists, name, model_name, frame_position, ry, local, shadow_dest=True, part_id=PART_ID):
+def put_asset(lists, name, model_name, frame_position, ry, local, shadow_dest=True, part_id=PART_ID, entity_id=None):
     """Add (or move) asset part `name` (model `model_name`, a copy of the street part, header id `part_id`) at FLVER
-    point `local` of the street. Returns its world position."""
+    point `local` of the street, with entity id `entity_id` if given. Returns its world position."""
     parts = _list(lists, "PARTS_PARAM_ST")
     names = [entry_name(e) for e in parts.entries]
     position = to_world(frame_position, ry, local)
@@ -107,6 +109,8 @@ def put_asset(lists, name, model_name, frame_position, ry, local, shadow_dest=Tr
         struct.pack_into("<i", e, entity, 0)  # no entity id
         for flag in SHADOW_SOURCES + (() if shadow_dest else (SHADOW_DEST,)):
             e[entity + flag] = 0
+    if entity_id is not None:
+        struct.pack_into("<I", e, struct.unpack_from("<q", e, ENTITY_DATA_FIELD)[0], entity_id)
     e = set_transform(bytes(e), position, (0.0, ry, 0.0))
     if k is None:
         parts.entries.append(e)
@@ -170,7 +174,7 @@ def place_garden(raw):
     assert street_rotation[0] == 0 and street_rotation[2] == 0, "street is tilted"
     ry = street_rotation[1]
     garden_position = put_asset(lists, GARDEN, GARDEN_MODEL, street_position, ry, GARDEN_ORIGIN, shadow_dest=False)
-    put_asset(lists, WINDOW, WINDOW_MODEL, street_position, ry, WINDOW_CENTRE)
+    put_asset(lists, WINDOW, WINDOW_MODEL, street_position, ry, WINDOW_CENTRE, entity_id=WINDOW_ENTITY)
     put_regions(lists, REGIONS, {"street": (street_position, ry), "garden": (garden_position, ry)})
     return write_msb(header, lists)
 

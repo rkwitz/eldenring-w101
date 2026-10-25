@@ -162,25 +162,29 @@ ARRIVAL_YAW = {  # arrival region -> its rotation y in m60_42_36_00 (msb_add_roo
 }
 CAMERA_PITCH = 5.0  # as common event 950 after its warp
 LOAD_SCREEN_LEAD = 0.75  # seconds between LOAD_SCREEN_FLAG on and the warp, so the HUD's load screen is up first
+FADE = 0.5  # seconds of 2004[77] fade to black before the warp
 ARRIVAL_SETTLE = 1.0  # seconds after the warp before the door listens again
 
 
-def rattlebones_doors(d, doors=RATTLEBONES_DOORS):
+def rattlebones_doors(d, doors=RATTLEBONES_DOORS, on_foot=False):
     """New events (one per door, started from the top of event 0) that wait for the player (10000) to be in the
     door's trigger region (3[2], as title_on_door_exit), mounted or not: Ryan rides up to a door and through it, and
-    the no-riding boxes inside the rooms (msb_add_indoor.py) dismount him on arrival; the street-side door boxes are
-    gone (2026-10-25). Then set LOAD_SCREEN_FLAG (2003[66]) for the HUD's load screen, wait LOAD_SCREEN_LEAD seconds
-    (1001[0]) so the screen is up before anything moves (the instant warp showed none, 2026-10-25), and move the
-    player to the arrival region with 2004[74] "Warp Character and Copy Floor with Fade-Out" (warp type 1 = region,
-    dummy poly -1, floor copied from the player, no bonfire effect, camera reset behind him; packed as vanilla common
-    event 6901 does): unlike the short warp 2004[41] it also reaches the garden 117 m off. After the warp, 2008[4]
-    SetCameraAngle (pitch, world yaw; as common event 950 does after its warp) turns the camera to look where the
-    arrival region faces (ARRIVAL_YAW), away from the door just come through, so holding forward walks on into the
-    room instead of back into the other side's trigger. Wait ARRIVAL_SETTLE seconds and restart (1000[4] with 1),
-    like Wizard101's door activators. A door with a 4th entry (a boss's entity id) only works while that character is
-    dead (4[0] dead in the same condition group 1): the player can't leave the boss room until the boss is beaten
-    (he is back after a rest, and so is the lock). Existing events with these ids are replaced, so running it again
-    is harmless."""
+    the no-riding boxes inside the rooms (msb_add_indoor.py) dismount him on arrival (2026-10-25). With `on_foot`
+    the event also waits for 4[32] not riding Torrent, for maps whose door triggers dismount him (msb_add_indoor.py
+    --door-boxes), in case the warp does not take a mounted player.
+
+    Then: LOAD_SCREEN_FLAG on (2003[66]) for the HUD's load screen; 2004[77] Fade to Black (ratio 1 over FADE s,
+    player frozen, as vanilla m12_03 event 12032859 before its warp); wait LOAD_SCREEN_LEAD s (1001[0]); move the
+    player to the arrival region with 2004[41] (target type 1 = region, dummy poly -1, as common event 950 places
+    the player for the Melina cutscene in the same map; round 4's working warp: round 5's 2004[74] fade-out warp
+    faded to black and left him at the door); 2008[4] SetCameraAngle (pitch, world yaw; as common event 950 after
+    its warp) to look where the arrival region faces (ARRIVAL_YAW), away from the door just come through, so holding
+    forward walks on into the room instead of back into the other side's trigger; 2004[77] with ratio 0 to lift the
+    fade (and the freeze), as 12032859 does; wait ARRIVAL_SETTLE s and restart (1000[4] with 1), like Wizard101's
+    door activators. A door with a 4th entry (a boss's entity id) only works while that character is dead (4[0]
+    dead in the same condition group 1): the player can't leave the boss room until the boss is beaten (he is back
+    after a rest, and so is the lock). Existing events with these ids are replaced, so running it again is
+    harmless."""
     e = Emevd(d)
     ids = {door[0] for door in doors}
     events = [ev for ev in events_of(e) if ev["id"] not in ids]
@@ -192,19 +196,40 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS):
         wait = [
             _i(3, 2, "<bBxxIIi", 1, 1, 10000, trigger, 1),  # IF player in the door's area (group 1)
         ]
+        if on_foot:
+            wait.append(_i(4, 32, "<bxxxIBxxx", 1, 10000, 0))  # IF player not riding Torrent (group 1)
         if boss:
             wait.append(_i(4, 0, "<bxxxIBBxxf", 1, boss[0], 1, 0, 1.0))  # IF the boss is dead (group 1)
         body = wait + [
             _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
             _i(2003, 66, "<BxxxIBxxx", 0, LOAD_SCREEN_FLAG, 1),  # load screen flag on (the HUD clears it)
-            _i(1001, 0, "<f", LOAD_SCREEN_LEAD),  # wait for the HUD's screen
-            _i(2004, 74, "<IBxxxIiIBBxx", 10000, 1, arrival, -1, 10000, 0, 1),  # fade out, warp to region
+            _i(2004, 77, "<ffBxxxf", 1.0, FADE, 1, 0.0),  # fade to black, player frozen
+            _i(1001, 0, "<f", LOAD_SCREEN_LEAD),  # wait for the HUD's screen and the fade
+            _i(2004, 41, "<IIIi", 10000, 1, arrival, -1),  # warp to region
         ]
         if arrival in ARRIVAL_YAW:  # camera looking where the arrival faces
             body.append(_i(2008, 4, "<ff", CAMERA_PITCH, (ARRIVAL_YAW[arrival] + 180.0) % 360.0 - 180.0))
+        body.append(_i(2004, 77, "<ffBxxxf", 0.0, 0.0, 0, 0.0))  # lift the fade and the freeze
         body.append(_i(1001, 0, "<f", ARRIVAL_SETTLE))
         body.append(_i(1000, 4, "<Bxxx", 1))  # End Unconditionally: restart
         events.append({"id": event_id, "rest": 0, "pars": [], "ins": body})
+    return build(e, events)
+
+
+WINDOW_ENTITY = 1042361890  # msb_add_garden.WINDOW_ENTITY: the glowing quest window of Rattlebones' tower
+WINDOW_EVENT = 1042362994
+
+
+def window_off(d, event_id=WINDOW_EVENT, window=WINDOW_ENTITY):
+    """Event `event_id`, started from the top of event 0, that disables the quest window asset at map load (2005[3]
+    with 0; Ryan, 2026-10-25: no blue light until a quest there is active, when a quest event can enable it again)."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
+    events.append({"id": event_id, "rest": 0, "pars": [], "ins": [
+        _i(2005, 3, "<IBxxx", window, 0),  # Change Asset Enable State: off
+        _i(1000, 4, "<Bxxx", 0),  # End
+    ]})
     return build(e, events)
 
 
@@ -336,10 +361,11 @@ def phase_one_only(d, boss=SERAPH, event_id=PHASE_ONE_EVENT):
     return build(e, events)
 
 
-def all_bosses(d):
+def all_bosses(d, on_foot=False):
     """Every door warp (load-screen flag, fade-out warp) and every boss of Unicorn Way: msb_add_boss.py's four."""
     for doors in (RATTLEBONES_DOORS, GARDEN_DOORS, INTERIOR_DOORS):
-        d = rattlebones_doors(d, doors)
+        d = rattlebones_doors(d, doors, on_foot)
+    d = window_off(d)
     for event_id, boss, arena, sigil, name, animation, masks in BOSSES:
         d = boss_bar(d, event_id, boss, arena, sigil, name, animation, masks)
     return phase_one_only(boss_setup(d))
@@ -524,8 +550,8 @@ if __name__ == "__main__":
         ids = tuple(int(x) for x in sys.argv[4:6]) or (MIDDAY_EVENT, REFREEZE_EVENT)
         open(sys.argv[3], "wb").write(midday(open(sys.argv[2], "rb").read(), ids))
         sys.exit()
-    if sys.argv[1] == "--bosses":  # emevd.py --bosses in.emevd out.emevd (msb_add_boss.py, msb_add_indoor.py)
-        open(sys.argv[3], "wb").write(all_bosses(open(sys.argv[2], "rb").read()))
+    if sys.argv[1] == "--bosses":  # emevd.py --bosses in.emevd out.emevd [--on-foot] (msb_add_boss.py, msb_add_indoor.py)
+        open(sys.argv[3], "wb").write(all_bosses(open(sys.argv[2], "rb").read(), "--on-foot" in sys.argv))
         sys.exit()
     if sys.argv[1] == "--no-guidance":  # emevd.py --no-guidance m60_42_36_00.emevd out.emevd
         open(sys.argv[3], "wb").write(no_guidance_wisps(open(sys.argv[2], "rb").read()))
