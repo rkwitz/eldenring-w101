@@ -33,8 +33,9 @@ use crate::itemdata::ItemData;
 use crate::layout::{self, Canvas, Layout, TextStyle, Textures, View};
 use crate::model::{Framing, Look, Renderer, Request};
 use crate::names::Names;
-use crate::pages::{self, Action, Data, Tab, TABS};
+use crate::pages::{self, Action, Data, Hit, Tab, TABS};
 use crate::markers;
+use crate::nameplates;
 use crate::quests::{Active, Quests, Talk};
 
 /// The book window (SpellBookPrefsWindow.gui, 800x600, centred) in Wizard101 pixels.
@@ -46,17 +47,32 @@ const TRAVEL: f32 = 30.0;
 /// Turning speed of the character picture: right stick (radians per second), mouse drag (radians per pixel).
 const TURN_STICK: f32 = 3.0;
 const TURN_MOUSE: f32 = 0.012;
-/// ToolTip.gui's frame pieces (tl, t, tr, l, r, bl, b, br, centre), its widest box, and the name's colour.
-const TIP_BUBBLE: [&str; 9] = ["GUI/Tooltip/bubble_TL.png", "GUI/Tooltip/bubble_T.png", "GUI/Tooltip/bubble_TR.png",
-    "GUI/Tooltip/bubble_L.png", "GUI/Tooltip/bubble_R.png", "GUI/Tooltip/bubble_BL.png", "GUI/Tooltip/bubble_B.png",
-    "GUI/Tooltip/bubble_BR.png", "GUI/Tooltip/bubble_C.png"];
-const MAX_TIP: f32 = 300.0;
-const TIP_TITLE: ImColor32 = ImColor32::from_rgb(110, 20, 20);
+/// Wizard101's item tooltip (itemStatsInfoViewed.gui / itemStatsInfoEquipped.gui): Art_Message_Box's frame
+/// pieces (the blue ones for what is worn) around Background_Message_Box04 (black, at alpha A0), the name in
+/// WizardFancy 0.55 yellow centred at 15..38, the stat lines from y 40 with 15 px margins, and for equipped items
+/// the fist (Button_Equip) over the top right corner (181,-14 .. 220,22 of the 200-wide window).
+fn tip_frame(blue: bool) -> [Option<String>; 9] {
+    let kind = if blue { "Art_Message_Box_Blue" } else { "Art_Message_Box" };
+    let mut out: [Option<String>; 9] = Default::default();
+    for (i, p) in ["TL", "T", "TR", "L", "R", "BL", "B", "BR"].iter().enumerate() {
+        out[i] = Some(format!("GUI/Art/{kind}_{p}.png"));
+    }
+    out
+}
+const TIP_WIDTH: f32 = 200.0;
+const MAX_TIP: f32 = 290.0;
+const TIP_BACK: ImColor32 = ImColor32::from_rgba(0, 0, 0, 205);
+const TIP_TITLE: ImColor32 = ImColor32::from_rgb(255, 255, 0);
+const TIP_TEXT: ImColor32 = ImColor32::from_rgb(255, 255, 255);
+const TIP_NOTE: ImColor32 = ImColor32::from_rgb(200, 196, 184);
+const EQUIP_FIST: &str = "GUI/InventoryPage/Button_Equip.png";
 
 /// The Backpack picture's own turning (radians per second), like Wizard101's slowly turning wizard.
-const SPIN: f32 = 0.7;
+const SPIN: f32 = 1.0;
 /// How quickly the Backpack picture zooms to a category (per second).
 const ZOOM_RATE: f32 = 6.0;
+/// How long a page note (pages::State::note) shows.
+const NOTE_TIME: Duration = Duration::from_secs(4);
 /// How often the quest flags are read.
 const QUEST_POLL: Duration = Duration::from_millis(250);
 /// How long after a talk press the quest flags are compared (the map's events update them on the same press).
@@ -66,7 +82,6 @@ const GOLD: ImColor32 = ImColor32::from_rgb(214, 170, 72);
 const PARCHMENT_DARK: ImColor32 = ImColor32::from_rgba(28, 18, 10, 236);
 const YELLOW: ImColor32 = ImColor32::from_rgb(255, 255, 0);
 const WHITE: ImColor32 = ImColor32::from_rgb(255, 255, 255);
-const BLACK: ImColor32 = ImColor32::from_rgb(0, 0, 0);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum MapState {
@@ -126,6 +141,8 @@ pub struct Book {
     last_os: [f32; 2],
     di_buttons: u8,
     last_click: Option<Instant>,
+    /// The last page thing clicked (pages::Hit) and when, for double clicks.
+    last_hit: Option<(pages::Hit, Instant)>,
     /// Turning the character picture by dragging in its window.
     dragging: bool,
     /// The character pictures: renderer, their textures (id, size) per slot, the Backpack's turn, last turned.
@@ -243,13 +260,14 @@ impl Book {
             last_os: [-1.0; 2],
             di_buttons: 0,
             last_click: None,
+            last_hit: None,
             dragging: false,
             model: None,
             model_textures: [None, None],
             yaw: 0.0,
             turned: None,
-            spin: 1.0,
-            spin_last: 1.0,
+            spin: -1.0,
+            spin_last: -1.0,
             drag_turned: 0.0,
             was_dragging: false,
             zoom: None,
@@ -298,7 +316,8 @@ impl Book {
         let parts = std::env::var_os("W101_PARTS").map(PathBuf::from).or_else(|| {
             std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("parts")))
         });
-        self.model = parts.map(Renderer::new);
+        let idle = folder.join("er").join("idle_pose.tsv");
+        self.model = parts.map(|p| Renderer::new(p).with_idle(idle));
         tracing::info!("spellbook: {} page layouts, {} fonts, {} quests", self.layouts.len(), self.fonts.len(),
                        self.quests.quests.len());
     }
@@ -507,6 +526,62 @@ impl Book {
         markers::draw(&draw, &self.textures, &camera, position, &self.flags, ui.time() as f32, ui.io().display_size);
     }
 
+    /// Wizard101's nameplates over the Unicorn Way enemies (nameplates.rs) in normal play.
+    pub fn draw_nameplates(&mut self, ui: &Ui, cx: &Context) {
+        self.textures.want([nameplates::MOB, nameplates::ELITE].map(String::from));
+        if !cx.gameplay || self.blocking() || self.map != MapState::Idle {
+            return;
+        }
+        let Some(game) = cx.game else { return };
+        let Some(camera) = game.camera() else { return };
+        let enemies = game.enemies(&nameplates::models());
+        if enemies.is_empty() {
+            return;
+        }
+        let screen = ui.io().display_size;
+        let draw = ui.get_background_draw_list();
+        let (Some(fancy), Some(normal)) = (self.fonts.get("WizardFancy"), self.fonts.get("WizardNormal")) else { return };
+        let mut icons = Vec::new();
+        for plate in nameplates::plates(&camera, &enemies, screen) {
+            let icon = (!plate.school.is_empty()).then(|| format!("GUI/Icons/Icon_{}.png", plate.school));
+            // In plate units (the 128 x 64 art's), centred over the creature.
+            let name_w = fancy.width(plate.name) * 0.5;
+            let line_w = normal.width(&plate.line) * 0.42 + if icon.is_some() { 20.0 } else { 0.0 };
+            let w = name_w.max(line_w) + 30.0;
+            let h = 50.0;
+            let origin = [plate.at[0] - w / 2.0 * plate.k, plate.at[1] - h * plate.k];
+            let canvas = Canvas {
+                draw: &draw,
+                textures: &self.textures,
+                fonts: &self.fonts,
+                origin,
+                s: plate.k,
+                mouse: [-1.0e4; 2],
+                mouse_down: false,
+                alpha: plate.alpha,
+                hole: Cell::new(None),
+            };
+            let tint = ImColor32::from_rgba(255, 255, 255, (255.0 * plate.alpha) as u8);
+            if self.textures.get(plate.art).is_some() {
+                // The art's paper is 4..127 x 4..63 of its texture.
+                canvas.image(plate.art, [0.0, 0.0, w, h], [3.0 / 128.0, 3.0 / 64.0, 1.0, 1.0], tint);
+            } else {
+                nameplates::fallback(&draw, [origin[0], origin[1], origin[0] + w * plate.k, origin[1] + h * plate.k], plate.alpha);
+            }
+            let ink = ImColor32::from_rgba(36, 18, 8, (255.0 * plate.alpha) as u8);
+            canvas.text(&format!("<center>{}</center>", plate.name), [4.0, 4.0, w - 4.0, 26.0],
+                        &TextStyle::new("WizardFancy", 0.5, ink), false);
+            let x0 = (w - line_w) / 2.0;
+            if let Some(icon) = &icon {
+                canvas.image(icon, [x0, 27.0, x0 + 17.0, 44.0], [0.0, 0.0, 1.0, 1.0], tint);
+                icons.push(icon.clone());
+            }
+            let tx = x0 + if icon.is_some() { 20.0 } else { 0.0 };
+            canvas.text(&plate.line, [tx, 26.0, w - 2.0, 45.0], &TextStyle::new("WizardNormal", 0.42, ink), false);
+        }
+        self.textures.want(icons);
+    }
+
     /// Whether the game's keyboard, mouse and controller input are blocked.
     pub fn blocking(&self) -> bool {
         self.open || self.holding || self.dialogue.is_some()
@@ -539,7 +614,7 @@ impl Book {
                 // Elden Ring's map is open: the book around it. A click on another book tab closes the map and
                 // shows that tab when the map has gone.
                 self.refresh(cx);
-                let (tab_hit, _, _) = self.draw(ui, cx, &pointer, dt, true);
+                let (tab_hit, _, _, _) = self.draw(ui, cx, &pointer, dt, true);
                 if pointer.clicked && self.after_map.is_none() {
                     let prefs = self.prefs.as_ref().expect("checked above");
                     let name = tab_hit.map(|h| prefs.nodes[h].name.clone()).unwrap_or_default();
@@ -618,7 +693,7 @@ impl Book {
             }
         }
 
-        let (tab_hit, page_hit, in_model) = self.draw(ui, cx, &pointer, dt, false);
+        let (tab_hit, page_hit, in_model, mouse) = self.draw(ui, cx, &pointer, dt, false);
 
         // Turning the character picture: drag in its window.
         if pointer.clicked && in_model {
@@ -629,6 +704,14 @@ impl Book {
         }
 
         if !pointer.clicked {
+            return;
+        }
+        // The page's own things (backpack items, spell cards, deck slots).
+        let hit = self.state.hits.iter().rev().find(|(r, _)| layout::inside(mouse, *r)).map(|h| h.1);
+        if let Some(hit) = hit {
+            let double = self.last_hit.is_some_and(|(h, t)| h == hit && t.elapsed() < Duration::from_millis(450));
+            self.last_hit = Some((hit, Instant::now()));
+            self.page_thing(hit, double, cx);
             return;
         }
         let prefs = self.prefs.as_ref().expect("checked above");
@@ -651,6 +734,52 @@ impl Book {
             Action::Close => self.set_open(false),
             Action::Tab(tab) => self.select(tab, false),
             Action::Setting(row, step) => self.change_setting(row, step, cx),
+        }
+    }
+
+    /// A click on one of the page's own things. Spells: a card on the right memorises it (in the first free memory
+    /// slot, if the slots left allow), a slot in the deck forgets it, a double click on a spell in the Backpack
+    /// memorises or forgets it; anywhere, not only at a grace. Other items: Elden Ring has no equip call the book
+    /// can make, so a double click says where to equip it.
+    fn page_thing(&mut self, hit: Hit, double: bool, cx: &Context) {
+        let Some(sheet) = self.sheet.clone() else { return };
+        let note = |st: &mut pages::State, text: String| st.note = Some((text, Instant::now()));
+        let learn = |book: &mut Book, spell: i32| {
+            let name = book.names.as_ref().map(|n| n.item(0x4000_0000 | spell as u32)).unwrap_or_default();
+            let total = pages::memory_slots(&sheet);
+            let used = pages::slots_used(&sheet, &book.items);
+            let cost = book.items.spell(spell as u32).map_or(1, |s| s.slots.max(1));
+            let free = sheet.spells.iter().take(total as usize).position(|s| *s < 0);
+            match (used + cost <= total, free, cx.game) {
+                (false, _, _) | (_, None, _) => note(&mut book.state,
+                    format!("Not enough memory slots for {name} ({cost} needed, {} free)", total.saturating_sub(used))),
+                (true, Some(i), Some(game)) if game.set_spell(i, spell) => {
+                    note(&mut book.state, format!("Memorised {name}"));
+                    book.sheet_time = None;
+                }
+                _ => note(&mut book.state, "The memory slots can't be reached".into()),
+            }
+        };
+        match hit {
+            Hit::Learn(spell) => learn(self, spell),
+            Hit::Forget(i) => {
+                let spell = sheet.spells[i];
+                let name = self.names.as_ref().map(|n| n.item(0x4000_0000 | spell as u32)).unwrap_or_default();
+                if cx.game.is_some_and(|g| g.set_spell(i, -1)) {
+                    note(&mut self.state, format!("Forgot {name}"));
+                    self.sheet_time = None;
+                }
+            }
+            Hit::Item(id) if double && pages::is_spell(id) => {
+                let raw = (id & 0x0FFF_FFFF) as i32;
+                match sheet.spells.iter().position(|s| *s == raw) {
+                    Some(i) => self.page_thing(Hit::Forget(i), false, cx),
+                    None => learn(self, raw),
+                }
+            }
+            Hit::Item(_) if double => note(&mut self.state,
+                "Equip weapons, armour and talismans in Elden Ring's Equipment menu".into()),
+            Hit::Item(_) => {}
         }
     }
 
@@ -698,7 +827,7 @@ impl Book {
     /// Fills and draws the current page; returns the book tab and page button under the mouse, and whether the
     /// mouse is in the page's hole. `map_view`: Elden Ring's map is open behind the book.
     fn draw(&mut self, ui: &Ui, cx: &Context, pointer: &Pointer, dt: f32, map_view: bool)
-            -> (Option<usize>, Option<usize>, bool) {
+            -> (Option<usize>, Option<usize>, bool, [f32; 2]) {
         let tab = if map_view { Tab::Map } else { self.tab };
         let page_name = TABS[tab_index(tab)].2;
         let mut view = View::default();
@@ -735,7 +864,7 @@ impl Book {
         let model_node = view.node_images.iter().find(|(_, n)| n.as_str() == pages::MODEL_FULL).map(|(i, _)| *i);
         let page_layout = self.layouts.get(page_name);
         let in_model = model_node.zip(page_layout).is_some_and(|(i, l)| layout::inside(mouse, l.nodes[i].rect));
-        let drag = if self.dragging { pointer.delta[0] * TURN_MOUSE / s } else { 0.0 };
+        let drag = if self.dragging { -pointer.delta[0] * TURN_MOUSE / s } else { 0.0 };
         if !map_view {
             let layouts = std::mem::take(&mut self.layouts);
             self.request_models(&view, layouts.get(page_name), s, dt, drag);
@@ -759,9 +888,12 @@ impl Book {
             }
         }
         wanted.extend(view.images.iter().map(|i| i.1.clone()));
+        wanted.extend(view.node_art.values().cloned());
+        wanted.extend(view.backs.iter().map(|i| i.1.clone()));
         wanted.extend(view.frames.iter().flat_map(|f| f.1.iter().flatten().cloned()));
         wanted.push(CURSOR.into());
-        wanted.extend(TIP_BUBBLE.map(String::from));
+        wanted.extend(tip_frame(false).into_iter().chain(tip_frame(true)).flatten());
+        wanted.push(EQUIP_FIST.into());
         self.textures.want(wanted);
 
         let draw = ui.get_foreground_draw_list();
@@ -804,6 +936,15 @@ impl Book {
             }
         }
         layout::draw_extra(&view, &canvas);
+        if let Some((note, _)) = self.state.note.as_ref().filter(|n| n.1.elapsed() < NOTE_TIME && !map_view) {
+            // What the last click did, in a strip along the bottom of the pages.
+            let r = [150.0, 548.0, 650.0, 574.0];
+            let (p0, p1) = (canvas.at(r[0], r[1]), canvas.at(r[2], r[3]));
+            draw.add_rect(p0, p1, PARCHMENT_DARK).filled(true).rounding(6.0 * s).build();
+            draw.add_rect(p0, p1, GOLD).rounding(6.0 * s).thickness(1.5 * s).build();
+            canvas.text(&format!("<center>{note}</center>"), [r[0] + 6.0, r[1], r[2] - 6.0, r[3]],
+                        &TextStyle::new("WizardNormal", 0.42, WHITE), false);
+        }
         let tab_hit = layout::draw(prefs, &prefs_view, &canvas, |i| i > bkg).button;
         canvas.hole.set(None);
 
@@ -834,42 +975,60 @@ impl Book {
             // Over the book's frame around the map: the book's cursor, for its tabs.
             draw_cursor(&draw, &self.textures, pointer.pos, height);
         }
-        (tab_hit, page_hit, in_model)
+        (tab_hit, page_hit, in_model, mouse)
     }
 
-    /// A hover box beside the mouse, in Wizard101's ToolTip.gui style: the speech-bubble frame (GUI/Tooltip/
-    /// bubble_*), WizardNormal at 0.4 in black, 8 px margins; the item's name first, then its lines, wrapped.
+    /// A hover box beside the mouse in Wizard101's item tooltip style (see tip_frame): the name first, then one
+    /// stat per line; a long last line (the game's description) wraps in a quieter colour. "Equipped" in the lines
+    /// makes it the equipped variant (blue frame, fist badge) instead of a line of its own.
     fn draw_tip(&self, canvas: &Canvas, lines: &[String], mouse: [f32; 2], screen: [f32; 2]) {
-        let Some(font) = self.fonts.get("WizardNormal") else { return };
-        let scale = 0.4;
-        let pad = 8.0;
-        let line_h = font.line_height * scale;
-        // As wide as the longest line needs, up to MAX_TIP.
-        let widest = lines.iter().map(|l| font.width(l) * scale).fold(0.0, f32::max);
-        let width = (widest + 2.0 * pad + 4.0).clamp(120.0, MAX_TIP);
-        let inner = width - 2.0 * pad;
-        let rows: Vec<f32> = lines
-            .iter()
-            .map(|l| (font.width(l) * scale / inner * 1.08).ceil().max(1.0) * line_h)
-            .collect();
-        let height = pad * 2.0 + rows.iter().sum::<f32>() + 4.0;
+        let (Some(fancy), Some(normal)) = (self.fonts.get("WizardFancy"), self.fonts.get("WizardNormal")) else { return };
+        let Some((title, rest)) = lines.split_first() else { return };
+        let equipped = rest.iter().any(|l| l == "Equipped");
+        let rest: Vec<&String> = rest.iter().filter(|l| *l != "Equipped").collect();
+        let (title_scale, scale, margin) = (0.55, 0.42, 15.0);
+        let line_h = normal.line_height * scale;
+        let title_h = fancy.line_height * title_scale;
+        let is_note = |i: usize, l: &str| i + 1 == rest.len() && normal.width(l) * scale > MAX_TIP - 2.0 * margin;
+        // As wide as the widest stat line needs (the description wraps), between Wizard101's 200 and MAX_TIP.
+        let widest = rest.iter().enumerate().filter(|(i, l)| !is_note(*i, l)).map(|(_, l)| normal.width(l) * scale)
+            .chain([fancy.width(title) * title_scale])
+            .fold(0.0, f32::max);
+        let width = (widest + 2.0 * margin + 6.0).clamp(TIP_WIDTH, MAX_TIP);
+        let inner = width - 2.0 * margin;
+        let rows = |w: f32| (w / inner * 1.08).ceil().max(1.0);
+        let title_rows = rows(fancy.width(title) * title_scale);
+        let heights: Vec<f32> = rest.iter().map(|l| rows(normal.width(l) * scale) * line_h).collect();
+        let title_bottom = margin + (title_rows * title_h).max(23.0);
+        let height = title_bottom + 2.0 + heights.iter().sum::<f32>() + 4.0 * (rest.len() > 1) as u8 as f32 + margin;
         // Page pixels of the screen's edges.
         let right = (screen[0] - canvas.origin[0]) / canvas.s;
         let bottom = (screen[1] - canvas.origin[1]) / canvas.s;
-        let top = -canvas.origin[1] / canvas.s;
+        let top = -canvas.origin[1] / canvas.s + if equipped { 14.0 } else { 0.0 };
         let mut x = mouse[0] + 22.0;
-        if x + width > right {
+        if x + width + 20.0 > right {
             x = mouse[0] - 12.0 - width;
         }
         let y = (mouse[1] + 8.0).min(bottom - height).max(top);
-        canvas.border(&TIP_BUBBLE.map(|p| Some(p.to_string())), [x, y, x + width, y + height], ImColor32::WHITE);
-        let mut ly = y + pad;
-        for (i, (line, h)) in lines.iter().zip(rows).enumerate() {
-            // The name centred above the rest, like Wizard101's item tips.
-            let style = TextStyle::new("WizardNormal", scale, if i == 0 { TIP_TITLE } else { BLACK }).wrapped();
-            let style = if i == 0 { style.centred() } else { style };
-            canvas.text(line, [x + pad, ly, x + width - pad, ly + h], &style, false);
-            ly += h + if i == 0 { 4.0 } else { 0.0 };
+        let (p0, p1) = (canvas.at(x + 4.0, y + 4.0), canvas.at(x + width - 4.0, y + height - 4.0));
+        let back = ImColor32::from_rgba(TIP_BACK.r, TIP_BACK.g, TIP_BACK.b, (TIP_BACK.a as f32 * canvas.alpha) as u8);
+        canvas.draw.add_rect(p0, p1, back).filled(true).rounding(6.0 * canvas.s).build();
+        canvas.border(&tip_frame(equipped), [x, y, x + width, y + height], ImColor32::WHITE);
+        canvas.text(title, [x + margin, y + margin, x + width - margin, y + title_bottom],
+                    &TextStyle::new("WizardFancy", title_scale, TIP_TITLE).centred().wrapped(), false);
+        let mut ly = y + title_bottom + 2.0;
+        for (i, (line, h)) in rest.iter().zip(heights).enumerate() {
+            let note = is_note(i, line);
+            if note && i > 0 {
+                ly += 4.0;
+            }
+            let style = TextStyle::new("WizardNormal", scale, if note { TIP_NOTE } else { TIP_TEXT }).wrapped();
+            canvas.text(line, [x + margin, ly, x + width - margin, ly + h], &style, false);
+            ly += h;
+        }
+        if equipped {
+            canvas.image(EQUIP_FIST, [x + width - 25.0, y - 14.0, x + width + 14.0, y + 22.0],
+                         [0.0, 0.0, 0.5, 0.5], ImColor32::WHITE);
         }
     }
 

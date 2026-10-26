@@ -31,6 +31,8 @@ mod steam;
 mod model;
 #[path = "../../src/markers.rs"]
 mod markers;
+#[path = "../../src/nameplates.rs"]
+mod nameplates;
 mod input;
 mod game;
 
@@ -198,8 +200,8 @@ fn main() {
         ("1_character", pages::Tab::Character, 0, [0.0, 0.0], ""),
         ("1b_character_equipment", pages::Tab::Character, 1, [0.0, 0.0], ""),
         ("1c_character_flasks_tip", pages::Tab::Character, 0, [0.445, 0.83], ""),
-        ("2_backpack", pages::Tab::Backpack, 0, [0.74, 0.36], ""),
-        ("2b_backpack_weapons", pages::Tab::Backpack, 4, [0.74, 0.30], ""),
+        ("2_backpack", pages::Tab::Backpack, 0, [0.609, 0.282], ""),
+        ("2b_backpack_weapons", pages::Tab::Backpack, 4, [0.609, 0.282], ""),
         ("2c_backpack_armour", pages::Tab::Backpack, 1, [0.74, 0.30], ""),
         ("3_pets", pages::Tab::Pets, 0, [0.0, 0.0], ""),
         ("3b_pets_ash", pages::Tab::Pets, 0, [0.0, 0.0], "pet:1"),
@@ -257,6 +259,7 @@ fn main() {
             };
             book.frame(ui, &mut cx);
             book.draw_markers(ui, &cx);
+            book.draw_nameplates(ui, &cx);
             if frame == 1 {
                 book.preview_wait_models();
             }

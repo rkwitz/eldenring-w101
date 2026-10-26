@@ -24,6 +24,8 @@ const STAT_FP: usize = 0x148;
 const STAT_SP: usize = 0x154; // stamina, max stamina (CSChrDataModule in the eldenring crate)
 pub use crate::sheet::*;
 
+/// Size of a WorldChrMan characters-by-distance entry (ChrInsDistanceEntry).
+const DISTANCE_ENTRY: usize = 16;
 const PLAYER_GAME_DATA: usize = 0x8; // GameDataMan -> PlayerGameData: hp 0x10, max 0x14, fp 0x1C, max 0x20, sp 0x2C, max 0x30
 
 pub struct Game {
@@ -75,6 +77,42 @@ impl Game {
         let fov = read::<f32>(cam + offset_of!(CSCam, fov))?;
         let ok = matrix.iter().flatten().chain(&[px, py, pz]).all(|v| v.is_finite() && v.abs() < 1.0e6);
         (ok && (0.1..3.0).contains(&fov)).then_some(crate::markers::Camera { matrix, fov, player: [px, py, pz] })
+    }
+
+    /// The characters near the player whose model (character_id) is in `models` and that are alive: (model,
+    /// physics position, in the camera's space), from WorldChrMan's characters-by-distance list.
+    pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3])> {
+        use eldenring::cs::{CSChrDataModule, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer, WorldChrMan};
+        use std::mem::offset_of;
+        let mut out = Vec::new();
+        let Some(wcm) = read::<usize>(self.world_chr_man) else { return out };
+        // DLVector: allocator, first, last, end.
+        let list = wcm + offset_of!(WorldChrMan, chr_inses_by_distance);
+        let (Some(first), Some(last)) = (read::<usize>(list + 8), read::<usize>(list + 16)) else { return out };
+        if last < first || first < 0x10000 {
+            return out;
+        }
+        let count = ((last - first) / DISTANCE_ENTRY).min(1024);
+        let Some(entries) = read_bytes(first, count * DISTANCE_ENTRY) else { return out };
+        for e in entries.chunks_exact(DISTANCE_ENTRY) {
+            let chr = usize::from_le_bytes(e[..8].try_into().unwrap());
+            let Some(model) = read::<u32>(chr + offset_of!(ChrIns, character_id)) else { continue };
+            if !models.contains(&model) {
+                continue;
+            }
+            let Some(modules) = read::<usize>(chr + offset_of!(ChrIns, modules)) else { continue };
+            let hp = read::<usize>(modules + offset_of!(ChrInsModuleContainer, data))
+                .and_then(|data| read::<i32>(data + offset_of!(CSChrDataModule, hp)));
+            if hp.is_none_or(|hp| hp <= 0) {
+                continue;
+            }
+            let Some(physics) = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics)) else { continue };
+            let Some([x, y, z, _]) = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position)) else { continue };
+            if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6) {
+                out.push((model, [x, y, z]));
+            }
+        }
+        out
     }
 
     /// The player's character sheet for the spellbook, from PlayerGameData; None without a character.
@@ -165,6 +203,33 @@ impl Game {
             items,
             key_items,
         })
+    }
+
+    /// Puts `spell` (a magic param ID, -1 = none) in memory slot `index` (EquipMagicData's entries), as Elden
+    /// Ring's own Memorize Spell menu does at a grace; false when the slot can't be reached.
+    pub fn set_spell(&self, index: usize, spell: i32) -> bool {
+        use eldenring::cs::{EquipMagicData, EquipMagicItem, PlayerGameData};
+        use std::mem::offset_of;
+        if index >= 14 {
+            return false;
+        }
+        let Some(pgd) = read::<usize>(self.game_data_man).and_then(|gdm| read::<usize>(gdm + PLAYER_GAME_DATA)) else {
+            return false;
+        };
+        let Some(magic) = read::<usize>(pgd + offset_of!(PlayerGameData, equipment.equip_magic_data)) else { return false };
+        let at = magic + offset_of!(EquipMagicData, entries) + index * size_of::<EquipMagicItem>();
+        if read::<i32>(at).is_none() {
+            return false;
+        }
+        unsafe { (at as *mut i32).write_volatile(spell) };
+        // The spell selected for casting must be a memorised one: the first, if it was this slot's.
+        let selected = magic + offset_of!(EquipMagicData, selected_slot);
+        if spell < 0 && read::<i32>(selected) == Some(index as i32) {
+            let entries = read::<[[i32; 2]; 14]>(magic + offset_of!(EquipMagicData, entries)).unwrap_or([[-1, 0]; 14]);
+            let first = entries.iter().position(|e| e[0] >= 0).map_or(0, |i| i as i32);
+            unsafe { (selected as *mut i32).write_volatile(first) };
+        }
+        true
     }
 
     /// Every candidate value, for `stats` and for the debug log.
@@ -386,8 +451,11 @@ fn rip_target(sections: &[(usize, usize)], pattern: &str) -> Option<usize> {
 
 // The hand-written offsets above must agree with the eldenring crate's struct layouts.
 const _: () = {
-    use eldenring::cs::{CSChrDataModule, PlayerGameData};
-    use std::mem::offset_of;
+    use eldenring::cs::{CSChrDataModule, ChrInsDistanceEntry, PlayerGameData, WorldChrMan};
+    use std::mem::{offset_of, size_of};
+    assert!(offset_of!(WorldChrMan, main_player) == PLAYER);
+    assert!(size_of::<ChrInsDistanceEntry>() == DISTANCE_ENTRY);
+    assert!(size_of::<eldenring::DLVector<ChrInsDistanceEntry>>() == 32);
     assert!(offset_of!(CSChrDataModule, hp) == STAT_HP);
     assert!(offset_of!(CSChrDataModule, fp) == STAT_FP);
     assert!(offset_of!(CSChrDataModule, stamina) == STAT_SP);

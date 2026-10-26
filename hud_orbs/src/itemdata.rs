@@ -250,29 +250,18 @@ impl ItemData {
                 if let Some(w) = w {
                     let (atk_rate, sc_rate) = self.reinforce.get(&(w.reinforce + level)).copied()
                         .unwrap_or(([1.0; 5], [1.0; 5]));
-                    let names = ["Phy", "Mag", "Fire", "Ligt", "Holy"];
-                    let attack: Vec<String> = (0..5)
-                        .filter(|&i| w.attack[i] > 0.0)
-                        .map(|i| format!("{} {:.0}", names[i], w.attack[i] * atk_rate[i]))
-                        .collect();
+                    // One stat per line, as Wizard101's item tips list theirs.
                     sub.push(if w.kind.is_empty() { "Weapon".to_string() } else { w.kind.to_string() });
-                    if !attack.is_empty() {
-                        sub.push(format!("Attack: {}", attack.join("  ")));
+                    let names = ["Physical", "Magic", "Fire", "Lightning", "Holy"];
+                    for i in (0..5).filter(|&i| w.attack[i] > 0.0) {
+                        sub.push(format!("{} Attack {:.0}", names[i], w.attack[i] * atk_rate[i]));
                     }
-                    let stats = ["Str", "Dex", "Int", "Fai", "Arc"];
-                    let scaling: Vec<String> = (0..5)
-                        .filter(|&i| w.scaling[i] > 0.0)
-                        .map(|i| format!("{} {}", stats[i], grade(w.scaling[i] * sc_rate[i])))
-                        .collect();
-                    if !scaling.is_empty() {
-                        sub.push(format!("Scaling: {}", scaling.join("  ")));
+                    let stats = ["Strength", "Dexterity", "Intelligence", "Faith", "Arcane"];
+                    for i in (0..5).filter(|&i| w.scaling[i] > 0.0) {
+                        sub.push(format!("{} Scaling {}", stats[i], grade(w.scaling[i] * sc_rate[i])));
                     }
-                    let req: Vec<String> = (0..5)
-                        .filter(|&i| w.requirements[i] > 0)
-                        .map(|i| format!("{} {}", stats[i], w.requirements[i]))
-                        .collect();
-                    if !req.is_empty() {
-                        sub.push(format!("Requires: {}", req.join("  ")));
+                    for i in (0..5).filter(|&i| w.requirements[i] > 0) {
+                        sub.push(format!("Requires {} {}", stats[i], w.requirements[i]));
                     }
                     sub.push(format!("Weight {:.1}", w.weight));
                 }
@@ -281,22 +270,25 @@ impl ItemData {
                 if let Some(a) = self.armour.get(&row) {
                     sub.push(["Helm", "Chest Armour", "Gauntlets", "Leg Armour"].get(a.slot as usize).unwrap_or(&"Armour")
                         .to_string());
-                    sub.push(format!("Absorb: Phy {:.1}  Mag {:.1}  Fire {:.1}  Ligt {:.1}  Holy {:.1}",
-                                     a.absorption[0], a.absorption[4], a.absorption[5], a.absorption[6], a.absorption[7]));
-                    sub.push(format!("Resist: Imm {}  Rob {}  Foc {}  Vit {}", a.resistance[0], a.resistance[1],
-                                     a.resistance[2], a.resistance[3]));
-                    sub.push(format!("Poise {:.0}   Weight {:.1}", a.poise, a.weight));
+                    for (name, i) in [("Physical", 0), ("Magic", 4), ("Fire", 5), ("Lightning", 6), ("Holy", 7)] {
+                        sub.push(format!("{name} Defense {:.1}", a.absorption[i]));
+                    }
+                    for (name, v) in ["Immunity", "Robustness", "Focus", "Vitality"].iter().zip(a.resistance) {
+                        sub.push(format!("{name} {v}"));
+                    }
+                    sub.push(format!("Poise {:.0}", a.poise));
+                    sub.push(format!("Weight {:.1}", a.weight));
                 }
             }
             'G' => {
                 if let Some(s) = self.spells.get(&raw) {
-                    sub.push(format!("{} ({})", s.kind, s.er_school));
-                    let req: Vec<String> = ["Int", "Fai", "Arc"].iter().zip(s.requirements)
-                        .filter(|(_, v)| *v > 0)
-                        .map(|(n, v)| format!("{n} {v}"))
-                        .collect();
-                    sub.push(format!("FP {}   Slots {}{}", s.fp, s.slots,
-                                     if req.is_empty() { String::new() } else { format!("   Requires: {}", req.join(" ")) }));
+                    sub.push(s.kind.to_string());
+                    sub.push(s.er_school.to_string());
+                    sub.push(format!("FP Cost {}", s.fp));
+                    sub.push(format!("Memory Slots {}", s.slots));
+                    for (n, v) in ["Intelligence", "Faith", "Arcane"].iter().zip(s.requirements).filter(|(_, v)| *v > 0) {
+                        sub.push(format!("Requires {n} {v}"));
+                    }
                 }
             }
             _ => {}

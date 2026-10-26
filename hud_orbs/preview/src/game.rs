@@ -15,7 +15,20 @@ pub fn event_flag(flag: u32) -> Option<bool> {
 
 pub fn set_event_flag(_flag: u32, _on: bool) {}
 
+static SPELLS: std::sync::Mutex<[i32; 14]> = std::sync::Mutex::new([4000, 4010, 4300, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1]);
+
 impl Game {
+    /// A Lost Soul and Rattlebones up the street, a Dark Sprite nearer.
+    pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3])> {
+        [(4180, [-23.0, 93.5, -100.0]), (4960, [-5.0, 93.5, -86.0]), (3450, [-17.5, 94.0, -106.0])]
+            .into_iter().filter(|e| models.contains(&e.0)).collect()
+    }
+
+    pub fn set_spell(&self, index: usize, spell: i32) -> bool {
+        SPELLS.lock().unwrap()[index] = spell;
+        true
+    }
+
     pub fn fake() -> Game {
         Game
     }
@@ -67,7 +80,7 @@ impl Game {
             face: vec![0; 276],
             equipment: [3140005, 2000000, -1, 1000003, -1, -1, 50000000, -1, -1, -1, -1, -1, 1000000, 1000100, 1000200,
                         1000300, -1, 1000, 1010, 2000, -1, -1],
-            spells: [4000, 4010, 4300, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+            spells: *SPELLS.lock().unwrap(),
             items,
             key_items: vec![(goods(130), 1), (goods(8000), 1), (goods(8500), 1), (goods(9500), 1), (goods(9300), 1),
                             (goods(9340), 1)],

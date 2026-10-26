@@ -48,9 +48,26 @@ const YELLOW: ImColor32 = ImColor32::from_rgb(255, 255, 0);
 /// Wizard101's button label yellow (FF80FFFF).
 const LIGHT_YELLOW: ImColor32 = ImColor32::from_rgb(255, 255, 128);
 const WHITE: ImColor32 = ImColor32::from_rgb(255, 255, 255);
-/// The frame behind a memorised spell's card, and the shade over a memory slot not unlocked yet.
-const MEMORIZED: ImColor32 = ImColor32::from_rgba(255, 214, 64, 230);
-const LOCKED: ImColor32 = ImColor32::from_rgba(20, 12, 6, 170);
+/// The shade over a spell card already in the deck.
+const IN_DECK: ImColor32 = ImColor32::from_rgba(30, 20, 10, 120);
+/// DeckConfiguration's slot frame (its top half: a spell slot; the bottom half is for treasure cards).
+const DECK_SLOT: &str = "GUI/DeckConfig/Background_Slot.png";
+
+/// The Moon of Nokstella talisman: two more memory slots.
+const NOKSTELLA: i32 = 1140;
+
+/// Memory slots the player has: the unlocked ones (memory stones) and the Moon of Nokstella's two.
+pub fn memory_slots(sheet: &Sheet) -> u32 {
+    let nokstella = sheet.equipment[17..21].contains(&NOKSTELLA);
+    (sheet.magic_slots as u32 + if nokstella { 2 } else { 0 }).min(14)
+}
+
+/// Memory slots the memorised spells take (each spell its MagicParam slot count).
+pub fn slots_used(sheet: &Sheet, items: &ItemData) -> u32 {
+    let mut seen = Vec::new();
+    sheet.spells.iter().filter(|s| **s >= 0 && !seen.contains(*s) && { seen.push(**s); true })
+        .map(|s| items.spell(*s as u32).map_or(1, |x| x.slots.max(1))).sum()
+}
 
 /// Per-tab choices the player makes in the book.
 #[derive(Default)]
@@ -67,10 +84,25 @@ pub struct State {
     pub cookbook: usize,
     /// The layout node of the chosen filter button (deck), to show it pressed.
     pub filter_node: Option<usize>,
+    /// What the page's own clickable things are this frame, set while binding: (rect, what).
+    pub hits: Vec<([f32; 4], Hit)>,
+    /// A short message under the page (what a click did or why it couldn't), and when it was set.
+    pub note: Option<(String, std::time::Instant)>,
     /// How many subs/pages the current tab has (for wrapping), set while binding.
     subs: usize,
     /// How many pets there are to page through.
     pets: usize,
+}
+
+/// Something on a page that a click (or double click) acts on, besides its layout buttons.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Hit {
+    /// A backpack row's item (inventory ID with category bits).
+    Item(u32),
+    /// A spell card in the spell list (magic param ID): memorise it.
+    Learn(i32),
+    /// A memorised spell in the deck: memory slot index.
+    Forget(usize),
 }
 
 pub enum Action {
@@ -288,6 +320,7 @@ fn equipped_ids(sheet: &Sheet) -> Vec<u32> {
 
 /// Fills the page for `tab`.
 pub fn bind(tab: Tab, l: &Layout, d: &Data, st: &mut State, v: &mut View) {
+    st.hits.clear();
     match tab {
         Tab::Character => character(l, d, st, v),
         Tab::Backpack => backpack(l, d, st, v),
@@ -467,7 +500,7 @@ fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     let cost = if sheet.level < 713 { game::level_up_cost(sheet.level).to_string() } else { "-".into() };
     v.set(l.find("ExpText"), centre(&format!("{}/{}", sheet.runes, cost)));
     v.set(l.find_text("Training"), centre("Memory\nSlots"));
-    v.set(l.find("TrainingPoints"), centre(&sheet.magic_slots.to_string()));
+    v.set(l.find("TrainingPoints"), centre(&memory_slots(sheet).to_string()));
     v.set(l.find_text("<center>Gold</center>"), centre("Runes"));
     v.set(l.find("Gold"), centre(&sheet.runes.to_string()));
     v.show(l.find("GoldMax"), false);
@@ -707,7 +740,8 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         })
         .map(|(id, n)| (names.item(*id), *n, equipped.contains(id), *id))
         .collect();
-    items.sort();
+    // What is worn or held comes first (with Wizard101's fist beside it), then the rest by name.
+    items.sort_by(|a, b| (!a.2, &a.0, a.3).cmp(&(!b.2, &b.0, b.3)));
     v.set(l.find("inventorySpace"), centre(&items.len().to_string()));
     let page = paging(l, v, st, items.len(), rows.len(), ("PageNumber", "leftscroll", "rightscroll"));
     for (i, row) in rows.iter().enumerate() {
@@ -729,6 +763,7 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 }
                 v.show(fist, *is_equipped);
                 v.tip(r, d.items.tooltip(*id, *count, names, *is_equipped));
+                st.hits.push((r, Hit::Item(*id)));
             }
             None => {
                 v.show(Some(*row), false);
@@ -751,6 +786,8 @@ fn box_frame() -> [Option<String>; 9] {
     ["TL", "T", "TR", "L", "R", "BL", "B", "BR"].map(|p| Some(format!("GUI/Art/Art_Message_Box02_{p}.png")))
         .into_iter().chain([None]).collect::<Vec<_>>().try_into().unwrap_or_default()
 }
+/// The pet portrait's frame (spritePortraitBack, 159 square in Wizard101) on the left page.
+const PET_PORTRAIT: [f32; 4] = [127.0, 56.0, 317.0, 246.0];
 const TALENT_BOX: ImColor32 = ImColor32::from_rgb(206, 182, 136);
 
 fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
@@ -824,16 +861,18 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     let entry = TextStyle::new("WizardFancy", 0.4, BLACK);
     let prose = TextStyle::new("WizardNormal", 0.42, BLACK).wrapped();
     let rule = ImColor32::from_rgba(90, 60, 30, 110);
-    if let Some(p) = l.find("wndPortrait") {
-        let r = l.nodes[p].rect;
-        icon(v, d.items, *id, [r[0] + 8.0, r[1] + 8.0, r[2] - 8.0, r[3] - 8.0]);
+    v.set(l.find("txtTitle"), centre(if level.is_some() { "Spirit Ashes" } else { "Spectral Steed" }));
+    // The portrait bigger and centred on the left page (Wizard101's pet card beside it has no counterpart).
+    let back = PET_PORTRAIT;
+    if let Some(b) = l.find("spritePortraitBack") {
+        v.rect.insert(b, back);
     }
-    // Beside the portrait, where Wizard101 shows the pet's card: what kind of companion it is.
-    let side = [236.0, 60.0, 368.0, 196.0];
-    v.add([side[0], side[1], side[2], side[1] + 24.0], kind.clone(), heading.clone());
-    v.fills.push(([side[0] + 10.0, side[1] + 27.0, side[2] - 10.0, side[1] + 28.5], rule));
-    let summon = if level.is_some() { "Summon at a Rebirth Monument" } else { "Call with the Spectral Steed Whistle" };
-    v.add([side[0] + 4.0, side[1] + 34.0, side[2] - 4.0, side[3]], summon, prose.clone().centred());
+    let k = (back[2] - back[0]) / 159.0;
+    let window = [back[0] + 13.0 * k, back[1] + 13.0 * k, back[2] - 13.0 * k, back[3] - 13.0 * k];
+    if let Some(p) = l.find("wndPortrait") {
+        v.rect.insert(p, window);
+        icon(v, d.items, *id, [window[0] + 8.0, window[1] + 8.0, window[2] - 8.0, window[3] - 8.0]);
+    }
 
     // The talents column (ctrlGenetics' place, from under the portrait): each talent in its own box, as Wizard101
     // lists a pet's talents.
@@ -843,7 +882,7 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     } else {
         vec!["Double jump", "Rides spiritsprings", "Outdoors only", "Heals on Rowa Raisins"]
     };
-    let mut y = column[1] - 24.0;
+    let mut y = PET_PORTRAIT[3] + 8.0;
     v.add([column[0], y, column[2], y + 24.0], "Talents", heading.clone());
     y += 28.0;
     for t in &talents {
@@ -858,7 +897,7 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     y += 30.0;
     let tip = d.items.tooltip(*id, 1, d.names, false);
     let about = tip.last().filter(|_| tip.len() > 1).cloned().unwrap_or_default();
-    v.add([column[0] + 12.0, y, column[2] - 10.0, column[3]], about, prose.clone());
+    v.add([column[0] + 12.0, y, column[2] - 10.0, column[3]], about, prose.clone().centred());
 
     // The stage line over the bars, as Wizard101 names a pet's age there.
     v.show(l.find("wndAgingBkg"), true);
@@ -985,17 +1024,17 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         let x = DECK_TAB_X[st.sub % DECK_TABS.len()] - fr[0];
         v.rect.insert(m, [mr[0] + x, mr[1], mr[2] + x, mr[3]]);
     }
-    v.set(l.find("DeckTitle"), centre(title));
+    // The book's title stays "Spell Deck" whichever class is shown (the class is the tab's tip).
+    let _ = title;
+    v.set(l.find("DeckTitle"), centre("Spell Deck"));
+    // Wizard101's item-card row under the deck has no Elden Ring counterpart.
+    hide(l, v, &["ItemSpells", "NextItemSpells", "PrevItemSpells"]);
     let Some(sheet) = d.sheet else { return };
-    let memorized: Vec<u32> = sheet.spells.iter().filter(|s| **s >= 0).map(|s| *s as u32).collect();
-    let used: u32 = memorized.iter().map(|s| d.items.spell(*s).map_or(1, |x| x.slots.max(1))).sum();
-    v.set(l.find("DeckName"), centre(&format!("Memory Slots {used}/{}", sheet.magic_slots)));
-    // The deck (Wizard101's grid of the cards in the deck): every spell carried, as small cards; memorised ones
-    // are marked.
-    let mut carried: Vec<(String, u32)> =
-        sheet.items.iter().filter(|(id, _)| is_spell(*id)).map(|(id, _)| (d.names.item(*id), *id & 0x0FFF_FFFF)).collect();
-    carried.sort_by_key(|(_, id)| (!memorized.contains(id), *id));
-    carried.dedup_by(|a, b| a.1 == b.1);
+    let total = memory_slots(sheet);
+    let used = slots_used(sheet, d.items);
+    v.set(l.find("DeckName"), centre(&format!("Memory Slots {used}/{total}")));
+    // The deck (Wizard101's grid of the cards in the deck, each in its slot frame, Background_Slot's top half): one
+    // slot per memory slot, the memorised spells in theirs. A click on one forgets it.
     if let Some(grid) = l.find("CardsInDeck") {
         let node = &l.nodes[grid];
         let [cw, ch] = node.card.unwrap_or([33.0, 33.0]);
@@ -1003,38 +1042,23 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         let r = node.rect;
         let columns = (((r[2] - r[0]) + gx) / (cw + gx)).floor().max(1.0) as usize;
         let x0 = r[0] + ((r[2] - r[0]) - (columns as f32 * (cw + gx) - gx)) / 2.0;
-        let rows = (((r[3] - r[1]) + gx) / (ch + gx)).floor().max(1.0) as usize;
-        for (i, (_, id)) in carried.iter().take(columns * rows).enumerate() {
+        let slots = (total as usize).max(sheet.spells.iter().rposition(|s| *s >= 0).map_or(0, |i| i + 1)).min(14);
+        for i in 0..slots {
             let x = x0 + (i % columns) as f32 * (cw + gx);
             let y = r[1] + 3.0 + (i / columns) as f32 * (ch + gx);
             let cell = [x, y, x + cw, y + ch];
-            // Wizard101's deck shows each card's picture: here the spell's own icon.
-            if memorized.contains(id) {
-                v.fills.push(([x - 2.0, y - 2.0, x + cw + 2.0, y + ch + 2.0], MEMORIZED));
-            }
-            icon(v, d.items, 0x4000_0000 | id, cell);
-            v.tip(cell, d.items.tooltip(0x4000_0000 | id, 1, d.names, memorized.contains(id)));
-        }
-    }
-    // The loadout (Wizard101's item-card slots below the deck): Elden Ring's fourteen memory slots in order, the
-    // ones not unlocked yet dimmed.
-    if let Some(slots) = l.find("ItemSpells") {
-        let r = l.nodes[slots].rect;
-        let (cw, ch) = ((r[2] - r[0]) / 8.0, (r[3] - r[1]) / 2.0);
-        for i in 0..16 {
-            let spell = sheet.spells.get(i).copied().unwrap_or(-1);
-            let (x, y) = (r[0] + (i % 8) as f32 * cw, r[1] + (i / 8) as f32 * ch);
-            let inner = [x + cw * 0.16, y + ch * 0.16, x + cw * 0.84, y + ch * 0.84];
-            if i >= (sheet.magic_slots as usize).min(14) {
-                v.fills.push((inner, LOCKED));
-                continue;
-            }
+            v.images.push((cell, DECK_SLOT.into(), [0.0, 0.0, 1.0, 0.5]));
+            let spell = sheet.spells[i];
+            let inner = [x + 3.0, y + 3.0, x + cw - 3.0, y + ch - 3.0];
             if spell >= 0 {
                 let id = 0x4000_0000 | spell as u32;
                 icon(v, d.items, id, inner);
-                v.tip([x, y, x + cw, y + ch], d.items.tooltip(id, 1, d.names, true));
+                let mut tip = d.items.tooltip(id, 1, d.names, false);
+                tip.push("Click: forget this spell".into());
+                v.tip(cell, tip);
+                st.hits.push((cell, Hit::Forget(i)));
             } else {
-                v.tip([x, y, x + cw, y + ch], vec![format!("Memory slot {}", i + 1), "Empty".into()]);
+                v.tip(cell, vec![format!("Memory slot {}", i + 1), "Empty".into(), "Click a spell on the right".into()]);
             }
         }
     }
@@ -1100,7 +1124,16 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             v.add([b0[0], b0[1], b1[0], b1[1]], format!("{}\n{}", spell.er_school, spell.kind),
                   TextStyle::new("WizardNormal", 0.3, BLACK).centred());
         }
-        v.tip([x, y, x + cw, y + ch], d.items.tooltip(*id, 1, d.names, sheet.spells.contains(&(raw as i32))));
+        let memorised = sheet.spells.contains(&(raw as i32));
+        let mut tip = d.items.tooltip(*id, 1, d.names, false);
+        tip.push(if memorised { "Memorised (click it in the deck to forget it)".into() } else { "Click: memorise".into() });
+        v.tip([x, y, x + cw, y + ch], tip);
+        if memorised {
+            // Already in the deck: dimmed, as Wizard101 dims cards it can't add.
+            v.fills.push(([x, y, x + cw, y + ch], IN_DECK));
+        } else {
+            st.hits.push(([x, y, x + cw, y + ch], Hit::Learn(raw as i32)));
+        }
     }
     if known.is_empty() {
         v.add([r[0], r[1] + 40.0, r[2], r[1] + 80.0], "No spells", TextStyle::new("WizardFancy", 0.6, BLACK).centred());
@@ -1193,20 +1226,28 @@ pub fn map_rect(aspect: f32) -> [f32; 4] {
     [cx - w / 2.0, cy - ht / 2.0, cx + w / 2.0, cy + ht / 2.0]
 }
 
-/// The copied map screen on the page: all of MAP_HOLE inside a margin, and the part of the screen (uv) of that
-/// shape, from its middle (a 16:9 screen loses a little of each side rather than being letterboxed).
-pub fn map_picture_rect(aspect: f32) -> ([f32; 4], [f32; 4]) {
+/// The part of the map screen shown on the page (uv): the middle, its sides cut off (the time of day on the right
+/// with them), above Elden Ring's button hints along the bottom.
+const MAP_UV_X: [f32; 2] = [0.15, 0.85];
+const MAP_UV_BOTTOM: f32 = 0.925;
+/// Elden Ring's button hints (B close, X marker, Y sites of grace ...): the bottom right of the map screen, drawn
+/// in a strip inside the frame under the map.
+const HINTS_UV: [f32; 4] = [0.36, 0.93, 1.0, 0.995];
+const HINTS_H: f32 = 30.0;
+
+/// The copied map screen on the page: (map rect, its uv, hints rect, their uv) inside MAP_HOLE's margin, both in
+/// their own shape on a screen of `aspect` (width / height).
+pub fn map_picture_rect(aspect: f32) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
     let h = MAP_HOLE;
-    let r = [h[0] + 8.0, h[1] + 8.0, h[2] - 8.0, h[3] - 8.0];
-    let room = (r[2] - r[0]) / (r[3] - r[1]);
-    let uv = if aspect > room {
-        let keep = room / aspect;
-        [(1.0 - keep) / 2.0, 0.0, (1.0 + keep) / 2.0, 1.0]
-    } else {
-        let keep = aspect / room;
-        [0.0, (1.0 - keep) / 2.0, 1.0, (1.0 + keep) / 2.0]
-    };
-    (r, uv)
+    let area = [h[0] + 8.0, h[1] + 8.0, h[2] - 8.0, h[3] - 8.0];
+    let cx = (area[0] + area[2]) / 2.0;
+    let hints_bottom = area[3] - 2.0;
+    let hints_w = ((HINTS_UV[2] - HINTS_UV[0]) * aspect / (HINTS_UV[3] - HINTS_UV[1]) * HINTS_H).min(area[2] - area[0] - 8.0);
+    let hints = [cx - hints_w / 2.0, hints_bottom - HINTS_H, cx + hints_w / 2.0, hints_bottom];
+    let map_h = hints[1] - 6.0 - area[1];
+    let map_w = ((MAP_UV_X[1] - MAP_UV_X[0]) * aspect / MAP_UV_BOTTOM * map_h).min(area[2] - area[0]);
+    let map = [cx - map_w / 2.0, area[1], cx + map_w / 2.0, area[1] + map_h];
+    (map, [MAP_UV_X[0], 0.0, MAP_UV_X[1], MAP_UV_BOTTOM], hints, HINTS_UV)
 }
 
 fn map(l: &Layout, d: &Data, v: &mut View) {
@@ -1221,9 +1262,12 @@ fn map(l: &Layout, d: &Data, v: &mut View) {
         match d.map_picture {
             Some(aspect) => {
                 // The page's whole map area, the screen's sides cut off to fit (not squeezed).
-                let (r, uv) = map_picture_rect(aspect);
-                v.fills.push(([r[0] - 6.0, r[1] - 6.0, r[2] + 6.0, r[3] + 6.0], ImColor32::from_rgb(74, 46, 24)));
+                let (r, uv, hints, hints_uv) = map_picture_rect(aspect);
+                let area = [MAP_HOLE[0] + 2.0, MAP_HOLE[1] + 2.0, MAP_HOLE[2] - 2.0, MAP_HOLE[3] - 2.0];
+                v.fills.push((area, ImColor32::from_rgb(74, 46, 24)));
                 v.images.push((r, MAP_PICTURE.into(), uv));
+                v.fills.push(([hints[0] - 4.0, hints[1] - 2.0, hints[2] + 4.0, hints[3] + 2.0], ImColor32::from_rgb(16, 12, 8)));
+                v.images.push((hints, MAP_PICTURE.into(), hints_uv));
                 v.picture = Some(r);
             }
             None => v.hole = Some(map_rect(16.0 / 9.0)),
@@ -1246,11 +1290,11 @@ fn map(l: &Layout, d: &Data, v: &mut View) {
 // ---------------------------------------------------------------------------------------------------------------
 // Crafting: RecipeWindow.gui. Right: crafting materials (or cookbooks, with the Reagents button); left: the kit.
 
-/// Reagent cards (top left corners) on the crafting pages, two by two on each page as in ReagentWindow.gui, moved
-/// in to clear the page's doodles and buttons, and their size (Wizard101's 99 x 153 card, a little smaller).
-const REAGENT_CARDS: [[f32; 2]; 8] = [[92.0, 124.0], [214.0, 124.0], [92.0, 312.0], [214.0, 312.0],
-                                      [448.0, 124.0], [576.0, 124.0], [448.0, 312.0], [576.0, 312.0]];
-const REAGENT_CARD: [f32; 2] = [96.0, 147.0];
+/// Reagent cards (top left corners): ReagentWindow's Card01-08 (LeftPage 30,115 and RightPage 389,115 plus each
+/// card's offset), and their size.
+const REAGENT_CARDS: [[f32; 2]; 8] = [[61.0, 117.0], [226.0, 117.0], [61.0, 320.0], [226.0, 320.0],
+                                      [391.0, 117.0], [555.0, 117.0], [391.0, 320.0], [555.0, 320.0]];
+const REAGENT_CARD: [f32; 2] = [161.0, 201.0];
 
 /// A crafting material's Wizard101 school, by what it is: fire and embers Fire; frost, crystal and silver Ice;
 /// lightning and feathers Storm; beasts and their parts Myth; plants and fruit Life; poison, rot, blood and graves
@@ -1305,7 +1349,7 @@ fn crafting(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             }
         }
     }
-    v.set(l.find("Reagent_Toggle2"), centre(if st.cookbooks { "Materials" } else { "Cookbooks" }));
+    v.set(l.find("Reagent_Toggle2"), centre(if st.cookbooks { "Reagents" } else { "Cookbooks" }));
     let rows: Vec<usize> = (1..=8).filter_map(|i| l.find(&format!("Item_{i}"))).collect();
     let Some(sheet) = d.sheet else { return };
     let kit = sheet.key_items.iter().any(|(id, _)| d.names.item(*id) == "Crafting Kit");
@@ -1334,53 +1378,43 @@ fn crafting(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             v.rect.insert(t, [r[0] + 20.0, r[1], r[2] - 20.0, r[3]]);
         }
         let text = d.items.caption(id & 0x0FFF_FFFF).unwrap_or_else(|| "This cookbook's pages are blank.".into());
-        // Long recipe lists in smaller type, so they fit the page.
-        let size = if text.lines().count() > 12 { 0.34 } else { 0.4 };
-        // Centred, and smaller still if it would run past the page (layout.rs shrinks wrapped text to its box).
-        v.add([80.0, 168.0, 336.0, 520.0], text, TextStyle::new("WizardNormal", size, BLACK).centred().wrapped());
-    }
-    if !st.cookbooks {
-        // Wizard101's reagents page (ReagentWindow.gui): the materials as item cards, four on each page, each with
-        // its picture, a small school symbol top right and the count bottom right.
-        hide(l, v, &["portrait_background", "card_background", "IngredientBackground"]);
-        // The kit's name banner (labelItemHighlighted's sprite) would sit behind the first row of cards.
-        v.show(l.find("labelItemHighlighted").and_then(|t| l.nodes[t].parent), false);
-        for (i, n) in l.nodes.iter().enumerate() {
-            if n.name == "Doodle" && n.rect[2] < 200.0 {
-                v.show(Some(i), false);
+        // The book's description, then every recipe it teaches as a row with the item's picture (the caption lists
+        // them as "- Name" lines after "Acquire the knowledge to craft the following:").
+        let (about, list) = match text.find("Acquire the knowledge") {
+            Some(i) => (text[..i].trim().to_string(), &text[i..]),
+            None => (text.trim().to_string(), ""),
+        };
+        let recipes: Vec<&str> = list.lines().filter_map(|l| l.trim().strip_prefix("- ")).map(str::trim).collect();
+        let page = [80.0, 166.0, 340.0, 524.0];
+        let about_h = if recipes.is_empty() { page[3] - page[1] } else { 110.0 };
+        v.add([page[0], page[1], page[2], page[1] + about_h], about,
+              TextStyle::new("WizardNormal", 0.38, BLACK).centred().wrapped());
+        if !recipes.is_empty() {
+            let mut y = page[1] + about_h + 4.0;
+            v.add([page[0], y, page[2], y + 22.0], format!("Recipes ({})", recipes.len()),
+                  TextStyle::new("WizardFancy", 0.48, BLACK).centred());
+            y += 26.0;
+            let columns = if recipes.len() > 9 { 2 } else { 1 };
+            let rows = recipes.len().div_ceil(columns);
+            let row_h = ((page[3] - y) / rows as f32).min(26.0);
+            let col_w = (page[2] - page[0]) / columns as f32;
+            for (i, recipe) in recipes.iter().enumerate() {
+                let (cx, cy) = (page[0] + (i / rows) as f32 * col_w, y + (i % rows) as f32 * row_h);
+                let goods = d.names.goods_named(recipe).map(|g| 0x4000_0000 | g);
+                let side = row_h - 2.0;
+                let has = goods.is_some_and(|g| icon(v, d.items, g, [cx + 2.0, cy + 1.0, cx + 2.0 + side, cy + 1.0 + side]));
+                let left = if has { cx + side + 6.0 } else { cx + 4.0 };
+                let scale = if columns == 2 { 0.32 } else { 0.38 };
+                v.add([left, cy, cx + col_w - 2.0, cy + row_h], recipe.to_string(),
+                      TextStyle::new("WizardNormal", scale, BLACK));
+                if let Some(g) = goods {
+                    v.tip([cx, cy, cx + col_w, cy + row_h], d.items.tooltip(g, 1, d.names, false));
+                }
             }
         }
-        for r in &rows {
-            v.show(Some(*r), false);
-        }
-        let page = paging(l, v, st, list.len(), REAGENT_CARDS.len(), ("PageNumber", "leftscroll", "rightscroll"));
-        for (slot, &[x, y]) in REAGENT_CARDS.iter().enumerate() {
-            let Some((name, count, id)) = list.get(page * REAGENT_CARDS.len() + slot) else { continue };
-            let (w, h) = (REAGENT_CARD[0], REAGENT_CARD[1]);
-            let card = |fx: f32, fy: f32| [x + fx / 128.0 * w, y + fy / CARD_H * h];
-            // The picture fills the card's window; the card (all reagents the same colour) goes over it.
-            let (w0, w1) = (card(10.0, 33.0), card(119.0, 117.0));
-            v.fills.push(([w0[0], w0[1], w1[0], w1[1]], ImColor32::from_rgb(52, 40, 30)));
-            let side = (w1[1] - w0[1]).min(w1[0] - w0[0]);
-            let ix = (w0[0] + w1[0] - side) / 2.0;
-            icon(v, d.items, *id, [ix, w0[1], ix + side, w0[1] + side]);
-            v.images.push(([x, y, x + w, y + h], "GUI/Cards/School_Treasure_Blnk.png".into(), [0.0, 0.0, 1.0, CARD_H / 256.0]));
-            let school = reagent_school(name);
-            let (s0, s1) = (card(100.0, 29.0), card(126.0, 53.0));
-            v.images.push(([s0[0], s0[1], s1[0], s1[1]], format!("GUI/Icons/Icon_{school}.png"), [0.0, 0.0, 1.0, 1.0]));
-            let (t0, t1) = (card(6.0, 4.0), card(122.0, 30.0));
-            v.add([t0[0], t0[1], t1[0], t1[1]], name.clone(), TextStyle::new("WizardFancy", 0.34, YELLOW).centred().outlined());
-            let (b0, b1) = (card(8.0, 122.0), card(120.0, 190.0));
-            v.add([b0[0], b0[1] + 4.0, b1[0], b1[1] - 18.0], format!("{school} Reagent"),
-                  TextStyle::new("WizardNormal", 0.34, BLACK).centred().wrapped());
-            v.add([b0[0], b1[1] - 16.0, b1[0] - 2.0, b1[1]], format!("x{count}"), TextStyle::new("WizardFancy", 0.38, BLACK).right());
-            let mut tip = d.items.tooltip(*id, *count, d.names, false);
-            tip.insert(1.min(tip.len()), format!("{school} reagent"));
-            v.tip([x, y, x + w, y + h], tip);
-        }
-        if list.is_empty() {
-            v.add([420.0, 200.0, 718.0, 240.0], "No materials yet", TextStyle::new("WizardFancy", 0.55, BLACK).centred());
-        }
+    }
+    if !st.cookbooks {
+        reagents(l, d, st, v, &list, &rows);
         return;
     }
     let page = paging(l, v, st, list.len(), rows.len(), ("PageNumber", "leftscroll", "rightscroll"));
@@ -1404,6 +1438,90 @@ fn crafting(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     }
 }
 
+/// Wizard101's reagents page (ReagentWindow.gui) on RecipeWindow's pages: its title, its category tabs on
+/// Art_CraftingTab (all reagents, harvested, rare harvested, bought, dropped, class project; only "all" applies),
+/// the reagents as Background_Reagent cards, four on each page at ReagentWindow's places (each with its picture
+/// on a dark band, its name on the paper below and the count in the sun badge), the page buttons under the left
+/// page, and the toggle to the cookbooks with Wizard101's book.
+fn reagents(l: &Layout, d: &Data, st: &mut State, v: &mut View, list: &[(String, u32, u32)], rows: &[usize]) {
+    v.set(l.find("title"), centre("Reagents"));
+    hide(l, v, &["portrait_background", "card_background", "IngredientBackground", "TabLayoutEquipment",
+                 "TabBackground", "CreateButton", "FiltersButton", "EquipButton"]);
+    // The kit's name banner and the station's doodles (ReagentWindow keeps only the one down the right edge).
+    v.show(l.find("labelItemHighlighted").and_then(|t| l.nodes[t].parent), false);
+    for (i, n) in l.nodes.iter().enumerate() {
+        if n.name == "Doodle" && n.rect[0] < 700.0 {
+            v.show(Some(i), false);
+        }
+    }
+    for r in rows {
+        v.show(Some(*r), false);
+    }
+    for (i, (button, tip)) in REAGENT_TABS.iter().enumerate() {
+        let x = 71.0 + 49.0 * i as f32;
+        v.backs.push(([x - 7.0, 44.0, x + 49.0, 106.0], "GUI/Art/Art_CraftingTab.png".into(), [0.0, 0.0, 1.0, 1.0]));
+        // Frames: normal top left, greyed bottom right.
+        // (Button_Class_Project is one picture, not four.)
+        let uv = match i {
+            0 => [0.0, 0.0, 0.5, 0.5],
+            5 => [0.0, 0.0, 1.0, 1.0],
+            _ => [0.5, 0.5, 1.0, 1.0],
+        };
+        v.images.push(([x, 52.0, x + 40.0, 92.0], format!("GUI/Buttons/{button}.png"), uv));
+        v.tip([x, 52.0, x + 40.0, 92.0], vec![tip.to_string()]);
+    }
+    // The page buttons where ReagentWindow has them (PageButtons, under the left page).
+    for (name, r) in [("PageNumber", [134.0, 535.0, 293.0, 570.0]), ("leftscroll", [81.0, 534.0, 119.0, 572.0]),
+                      ("rightscroll", [309.0, 534.0, 347.0, 572.0])] {
+        if let Some(n) = l.find(name) {
+            v.rect.insert(n, r);
+        }
+    }
+    if let Some(t) = l.find("Reagent_Toggle") {
+        v.node_art.insert(t, "GUI/Buttons/Button_Crafting_Recipes.png".into());
+    }
+    let page = paging(l, v, st, list.len(), REAGENT_CARDS.len(), ("PageNumber", "leftscroll", "rightscroll"));
+    for (slot, &[x, y]) in REAGENT_CARDS.iter().enumerate() {
+        let Some((name, count, id)) = list.get(page * REAGENT_CARDS.len() + slot) else { continue };
+        let (w, h) = (REAGENT_CARD[0], REAGENT_CARD[1]);
+        let card = |fx: f32, fy: f32| [x + fx / 161.0 * w, y + fy / 201.0 * h];
+        // The reagent (ReagentWindow's Reagent button, 19,16 .. 118,169): a dark band with the picture over the
+        // paper with the name.
+        let (a, b) = (card(19.0, 16.0), card(118.0, 169.0));
+        let split = a[1] + (b[1] - a[1]) * 0.6;
+        v.backs.push(([x, y, x + w, y + h], "GUI/Backgrounds/Background_Reagent.png".into(), [0.0, 0.0, 1.0, 1.0]));
+        v.fills.push(([a[0], a[1], b[0], split], REAGENT_BAND));
+        v.fills.push(([a[0], split, b[0], b[1]], REAGENT_PAPER));
+        v.fills.push(([a[0], split - 1.0, b[0], split + 1.0], REAGENT_RULE));
+        let side = ((split - a[1]) - 10.0).min(b[0] - a[0] - 10.0);
+        let ix = (a[0] + b[0] - side) / 2.0;
+        let iy = (a[1] + split - side) / 2.0;
+        icon(v, d.items, *id, [ix, iy, ix + side, iy + side]);
+        v.add([a[0] + 4.0, split + 3.0, b[0] - 4.0, b[1] - 3.0], name.clone(),
+              TextStyle::new("WizardFancy", 0.4, BLACK).centred().wrapped());
+        // The count on the sun (CardNumber, 128,171 .. 153,190).
+        let (n0, n1) = (card(126.0, 171.0), card(155.0, 191.0));
+        v.add([n0[0], n0[1], n1[0], n1[1]], count.to_string(), TextStyle::new("WizardFancy", 0.42, BLACK).centred());
+        let school = reagent_school(name);
+        let mut tip = d.items.tooltip(*id, *count, d.names, false);
+        tip.insert(1.min(tip.len()), format!("{school} reagent"));
+        v.tip([x, y, x + w, y + h], tip);
+    }
+    if list.is_empty() {
+        v.add([61.0, 200.0, 387.0, 240.0], "No reagents yet", TextStyle::new("WizardFancy", 0.55, BLACK).centred());
+    }
+}
+
+/// ReagentWindow's category tabs: (button art, what it is in Wizard101).
+const REAGENT_TABS: [(&str, &str); 6] = [
+    ("Button_Crafting_Reagents", "All Reagents"), ("Button_Crafting_Harvest", "Harvested Reagents"),
+    ("Button_Crafting_RareHarvest", "Rare Harvested Reagents"), ("Button_Gold_Bag", "Bought Reagents"),
+    ("Button_Crafting_WorldDrop", "Dropped Reagents"), ("Button_Class_Project", "Class Project Reagents"),
+];
+const REAGENT_BAND: ImColor32 = ImColor32::from_rgb(58, 44, 34);
+const REAGENT_PAPER: ImColor32 = ImColor32::from_rgb(232, 218, 182);
+const REAGENT_RULE: ImColor32 = ImColor32::from_rgb(120, 90, 50);
+
 // ---------------------------------------------------------------------------------------------------------------
 // Help: HelpSpellbookPage.gui. Its topic buttons pick the help text (Wizard101 loads its help pages from other
 // layouts; here the text is drawn on the book's pages in Wizard101's fonts).
@@ -1425,9 +1543,9 @@ const HELP: [(&str, &str, &str); 4] = [
       character in the Backpack to turn it. Enter: use the tab. B or Esc: close the book."),
     ("Tab_Character", "The Pages",
      "Character: level, health, mana (FP), energy (stamina), flasks, attributes and achievements.\nBackpack: your \
-      character and everything you carry.\nPets: Torrent and your spirit ashes.\nDeck: your spells by Elden Ring's \
-      schools, and the memorized ones in their memory slots.\nQuests: the Unicorn Way quests you have taken on.\nWorld Map: Elden Ring's map.\nCrafting: \
-      materials and cookbooks.\nSettings: the HUD's settings."),
+      character and everything you carry.\nPets: Torrent and your spirit ashes.\nDeck: your memory slots on the left, your \
+      spells by school on the right; click a spell to memorize it, click a slot to forget it (anywhere, not only at a grace).\nQuests: the Unicorn Way quests you have taken on.\nWorld Map: Elden Ring's map.\nCrafting: \
+      reagents (materials) and cookbooks with their recipes.\nSettings: the HUD's settings."),
 ];
 
 fn help(l: &Layout, st: &mut State, v: &mut View) {

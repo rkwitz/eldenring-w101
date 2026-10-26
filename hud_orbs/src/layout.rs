@@ -268,6 +268,10 @@ pub struct View {
     pub extra: Vec<([f32; 4], String, TextStyle)>,
     /// Images drawn over a node, right after its own (in the layout's painter's order).
     pub node_images: HashMap<usize, String>,
+    /// Another picture for a node's own art (same frames).
+    pub node_art: HashMap<usize, String>,
+    /// Images drawn after the nodes, under the fills (backgrounds): (rect, image, uv).
+    pub backs: Vec<([f32; 4], String, [f32; 4])>,
     /// Filled rectangles drawn after the nodes, under the images.
     pub fills: Vec<([f32; 4], ImColor32)>,
     /// Nine-piece frames (tl, t, tr, l, r, bl, b, br, centre) drawn over the fills, under the images.
@@ -653,7 +657,7 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
         if let Some(img) = view.node_images.get(&i) {
             canvas.image(img, r, [0.0, 0.0, 1.0, 1.0], fade(ImColor32::WHITE, alpha));
         }
-        if let Some(img) = &n.img {
+        if let Some(img) = view.node_art.get(&i).or(n.img.as_ref()) {
             let uv = if n.is_button() {
                 let state = if greyed {
                     n.frames[3]
@@ -712,6 +716,9 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
 
 /// The extra text boxes and images of a view, drawn over the layout.
 pub fn draw_extra(view: &View, canvas: &Canvas) {
+    for (r, img, uv) in &view.backs {
+        canvas.image(img, *r, *uv, ImColor32::WHITE);
+    }
     for (r, colour) in &view.fills {
         canvas.draw.add_rect(canvas.at(r[0], r[1]), canvas.at(r[2], r[3]), fade(*colour, canvas.alpha))
             .filled(true).rounding(3.0 * canvas.s).build();

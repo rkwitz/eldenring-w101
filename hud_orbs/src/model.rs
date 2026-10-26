@@ -79,13 +79,21 @@ struct Shared {
 /// The worker thread and its two image slots (0 = Backpack, 1 = portrait).
 pub struct Renderer {
     parts: PathBuf,
+    /// Elden Ring's idle pose (tools/er_idle_pose.py), if there is one.
+    idle: Option<PathBuf>,
     shared: Arc<(Mutex<Shared>, Condvar)>,
     started: bool,
 }
 
 impl Renderer {
     pub fn new(parts: PathBuf) -> Renderer {
-        Renderer { parts, shared: Arc::new((Mutex::new(Shared::default()), Condvar::new())), started: false }
+        Renderer { parts, idle: None, shared: Arc::new((Mutex::new(Shared::default()), Condvar::new())), started: false }
+    }
+
+    /// Poses the character with the bone transforms in `path` (er_idle_pose.py's table) instead of the built-in pose.
+    pub fn with_idle(mut self, path: PathBuf) -> Renderer {
+        self.idle = Some(path);
+        self
     }
 
     /// Asks for `request` in `slot`; nothing happens if that is what was last asked for.
@@ -94,7 +102,9 @@ impl Renderer {
             self.started = true;
             let shared = self.shared.clone();
             let parts = self.parts.clone();
-            let spawned = std::thread::Builder::new().name("w101 model".into()).spawn(move || worker(parts, shared));
+            let idle = self.idle.clone();
+            let spawned =
+                std::thread::Builder::new().name("w101 model".into()).spawn(move || worker(parts, idle, shared));
             if let Err(e) = spawned {
                 tracing::warn!("model renderer thread: {e}");
             }
@@ -127,8 +137,9 @@ impl Renderer {
     }
 }
 
-fn worker(parts: PathBuf, shared: Arc<(Mutex<Shared>, Condvar)>) {
-    let mut cache = Cache { folder: parts, files: HashMap::new(), posed: None };
+fn worker(parts: PathBuf, idle: Option<PathBuf>, shared: Arc<(Mutex<Shared>, Condvar)>) {
+    let idle = idle.and_then(|p| load_idle(&p));
+    let mut cache = Cache { folder: parts, files: HashMap::new(), posed: None, idle };
     let (lock, wake) = &*shared;
     loop {
         let (slot, request) = {
@@ -624,6 +635,45 @@ struct Cache {
     files: HashMap<String, Option<Arc<Part>>>,
     /// The posed triangles of the last look drawn: turning redraws the same look.
     posed: Option<(Look, Arc<Vec<Batch>>)>,
+    /// Bone name -> world transform of Elden Ring's idle pose (row vectors: p * M + t).
+    idle: Option<HashMap<String, (M3, [f32; 3])>>,
+}
+
+/// Reads er_idle_pose.py's table: per bone, the move from the skeleton's reference pose ("R" rows) to the idle
+/// animation's first frame ("A" rows), as a world transform (p * M + t), and the animated R_Weapon itself under
+/// the name "@R_Weapon".
+fn load_idle(path: &std::path::Path) -> Option<HashMap<String, (M3, [f32; 3])>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut rows: [HashMap<String, (M3, [f32; 3])>; 2] = [HashMap::new(), HashMap::new()];
+    for line in text.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        let which = match f.first() {
+            Some(&"R") => 0,
+            Some(&"A") => 1,
+            _ => continue,
+        };
+        if f.len() < 5 {
+            continue;
+        }
+        let m: Vec<f32> = f[3].split(' ').filter_map(|v| v.parse().ok()).collect();
+        let t: Vec<f32> = f[4].split(' ').filter_map(|v| v.parse().ok()).collect();
+        if m.len() == 9 && t.len() == 3 {
+            rows[which].insert(f[1].to_string(),
+                               ([[m[0], m[1], m[2]], [m[3], m[4], m[5]], [m[6], m[7], m[8]]], [t[0], t[1], t[2]]));
+        }
+    }
+    let [reference, animated] = rows;
+    let mut out: HashMap<String, (M3, [f32; 3])> = HashMap::new();
+    for (name, (ar, at)) in &animated {
+        let Some((rr, rt)) = reference.get(name) else { continue };
+        let r = mul(&inverse(rr), ar);
+        out.insert(name.clone(), (r, sub(*at, apply(*rt, &r))));
+    }
+    if let Some(w) = animated.get("R_Weapon") {
+        out.insert("@R_Weapon".into(), *w);
+    }
+    tracing::info!("model: idle pose with {} bones", out.len());
+    (!out.is_empty()).then_some(out)
 }
 
 impl Cache {
@@ -809,16 +859,36 @@ struct Pose {
     delta: Vec<(M3, [f32; 3])>,
     /// The right hand's grip point after posing.
     grip: [f32; 3],
+    /// The R_Weapon bone's posed world transform, from the idle animation (the weapon model sits in its frame).
+    weapon: Option<(M3, [f32; 3])>,
+}
+
+/// The inverse of a 3x3 matrix (identity if singular).
+fn inverse(m: &M3) -> M3 {
+    let [[a, b, c], [d, e, f], [g, h, i]] = *m;
+    let det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if det.abs() < 1e-12 {
+        return IDENTITY;
+    }
+    let k = 1.0 / det;
+    [
+        [(e * i - f * h) * k, (c * h - b * i) * k, (b * f - c * e) * k],
+        [(f * g - d * i) * k, (a * i - c * g) * k, (c * d - a * f) * k],
+        [(d * h - e * g) * k, (b * g - a * h) * k, (a * e - b * d) * k],
+    ]
 }
 
 const IDENTITY: M3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
 impl Pose {
-    fn new(body: Option<&Flver>) -> Pose {
+    fn new(body: Option<&Flver>, idle: Option<&HashMap<String, (M3, [f32; 3])>>) -> Pose {
         let Some(f) = body else {
-            return Pose { names: HashMap::new(), bind: vec![], delta: vec![], grip: [-0.25, 0.95, -0.15] };
+            return Pose { names: HashMap::new(), bind: vec![], delta: vec![], grip: [-0.25, 0.95, -0.15], weapon: None };
         };
         let bind = bind_pose(&f.bones);
+        if let Some(idle) = idle {
+            return Pose::from_idle(f, bind, idle);
+        }
         let mut delta: Vec<Option<(M3, [f32; 3])>> = vec![None; f.bones.len()];
         fn get(i: usize, f: &Flver, bind: &[(M3, [f32; 3])], delta: &mut Vec<Option<(M3, [f32; 3])>>, depth: usize)
                -> (M3, [f32; 3]) {
@@ -847,7 +917,32 @@ impl Pose {
             let g = add(bind[h].1, scale(bind[h].0[0], 0.09));
             grip = add(apply(g, &delta[h].0), delta[h].1);
         }
-        Pose { names, bind, delta, grip }
+        Pose { names, bind, delta, grip, weapon: None }
+    }
+
+    /// The pose of Elden Ring's idle animation: each body bone moves from its bind transform to the animation's
+    /// (vertex -> bone space -> posed world); bones the animation doesn't know follow their nearest known ancestor.
+    fn from_idle(f: &Flver, bind: Vec<(M3, [f32; 3])>, idle: &HashMap<String, (M3, [f32; 3])>) -> Pose {
+        let own: Vec<Option<(M3, [f32; 3])>> = f.bones.iter().map(|b| idle.get(&b.name).copied()).collect();
+        let delta: Vec<(M3, [f32; 3])> = (0..f.bones.len())
+            .map(|i| {
+                let mut j = i as i32;
+                for _ in 0..64 {
+                    if j < 0 || j as usize >= f.bones.len() {
+                        break;
+                    }
+                    if let Some(d) = own[j as usize] {
+                        return d;
+                    }
+                    j = f.bones[j as usize].parent;
+                }
+                (IDENTITY, [0.0; 3])
+            })
+            .collect();
+        let names: HashMap<String, usize> = f.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+        let weapon = idle.get("@R_Weapon").copied();
+        let grip = weapon.map_or([-0.25, 0.95, -0.15], |w| w.1);
+        Pose { names, bind, delta, grip, weapon }
     }
 
     /// For each bone of a parts FLVER, the body bone that moves it: the one of the same name, else that of its
@@ -981,7 +1076,7 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
         }
     }
     let body = parts.first().filter(|(s, _, _)| s.starts_with("fc_")).and_then(|(_, p, _)| p.flvers.first());
-    let pose = Pose::new(body);
+    let pose = Pose::new(body, cache.idle.as_ref());
     let mut out = Vec::new();
     // The eyes' posed bounds (they come before the armour).
     let mut eyes: Option<([f32; 3], [f32; 3])> = None;
@@ -993,13 +1088,16 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
         for f in flvers {
             let map = pose.map(f);
             // Held weapons are shrunk to a wand's size (at most WEAPON_LENGTH from end to end), like W101's.
-            let fit = if *weapon {
+            // Some models (staffs) are centred on their origin rather than gripped there: they slide down so the
+            // hand holds them near the butt, as Elden Ring's idle does, with at most GRIP_END of them behind it.
+            let (fit, slide) = if *weapon {
                 let (lo, hi) = f.meshes.iter().flat_map(|m| m.pos.iter()).fold((0.0f32, 0.0f32), |(lo, hi), p| {
                     (lo.min(p[1]), hi.max(p[1]))
                 });
-                (WEAPON_LENGTH / (hi - lo).max(1e-3)).min(1.0)
+                let length = (hi - lo).max(1e-3);
+                ((WEAPON_LENGTH / length).min(1.0), (hi - GRIP_END * length).max(0.0))
             } else {
-                1.0
+                (1.0, 0.0)
             };
             for m in &f.meshes {
                 if m.tris.is_empty() || m.group.is_some_and(|g| g < 128 && look.hide & (1u128 << g) != 0) {
@@ -1016,7 +1114,12 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
                 let mut pos = Vec::with_capacity(m.pos.len());
                 let mut nrm = Vec::with_capacity(m.pos.len());
                 for i in 0..m.pos.len() {
-                    let (p, n) = if *weapon {
+                    let (p, n) = if let (true, Some((r, t))) = (*weapon, pose.weapon) {
+                        // In the R_Weapon bone's frame: the model's -Y (its tip) along the bone's +X.
+                        let r = mul(&WEAPON_IN_HAND, &r);
+                        let p = [m.pos[i][0], m.pos[i][1] - slide, m.pos[i][2]];
+                        (add(apply(scale(p, fit), &r), t), apply(m.nrm[i], &r))
+                    } else if *weapon {
                         weapon_vertex(scale(m.pos[i], fit), m.nrm[i], pose.grip)
                     } else {
                         pose.vertex(m.pos[i], m.nrm[i], m.bones.get(i), m.weights.get(i), &map)
@@ -1056,8 +1159,14 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
     out
 }
 
+/// Weapon model axes to R_Weapon's: x -> y, y -> -x, z -> z.
+const WEAPON_IN_HAND: M3 = [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
+
 /// Longest held weapon, metres (a W101 wand is about half the wizard's height).
-const WEAPON_LENGTH: f32 = 0.9;
+const WEAPON_LENGTH: f32 = 0.75;
+
+/// Share of a held weapon's length behind the hand at most (a sword's pommel, a staff's butt).
+const GRIP_END: f32 = 0.2;
 
 /// A weapon vertex: the model hangs from the grip (its origin), blade (-Y) down and a little forward and out.
 fn weapon_vertex(p: [f32; 3], n: [f32; 3], grip: [f32; 3]) -> ([f32; 3], [f32; 3]) {

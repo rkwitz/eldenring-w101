@@ -8,6 +8,8 @@ use std::path::Path;
 #[derive(Default)]
 pub struct Names {
     names: HashMap<(char, u32), String>,
+    /// Goods by name (the lowest ID of each name).
+    goods: HashMap<String, u32>,
 }
 
 impl Names {
@@ -19,7 +21,14 @@ impl Names {
             let (Some(category), Ok(id)) = (category.chars().next(), id.parse::<u32>()) else { continue };
             names.insert((category, id), name.to_string());
         }
-        Names { names }
+        let mut goods: HashMap<String, u32> = HashMap::new();
+        for ((category, id), name) in &names {
+            if *category == 'G' {
+                let e = goods.entry(name.clone()).or_insert(*id);
+                *e = (*e).min(*id);
+            }
+        }
+        Names { names, goods }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -69,6 +78,11 @@ impl Names {
 
     pub fn lookup(&self, category: char, id: u32) -> String {
         self.names.get(&(category, id)).cloned().unwrap_or_else(|| format!("{category} {id}"))
+    }
+
+    /// The goods ID of an item name (as the game's texts name it).
+    pub fn goods_named(&self, name: &str) -> Option<u32> {
+        self.goods.get(name).copied()
     }
 
     pub fn find(&self, category: char, id: u32) -> Option<&str> {
