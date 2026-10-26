@@ -17,7 +17,7 @@ fn main() {
     if let Some(p) = std::env::var_os("IDLE") {
         r = r.with_idle(p.into());
     }
-    let look = model::Look { male: true, armour, hide, weapon: std::env::var("WEAPON").ok().and_then(|w| w.parse().ok()).or(Some(200)), hair: std::env::var("HAIR").ok().and_then(|w| w.parse().ok()).or(Some(1)), hair_colour: [0.25, 0.17, 0.1] };
+    let look = model::Look { male: true, armour, hide, weapon: std::env::var("WEAPON").ok().and_then(|w| w.parse().ok()).or(Some(200)), hair: std::env::var("HAIR").ok().and_then(|w| w.parse().ok()).or(Some(1)), hair_colour: [0.25, 0.17, 0.1], item: std::env::var("ITEM").ok().and_then(|w| w.parse().ok()) };
     let jobs: [(&str, model::Framing, f32, [u32; 2]); 4] = [("full_0", model::Framing::Full, 0.0f32, [495u32, 727u32]), ("full_45", model::Framing::Full, 0.8, [495, 727]),
                 ("full_180", model::Framing::Full, 3.14, [495, 727]), ("portrait", model::Framing::Portrait, 0.25, [240, 240])];
     for (name, framing, yaw, size) in jobs {

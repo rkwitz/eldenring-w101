@@ -66,6 +66,8 @@ const TIP_TITLE: ImColor32 = ImColor32::from_rgb(255, 255, 0);
 const TIP_TEXT: ImColor32 = ImColor32::from_rgb(255, 255, 255);
 const TIP_NOTE: ImColor32 = ImColor32::from_rgb(200, 196, 184);
 const EQUIP_FIST: &str = "GUI/InventoryPage/Button_Equip.png";
+/// A tooltip row's school and stat icons (Wizard101's 32 px icons drawn small, beside the value).
+const TIP_ICON: f32 = 20.0;
 
 /// The Backpack picture's own turning (radians per second), like Wizard101's slowly turning wizard.
 const SPIN: f32 = 1.0;
@@ -403,7 +405,11 @@ impl Book {
     /// Asks for the character pictures the page shows, at the size they are drawn.
     fn request_models(&mut self, view: &View, page: Option<&Layout>, s: f32, dt: f32, pointer_turn: f32) {
         let (Some(page), Some(sheet)) = (page, self.sheet.as_ref()) else { return };
-        let look = self.look(sheet);
+        let mut look = self.look(sheet);
+        if self.tab == Tab::Backpack && self.state.item_model.is_some() {
+            // An arrow or bolt on its own.
+            look = Look { item: self.state.item_model, ..Look::default() };
+        }
         if !self.face_logged && !sheet.face.is_empty() {
             self.face_logged = true;
             let hex: Vec<String> = sheet.face.iter().take(64).map(|b| format!("{b:02x}")).collect();
@@ -440,7 +446,11 @@ impl Book {
             self.yaw = (self.yaw + self.spin * SPIN * dt) % std::f32::consts::TAU;
         }
         // Wizard101's backpack zooms on what the category is worn on.
-        let target = if self.tab == Tab::Backpack { pages::backpack_zoom(self.state.sub) } else { Framing::Full.view(true) };
+        let target = if self.tab == Tab::Backpack && look.item.is_none() {
+            pages::backpack_zoom(self.state.sub)
+        } else {
+            Framing::Full.view(true)
+        };
         let zoom = self.zoom.get_or_insert(target);
         let moving = (zoom[0] - target[0]).abs() + (zoom[1] - target[1]).abs() > 0.002;
         if moving {
@@ -528,7 +538,6 @@ impl Book {
 
     /// Wizard101's nameplates over the Unicorn Way enemies (nameplates.rs) in normal play.
     pub fn draw_nameplates(&mut self, ui: &Ui, cx: &Context) {
-        self.textures.want([nameplates::MOB, nameplates::ELITE].map(String::from));
         if !cx.gameplay || self.blocking() || self.map != MapState::Idle {
             return;
         }
@@ -540,15 +549,20 @@ impl Book {
         }
         let screen = ui.io().display_size;
         let draw = ui.get_background_draw_list();
-        let (Some(fancy), Some(normal)) = (self.fonts.get("WizardFancy"), self.fonts.get("WizardNormal")) else { return };
+        let Some(fancy) = self.fonts.get("WizardFancy") else { return };
         let mut icons = Vec::new();
         for plate in nameplates::plates(&camera, &enemies, screen) {
-            let icon = (!plate.school.is_empty()).then(|| format!("GUI/Icons/Icon_{}.png", plate.school));
-            // In plate units (the 128 x 64 art's), centred over the creature.
-            let name_w = fancy.width(plate.name) * 0.5;
-            let line_w = normal.width(&plate.line) * 0.42 + if icon.is_some() { 20.0 } else { 0.0 };
-            let w = name_w.max(line_w) + 30.0;
-            let h = 50.0;
+            // As Wizard101 shows them (reference nameplate_lost_soul.png): no plate, the name in big yellow
+            // WizardFancy capitals with a dark outline, and under it the school's icon and "RANK n", also yellow.
+            let icon = (!plate.school.is_empty()).then(|| format!("GUI/Icons/Icon_SM_{}.png", plate.school));
+            let name = plate.name.to_uppercase();
+            let line = plate.line.to_uppercase();
+            let (name_scale, line_scale, icon_side) = (0.62, 0.42, 16.0);
+            let name_w = fancy.width(&name) * name_scale;
+            let line_w = fancy.width(&line) * line_scale + if icon.is_some() { icon_side + 3.0 } else { 0.0 };
+            let w = name_w.max(line_w) + 8.0;
+            let (name_h, line_h) = (fancy.line_height * name_scale, fancy.line_height * line_scale);
+            let h = name_h + line_h;
             let origin = [plate.at[0] - w / 2.0 * plate.k, plate.at[1] - h * plate.k];
             let canvas = Canvas {
                 draw: &draw,
@@ -562,22 +576,16 @@ impl Book {
                 hole: Cell::new(None),
             };
             let tint = ImColor32::from_rgba(255, 255, 255, (255.0 * plate.alpha) as u8);
-            if self.textures.get(plate.art).is_some() {
-                // The art's paper is 4..127 x 4..63 of its texture.
-                canvas.image(plate.art, [0.0, 0.0, w, h], [3.0 / 128.0, 3.0 / 64.0, 1.0, 1.0], tint);
-            } else {
-                nameplates::fallback(&draw, [origin[0], origin[1], origin[0] + w * plate.k, origin[1] + h * plate.k], plate.alpha);
-            }
-            let ink = ImColor32::from_rgba(36, 18, 8, (255.0 * plate.alpha) as u8);
-            canvas.text(&format!("<center>{}</center>", plate.name), [4.0, 4.0, w - 4.0, 26.0],
-                        &TextStyle::new("WizardFancy", 0.5, ink), false);
+            let yellow = ImColor32::from_rgba(255, 255, 0, (255.0 * plate.alpha) as u8);
+            canvas.text(&name, [0.0, 0.0, w, name_h], &TextStyle::new("WizardFancy", name_scale, yellow).centred().outlined(), false);
             let x0 = (w - line_w) / 2.0;
             if let Some(icon) = &icon {
-                canvas.image(icon, [x0, 27.0, x0 + 17.0, 44.0], [0.0, 0.0, 1.0, 1.0], tint);
+                let iy = name_h + (line_h - icon_side) / 2.0;
+                canvas.image(icon, [x0, iy, x0 + icon_side, iy + icon_side], [0.0, 0.0, 1.0, 1.0], tint);
                 icons.push(icon.clone());
             }
-            let tx = x0 + if icon.is_some() { 20.0 } else { 0.0 };
-            canvas.text(&plate.line, [tx, 26.0, w - 2.0, 45.0], &TextStyle::new("WizardNormal", 0.42, ink), false);
+            let tx = x0 + if icon.is_some() { icon_side + 3.0 } else { 0.0 };
+            canvas.text(&line, [tx, name_h, w, h], &TextStyle::new("WizardFancy", line_scale, yellow).outlined(), false);
         }
         self.textures.want(icons);
     }
@@ -610,7 +618,12 @@ impl Book {
         }
         if !self.open {
             self.dragging = false;
-            if self.map == MapState::Open && cx.game.is_some() && cx.faded < 0.5 {
+            if self.map == MapState::Open && cx.game.is_some() && self.after_map.is_some() {
+                // A book tab was clicked on the map page: that page straight away, over the world as it was before
+                // the map opened, while Elden Ring closes its map behind it.
+                self.refresh(cx);
+                self.draw(ui, cx, &pointer, dt, false);
+            } else if self.map == MapState::Open && cx.game.is_some() && cx.faded < 0.5 {
                 // Elden Ring's map is open: the book around it. A click on another book tab closes the map and
                 // shows that tab when the map has gone.
                 self.refresh(cx);
@@ -621,6 +634,9 @@ impl Book {
                     if let Some((tab, _, _)) = TABS.iter().find(|t| t.1 == name && t.0 != Tab::Map) {
                         tracing::info!("spellbook: leaving the map for {tab:?}");
                         self.after_map = Some(*tab);
+                        self.tab = *tab;
+                        self.state.reset();
+                        self.opened_at = Instant::now() - Duration::from_secs(1);
                         input::press_map();
                     }
                 }
@@ -765,7 +781,11 @@ impl Book {
             Hit::Forget(i) => {
                 let spell = sheet.spells[i];
                 let name = self.names.as_ref().map(|n| n.item(0x4000_0000 | spell as u32)).unwrap_or_default();
-                if cx.game.is_some_and(|g| g.set_spell(i, -1)) {
+                // Elden Ring keeps the memorised spells packed at the front of the slots: close the gap.
+                let mut rest: Vec<i32> = sheet.spells.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, s)| *s).collect();
+                rest.push(-1);
+                let ok = cx.game.is_some_and(|g| (i..14).all(|j| g.set_spell(j, rest[j])));
+                if ok {
                     note(&mut self.state, format!("Forgot {name}"));
                     self.sheet_time = None;
                 }
@@ -777,9 +797,22 @@ impl Book {
                     None => learn(self, raw),
                 }
             }
-            Hit::Item(_) if double => note(&mut self.state,
-                "Equip weapons, armour and talismans in Elden Ring's Equipment menu".into()),
-            Hit::Item(_) => {}
+            Hit::Item(id) if double => {
+                let name = self.names.as_ref().map(|n| n.item(id)).unwrap_or_default();
+                let text = match (pages::equip_slot(&sheet, &self.items, id), cx.game) {
+                    (None, _) => format!("{name} can't be equipped"),
+                    (Some(_), None) => "Equipping needs the game".into(),
+                    (Some((slot, item)), Some(game)) => match game.equip(slot, item) {
+                        Ok(()) => {
+                            self.sheet_time = None;
+                            if item.is_some() { format!("Equipped {name}") } else { format!("Took off {name}") }
+                        }
+                        Err(why) => format!("Couldn't equip {name}: {why}"),
+                    },
+                };
+                note(&mut self.state, text);
+            }
+            Hit::Item(id) => self.state.selected = Some(id),
         }
     }
 
@@ -894,11 +927,14 @@ impl Book {
         wanted.push(CURSOR.into());
         wanted.extend(tip_frame(false).into_iter().chain(tip_frame(true)).flatten());
         wanted.push(EQUIP_FIST.into());
+        wanted.extend(crate::itemdata::TIP_ICONS.iter().map(|i| i.to_string()));
         self.textures.want(wanted);
 
         let draw = ui.get_foreground_draw_list();
-        if map_view && view.picture.is_some() {
-            // The map is on the page: the world as it was when the map opened, behind the book.
+        let leaving_map = !map_view && self.map == MapState::Open;
+        if (map_view && view.picture.is_some()) || leaving_map {
+            // The map is on the page (or being left for another page): the world as it was when the map opened,
+            // behind the book.
             if let Some((world, _)) = self.textures.get(WORLD_PICTURE) {
                 draw.add_image(world, [0.0, 0.0], [width, height]).build();
             }
@@ -989,16 +1025,31 @@ impl Book {
         let (title_scale, scale, margin) = (0.55, 0.42, 15.0);
         let line_h = normal.line_height * scale;
         let title_h = fancy.line_height * title_scale;
-        let is_note = |i: usize, l: &str| i + 1 == rest.len() && normal.width(l) * scale > MAX_TIP - 2.0 * margin;
+        // A stat row: "@value|school icon|stat icon|name" (itemdata::stat_row).
+        let row_of = |l: &str| -> Option<(String, Vec<String>)> {
+            let mut parts = l.strip_prefix('@')?.split('|');
+            let value = parts.next()?.to_string();
+            let icons = parts.take(2).filter(|p| !p.is_empty()).map(str::to_string).collect();
+            Some((value, icons))
+        };
+        let row_h = line_h.max(TIP_ICON + 2.0);
+        let row_width = |value: &str, icons: usize| normal.width(value) * scale + 4.0 + icons as f32 * (TIP_ICON + 1.0);
+        let is_note = |i: usize, l: &str| i + 1 == rest.len() && !l.starts_with('@')
+            && normal.width(l) * scale > MAX_TIP - 2.0 * margin;
         // As wide as the widest stat line needs (the description wraps), between Wizard101's 200 and MAX_TIP.
-        let widest = rest.iter().enumerate().filter(|(i, l)| !is_note(*i, l)).map(|(_, l)| normal.width(l) * scale)
+        let widest = rest.iter().enumerate().filter(|(i, l)| !is_note(*i, l))
+            .map(|(_, l)| match row_of(l) {
+                Some((v, icons)) => row_width(&v, icons.len()),
+                None => normal.width(l) * scale,
+            })
             .chain([fancy.width(title) * title_scale])
             .fold(0.0, f32::max);
         let width = (widest + 2.0 * margin + 6.0).clamp(TIP_WIDTH, MAX_TIP);
         let inner = width - 2.0 * margin;
         let rows = |w: f32| (w / inner * 1.08).ceil().max(1.0);
         let title_rows = rows(fancy.width(title) * title_scale);
-        let heights: Vec<f32> = rest.iter().map(|l| rows(normal.width(l) * scale) * line_h).collect();
+        let heights: Vec<f32> = rest.iter().map(|l| if l.starts_with('@') { row_h } else { rows(normal.width(l) * scale) * line_h })
+            .collect();
         let title_bottom = margin + (title_rows * title_h).max(23.0);
         let height = title_bottom + 2.0 + heights.iter().sum::<f32>() + 4.0 * (rest.len() > 1) as u8 as f32 + margin;
         // Page pixels of the screen's edges.
@@ -1018,6 +1069,20 @@ impl Book {
                     &TextStyle::new("WizardFancy", title_scale, TIP_TITLE).centred().wrapped(), false);
         let mut ly = y + title_bottom + 2.0;
         for (i, (line, h)) in rest.iter().zip(heights).enumerate() {
+            if let Some((value, icons)) = row_of(line) {
+                // "+45" then the icons, on one line.
+                let vw = normal.width(&value) * scale;
+                canvas.text(&value, [x + margin, ly, x + margin + vw + 2.0, ly + h],
+                            &TextStyle::new("WizardNormal", scale, TIP_TEXT), false);
+                let mut ix = x + margin + vw + 4.0;
+                let iy = ly + (h - TIP_ICON) / 2.0;
+                for icon in &icons {
+                    canvas.image(icon, [ix, iy, ix + TIP_ICON, iy + TIP_ICON], [0.0, 0.0, 1.0, 1.0], ImColor32::WHITE);
+                    ix += TIP_ICON + 1.0;
+                }
+                ly += h;
+                continue;
+            }
             let note = is_note(i, line);
             if note && i > 0 {
                 ly += 4.0;

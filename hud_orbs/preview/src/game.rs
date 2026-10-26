@@ -15,7 +15,7 @@ pub fn event_flag(flag: u32) -> Option<bool> {
 
 pub fn set_event_flag(_flag: u32, _on: bool) {}
 
-static SPELLS: std::sync::Mutex<[i32; 14]> = std::sync::Mutex::new([4000, 4010, 4300, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1]);
+static SPELLS: std::sync::Mutex<[i32; 14]> = std::sync::Mutex::new([4010, 4200, 4361, 4430, 4301, 6600, -1, -1, -1, -1, -1, -1, -1, -1]);
 
 impl Game {
     /// A Lost Soul and Rattlebones up the street, a Dark Sprite nearer.
@@ -27,6 +27,10 @@ impl Game {
     pub fn set_spell(&self, index: usize, spell: i32) -> bool {
         SPELLS.lock().unwrap()[index] = spell;
         true
+    }
+
+    pub fn equip(&self, _slot: u32, _item_id: Option<u32>) -> Result<(), &'static str> {
+        Ok(())
     }
 
     pub fn fake() -> Game {
@@ -54,6 +58,7 @@ impl Game {
             (50000000, 99), (52000000, 30),
             (0x1000_0000 | 40000, 1), (0x1000_0000 | 40100, 1), (0x1000_0000 | 40200, 1), (0x1000_0000 | 40300, 1),
             (0x1000_0000 | 290000, 1), (0x1000_0000 | 290100, 1),
+            (0x1000_0000 | 120000, 1), (0x1000_0000 | 170100, 1), (0x1000_0000 | 720200, 1), (0x1000_0000 | 180300, 1),
             (0x2000_0000 | 1000, 1), (0x2000_0000 | 1010, 1), (0x2000_0000 | 2000, 1),
             (0x8000_0000 | 10000, 1),
             (goods(1007), 9), (goods(1006), 1), (goods(1057), 2), (goods(2000), 5), (goods(3000), 2),
@@ -74,12 +79,13 @@ impl Game {
             poise: 31.0,
             max_equip_load: 72.4,
             flasks: [12, 2],
-            magic_slots: 4,
+            magic_slots: 8,
+            talisman_slots: 3,
             weapon_slots: [0, 0],
             gender: 1,
             face: vec![0; 276],
-            equipment: [3140005, 2000000, -1, 1000003, -1, -1, 50000000, -1, -1, -1, -1, -1, 1000000, 1000100, 1000200,
-                        1000300, -1, 1000, 1010, 2000, -1, -1],
+            equipment: [3140005, 2000000, -1, 1000003, -1, -1, 50000000, -1, -1, -1, -1, -1, 120000, 170100, 720200,
+                        180300, -1, 1000, 1010, 2000, -1, -1],
             spells: *SPELLS.lock().unwrap(),
             items,
             key_items: vec![(goods(130), 1), (goods(8000), 1), (goods(8500), 1), (goods(9500), 1), (goods(9300), 1),

@@ -1,17 +1,13 @@
-//! Wizard101's nameplates over the Unicorn Way enemies: the torn-paper plate (GUI/Nameplates/NamePlate_128x64_Mob,
-//! orange; _Elite, purple, for elites and bosses) with the creature's Wizard101 name over its rank and school.
+//! Wizard101's nameplates over the Unicorn Way enemies, as the game shows them over a creature in the world
+//! (/mnt/project-files/w101_reference/nameplate_lost_soul.png): no plate, the name in big yellow outlined capitals,
+//! and under it the school's icon and "RANK n" (book.rs draws them).
 //!
 //! The enemies are Elden Ring characters re-dressed by the mod; they are told apart by their model (ChrIns
-//! character_id, c4180 = 4180) and read from WorldChrMan's characters-by-distance list (game.rs). Names, ranks and
-//! schools are Wizard101's (WizardMobs / NPCBehavior templates of the Unicorn Way creatures); where the client data
-//! gave none (Fear of Fire, the Seraph, the bosses' normal versions) they are the closest Wizard101 equivalents.
-
-use hudhook::imgui::{DrawListMut, ImColor32};
+//! character_id, c4180 = 4180) and read from WorldChrMan's characters-by-distance list (game.rs). The Lost Soul's
+//! rank 1 is from the reference screenshot; Wizard101 keeps creature ranks on its servers (the client's Unicorn
+//! Way data has none), so the other ranks are unverified.
 
 use crate::markers::Camera;
-
-pub const MOB: &str = "GUI/Nameplates/NamePlate_128x64_Mob.png";
-pub const ELITE: &str = "GUI/Nameplates/NamePlate_128x64_Elite.png";
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Title {
@@ -22,7 +18,7 @@ pub enum Title {
 
 /// (model, name, rank, school ("" = none shown), title, height of the plate above the feet in metres).
 pub const CREATURES: [(u32, &str, u32, &str, Title, f32); 7] = [
-    (4180, "Lost Soul", 2, "Death", Title::Normal, 2.3),
+    (4180, "Lost Soul", 1, "Death", Title::Normal, 2.3),
     (3500, "Skeletal Pirate", 1, "Death", Title::Normal, 2.3),
     (3450, "Dark Sprite", 1, "Life", Title::Elite, 1.9),
     (4960, "Rattlebones", 3, "Death", Title::Boss, 3.6),
@@ -38,7 +34,7 @@ pub fn models() -> Vec<u32> {
     CREATURES.iter().map(|c| c.0).collect()
 }
 
-/// One plate to draw: screen position of its bottom centre, its size factor (pixels per plate unit), its
+/// One nameplate to draw: screen position of its bottom centre, its size factor (pixels per unit), its
 /// opacity, and the creature.
 pub struct Plate {
     pub at: [f32; 2],
@@ -47,7 +43,6 @@ pub struct Plate {
     pub name: &'static str,
     pub line: String,
     pub school: &'static str,
-    pub art: &'static str,
 }
 
 /// The plates for the enemies (model, physics position) in view, farthest first (nearer ones over them).
@@ -72,15 +67,8 @@ pub fn plates(camera: &Camera, enemies: &[(u32, [f32; 3])], screen: [f32; 2]) ->
             Title::Elite => " Elite".into(),
             Title::Boss => " Boss".into(),
         };
-        let art = if title == Title::Normal { MOB } else { ELITE };
-        out.push((z, Plate { at, k, alpha, name, line: format!("Rank {rank}{what}"), school, art }));
+        out.push((z, Plate { at, k, alpha, name, line: format!("Rank {rank}{what}"), school }));
     }
     out.sort_by(|a, b| b.0.total_cmp(&a.0));
     out.into_iter().map(|p| p.1).collect()
-}
-
-/// A rounded backing when the plate's art hasn't loaded.
-pub fn fallback(draw: &DrawListMut, r: [f32; 4], alpha: f32) {
-    let c = ImColor32::from_rgba(214, 150, 110, (230.0 * alpha) as u8);
-    draw.add_rect([r[0], r[1]], [r[2], r[3]], c).filled(true).rounding(4.0).build();
 }

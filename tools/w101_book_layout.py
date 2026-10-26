@@ -56,7 +56,7 @@ EXTRA_ART += [f"GUI/Tooltip/bubble_{p}.png" for p in ("TL", "T", "TR", "L", "R",
 # Quest markers over the quest givers (markers.rs): "!" offers a quest, the "?" medallion is a goal to talk to them.
 EXTRA_ART += ["GUI/QuestButtons/Quest_Start.dds", "GUI/QuestButtons/Art_Quest_Complete.dds"]
 # Item tooltips (itemStatsInfo*.gui's frames and equip fist), the deck's slot frame, ReagentWindow's cards, tabs and
-# recipe-book toggle, and the nameplates over the Unicorn Way enemies (nameplates.rs).
+# recipe-book toggle.
 EXTRA_ART += [f"GUI/Art/Art_Message_Box{c}_{p}.dds" for c in ("", "_Blue")
               for p in ("TL", "T", "TR", "L", "R", "BL", "B", "BR")]
 EXTRA_ART += ["GUI/InventoryPage/Button_Equip.dds", "GUI/DeckConfig/Background_Slot.dds",
@@ -64,7 +64,13 @@ EXTRA_ART += ["GUI/InventoryPage/Button_Equip.dds", "GUI/DeckConfig/Background_S
 EXTRA_ART += [f"GUI/Buttons/{b}.dds" for b in ("Button_Crafting_Reagents", "Button_Crafting_Recipes",
               "Button_Crafting_Harvest", "Button_Crafting_RareHarvest", "Button_Gold_Bag", "Button_Crafting_WorldDrop",
               "Button_Class_Project")]
-EXTRA_ART += ["GUI/Nameplates/NamePlate_128x64_Mob.dds", "GUI/Nameplates/NamePlate_128x64_Elite.dds"]
+# Tooltip stat rows (value, school icon, stat icon), the reagent card (School_Resource_Blnk) and its blank medallion,
+# and the badge medals on the Character page's achievement rows.
+EXTRA_ART += [f"GUI/Icons/{i}.dds" for i in ("Icon_All", "Type_Damage", "Type_Resist", "Type_Stun_Resist", "Type_Pip",
+              "Type_PowerPips")]
+EXTRA_ART += [f"GUI/Icons/Icon_SM_{s}.dds" for s in ("Myth", "Fire", "Storm", "Life", "Ice", "Death", "Balance")]
+EXTRA_ART += ["GUI/Cards/School_Resource_Blnk.dds", "GUI/Reagents/Resource_Nothing.dds"]
+EXTRA_ART += [f"GUI/Art/Art_Badge0{i}.dds" for i in range(1, 7)]
 FONT_FILE = re.compile(r"([A-Za-z0-9_]+)\.xml$")
 
 

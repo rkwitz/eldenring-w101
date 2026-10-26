@@ -21,7 +21,7 @@ row (item id - upgrade level), P armour, A talisman, G goods, M spell (goods id)
   R: atk = attack rates, sc = scaling rates
   P: icon, wt, slot (0 head .. 3 legs), cut = physical,strike,slash,pierce,magic,fire,lightning,holy absorption %,
      res = immunity,robustness,focus,vitality, poise
-  A: icon, wt;  E: icon;  G: icon, type (goodsType), max
+  A: icon, wt;  E: icon;  G: icon, type (goodsType), max, rank (rarity + 1: the reagent card rank)
   M: fp, slots, req = int,fai,arc, school (the W101 school tab: Fire Ice Storm Myth Life Death Balance Astral),
      erschool (Elden Ring's own school)
 er_item_text.tsv: `<cat>\\t<id>\\t<one-line Info text>`; category C: a cookbook's full caption (its recipes), line
@@ -129,7 +129,8 @@ def stats(regulation, defs, msgbnd, out):
     magic = reg.param("Magic", "MagicParam")
     for row_id, g in goods.items():
         if g["iconId"] > 0:
-            lines.append(("G", row_id, {"icon": g["iconId"], "type": g["goodsType"], "max": g["maxNum"]}))
+            lines.append(("G", row_id, {"icon": g["iconId"], "type": g["goodsType"], "max": g["maxNum"],
+                                        "rank": g["rarity"] + 1}))
         kind = {5: "S", 17: "S", 16: "I", 18: "I"}.get(g["goodsType"])
         m = magic.get(row_id)
         if kind and m:

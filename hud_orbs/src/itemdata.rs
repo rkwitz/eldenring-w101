@@ -7,6 +7,25 @@ use std::path::Path;
 
 use crate::names::Names;
 
+/// Wizard101's "all schools" icon and its damage and resist stat icons (GUI/Icons).
+const ICON_ALL: &str = "GUI/Icons/Icon_All.png";
+const TYPE_DAMAGE: &str = "GUI/Icons/Type_Damage.png";
+const TYPE_RESIST: &str = "GUI/Icons/Type_Resist.png";
+
+/// Every icon a tooltip row can show (for loading).
+pub const TIP_ICONS: [&str; 14] = [
+    ICON_ALL, TYPE_DAMAGE, TYPE_RESIST, "GUI/Icons/Type_Stun_Resist.png", "GUI/Icons/Type_Pip.png",
+    "GUI/Icons/Type_PowerPips.png", "GUI/Icons/Icon_SM_Myth.png", "GUI/Icons/Icon_SM_Fire.png",
+    "GUI/Icons/Icon_SM_Storm.png", "GUI/Icons/Icon_SM_Life.png", "GUI/Icons/Icon_SM_Ice.png",
+    "GUI/Icons/Icon_SM_Death.png", "GUI/Icons/Icon_SM_Balance.png", "GUI/Icons/Icon_Shadow.png",
+];
+
+/// A tooltip stat row as Wizard101 writes them ("+45" then the school's icon and the stat's icon, the stat's name
+/// being the icons' own hover text): "@value|school icon|stat icon|name". book.rs draws it.
+pub fn stat_row(value: &str, school: &str, stat: &str, name: &str) -> String {
+    format!("@{value}|{school}|{stat}|{name}")
+}
+
 #[derive(Clone, Copy, Default)]
 pub struct Weapon {
     pub weight: f32,
@@ -57,6 +76,8 @@ pub struct ItemData {
     talisman_weights: HashMap<u32, f32>,
     icons: HashMap<(char, u32), u32>,
     spells: HashMap<u32, Spell>,
+    /// Goods rarity + 1 (the reagent cards' rank).
+    ranks: HashMap<u32, u32>,
     text: HashMap<(char, u32), String>,
     kinds: Vec<&'static str>,
 }
@@ -132,6 +153,9 @@ impl ItemData {
                 }
                 'G' => {
                     data.icons.insert(('G', id), num("icon") as u32);
+                    if num("rank") > 0.0 {
+                        data.ranks.insert(id, num("rank") as u32);
+                    }
                 }
                 'M' => {
                     data.spells.insert(id, Spell {
@@ -197,6 +221,12 @@ impl ItemData {
         Some(format!("@er/icons/{icon}.png"))
     }
 
+    /// A weapon's kind ("Dagger", "Small Shield", "Arrow", ...), from its param ID.
+    pub fn weapon_kind(&self, weapon_id: u32) -> Option<&'static str> {
+        self.weapons.get(&(weapon_id - weapon_id % 100)).or_else(|| self.weapons.get(&(weapon_id - weapon_id % 10000)))
+            .map(|w| w.kind)
+    }
+
     /// A weapon's parts model (wp_a_<model>), from its param ID (with or without upgrade / affinity).
     pub fn weapon_model(&self, weapon_id: u32) -> Option<u32> {
         let row = weapon_id - weapon_id % 100;
@@ -237,12 +267,19 @@ impl ItemData {
 
 
 
-    /// The tooltip for an inventory item: name, then stat lines, then the game's one-line description.
+    /// The tooltip for an inventory item, in Wizard101's item tooltip order: the name, the stat rows (each a
+    /// value and its school and stat icons, see `stat_row`), the requirement lines, then the game's description.
     pub fn tooltip(&self, item_id: u32, count: u32, names: &Names, equipped: bool) -> Vec<String> {
         let (cat, row) = Self::row(item_id);
         let raw = item_id & 0x0FFF_FFFF;
         let mut lines = vec![names.item(item_id)];
         let mut sub = Vec::new();
+        // Elden Ring's damage types as Wizard101 schools: physical = all schools, magic = Myth (glintstone),
+        // fire = Fire, lightning = Storm, holy = Life.
+        const TYPES: [(&str, &str); 5] =
+            [("Physical", ICON_ALL), ("Magic", "GUI/Icons/Icon_SM_Myth.png"), ("Fire", "GUI/Icons/Icon_SM_Fire.png"),
+             ("Lightning", "GUI/Icons/Icon_SM_Storm.png"), ("Holy", "GUI/Icons/Icon_SM_Life.png")];
+        let short = ["Str", "Dex", "Int", "Fai", "Arc"];
         match cat {
             'W' => {
                 let level = raw % 100;
@@ -250,45 +287,62 @@ impl ItemData {
                 if let Some(w) = w {
                     let (atk_rate, sc_rate) = self.reinforce.get(&(w.reinforce + level)).copied()
                         .unwrap_or(([1.0; 5], [1.0; 5]));
-                    // One stat per line, as Wizard101's item tips list theirs.
-                    sub.push(if w.kind.is_empty() { "Weapon".to_string() } else { w.kind.to_string() });
-                    let names = ["Physical", "Magic", "Fire", "Lightning", "Holy"];
                     for i in (0..5).filter(|&i| w.attack[i] > 0.0) {
-                        sub.push(format!("{} Attack {:.0}", names[i], w.attack[i] * atk_rate[i]));
+                        sub.push(stat_row(&format!("+{:.0}", w.attack[i] * atk_rate[i]), TYPES[i].1, TYPE_DAMAGE,
+                                          &format!("{} Damage", TYPES[i].0)));
                     }
-                    let stats = ["Strength", "Dexterity", "Intelligence", "Faith", "Arcane"];
-                    for i in (0..5).filter(|&i| w.scaling[i] > 0.0) {
-                        sub.push(format!("{} Scaling {}", stats[i], grade(w.scaling[i] * sc_rate[i])));
+                    let scaling: Vec<String> = (0..5).filter(|&i| w.scaling[i] > 0.0)
+                        .map(|i| format!("{} {}", short[i], grade(w.scaling[i] * sc_rate[i]))).collect();
+                    if !scaling.is_empty() {
+                        sub.push(format!("Scaling {}", scaling.join(" ")));
                     }
-                    for i in (0..5).filter(|&i| w.requirements[i] > 0) {
-                        sub.push(format!("Requires {} {}", stats[i], w.requirements[i]));
+                    let req: Vec<String> = (0..5).filter(|&i| w.requirements[i] > 0)
+                        .map(|i| format!("{} {}", short[i], w.requirements[i])).collect();
+                    if !req.is_empty() {
+                        sub.push(format!("Requires {}", req.join(" ")));
                     }
-                    sub.push(format!("Weight {:.1}", w.weight));
+                    sub.push(format!("{} - Weight {:.1}", if w.kind.is_empty() { "Weapon" } else { w.kind }, w.weight));
                 }
             }
             'P' => {
                 if let Some(a) = self.armour.get(&row) {
-                    sub.push(["Helm", "Chest Armour", "Gauntlets", "Leg Armour"].get(a.slot as usize).unwrap_or(&"Armour")
-                        .to_string());
-                    for (name, i) in [("Physical", 0), ("Magic", 4), ("Fire", 5), ("Lightning", 6), ("Holy", 7)] {
-                        sub.push(format!("{name} Defense {:.1}", a.absorption[i]));
+                    for (t, i) in [(0, 0), (1, 4), (2, 5), (3, 6), (4, 7)] {
+                        if a.absorption[i] > 0.0 {
+                            sub.push(stat_row(&format!("+{:.1}%", a.absorption[i]), TYPES[t].1, TYPE_RESIST,
+                                              &format!("{} Resist", TYPES[t].0)));
+                        }
                     }
-                    for (name, v) in ["Immunity", "Robustness", "Focus", "Vitality"].iter().zip(a.resistance) {
-                        sub.push(format!("{name} {v}"));
+                    if a.poise > 0.0 {
+                        sub.push(stat_row(&format!("+{:.0}", a.poise), "", "GUI/Icons/Type_Stun_Resist.png", "Poise"));
                     }
-                    sub.push(format!("Poise {:.0}", a.poise));
-                    sub.push(format!("Weight {:.1}", a.weight));
+                    let res: Vec<String> = ["Imm", "Rob", "Foc", "Vit"].iter().zip(a.resistance)
+                        .filter(|(_, v)| *v > 0).map(|(n, v)| format!("{n} {v}")).collect();
+                    if !res.is_empty() {
+                        sub.push(res.join(" "));
+                    }
+                    let kind = ["Helm", "Chest Armour", "Gauntlets", "Leg Armour"].get(a.slot as usize).unwrap_or(&"Armour");
+                    sub.push(format!("{kind} - Weight {:.1}", a.weight));
                 }
             }
             'G' => {
                 if let Some(s) = self.spells.get(&raw) {
-                    sub.push(s.kind.to_string());
-                    sub.push(s.er_school.to_string());
-                    sub.push(format!("FP Cost {}", s.fp));
-                    sub.push(format!("Memory Slots {}", s.slots));
-                    for (n, v) in ["Intelligence", "Faith", "Arcane"].iter().zip(s.requirements).filter(|(_, v)| *v > 0) {
-                        sub.push(format!("Requires {n} {v}"));
+                    // The spell's school as the deck's Wizard101 school.
+                    let k = s.school.as_str();
+                    let school = [("Glintstone", "Icon_SM_Myth"), ("Carian", "Icon_SM_Ice"), ("Crystal", "Icon_SM_Ice"),
+                                  ("Gravity", "Icon_SM_Balance"), ("Night", "Icon_Shadow"), ("Death", "Icon_SM_Death"),
+                                  ("Blood", "Icon_SM_Death"), ("Godskin", "Icon_SM_Death"), ("Fire", "Icon_SM_Fire"),
+                                  ("Magma", "Icon_SM_Fire"), ("Messmer", "Icon_SM_Fire"), ("Golden", "Icon_SM_Life"),
+                                  ("Erdtree", "Icon_SM_Life"), ("Two Fingers", "Icon_SM_Life"), ("Miquella", "Icon_SM_Life"),
+                                  ("Dragon Cult", "Icon_SM_Storm"), ("Dragon Communion", "Icon_SM_Death")]
+                        .iter().find(|(key, _)| k.contains(key)).map_or(ICON_ALL.to_string(), |(_, i)| format!("GUI/Icons/{i}.png"));
+                    sub.push(stat_row(&s.fp.to_string(), &school, "GUI/Icons/Type_Pip.png", "FP Cost"));
+                    sub.push(stat_row(&s.slots.to_string(), "", "GUI/Icons/Type_PowerPips.png", "Memory Slots"));
+                    let req: Vec<String> = ["Int", "Fai", "Arc"].iter().zip(s.requirements).filter(|(_, v)| *v > 0)
+                        .map(|(n, v)| format!("{n} {v}")).collect();
+                    if !req.is_empty() {
+                        sub.push(format!("Requires {}", req.join(" ")));
                     }
+                    sub.push(format!("{} - {}", s.er_school, s.kind));
                 }
             }
             _ => {}
@@ -307,6 +361,34 @@ impl ItemData {
         if let Some(t) = self.text.get(&text_key).or_else(|| self.text.get(&(cat, row))) {
             lines.push(t.clone());
         }
+        // A cookbook: the recipes it teaches.
+        let recipes = if cat == 'G' { self.recipes(raw) } else { vec![] };
+        if !recipes.is_empty() {
+            lines.push(format!("Recipes ({}):", recipes.len()));
+            lines.extend(recipes.into_iter().map(|r| format!("- {r}")));
+        }
         lines
+    }
+
+    /// The recipes a cookbook teaches (its caption's "- Name" lines after "Acquire the knowledge to craft the
+    /// following:"), and the caption's description before them.
+    pub fn cookbook(&self, goods_id: u32) -> Option<(String, Vec<String>)> {
+        let text = self.caption(goods_id)?.replace('\r', "");
+        let (about, list) = match text.find("Acquire the knowledge") {
+            Some(i) => (text[..i].trim().to_string(), text[i..].to_string()),
+            None => (text.trim().to_string(), text.clone()),
+        };
+        let recipes = list.lines().filter_map(|l| l.trim().strip_prefix('-')).map(|r| r.trim().to_string())
+            .filter(|r| !r.is_empty()).collect();
+        Some((about, recipes))
+    }
+
+    /// A goods item's rank (its rarity + 1), 1 when unknown.
+    pub fn rank(&self, goods_id: u32) -> u32 {
+        self.ranks.get(&goods_id).copied().unwrap_or(1)
+    }
+
+    pub fn recipes(&self, goods_id: u32) -> Vec<String> {
+        self.cookbook(goods_id).map(|c| c.1).unwrap_or_default()
     }
 }

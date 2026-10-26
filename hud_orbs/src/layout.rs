@@ -274,6 +274,9 @@ pub struct View {
     pub backs: Vec<([f32; 4], String, [f32; 4])>,
     /// Filled rectangles drawn after the nodes, under the images.
     pub fills: Vec<([f32; 4], ImColor32)>,
+    /// Filled triangles and rectangles drawn over the images, under the text.
+    pub over_tris: Vec<([[f32; 2]; 3], ImColor32)>,
+    pub over_fills: Vec<([f32; 4], ImColor32)>,
     /// Nine-piece frames (tl, t, tr, l, r, bl, b, br, centre) drawn over the fills, under the images.
     pub frames: Vec<([f32; 4], [Option<String>; 9])>,
     /// Images drawn after the nodes: (rect, image, uv).
@@ -728,6 +731,14 @@ pub fn draw_extra(view: &View, canvas: &Canvas) {
     }
     for (r, img, uv) in &view.images {
         canvas.image(img, *r, *uv, ImColor32::WHITE);
+    }
+    for (p, colour) in &view.over_tris {
+        let [a, b, c] = p.map(|q| canvas.at(q[0], q[1]));
+        canvas.draw.add_triangle(a, b, c, fade(*colour, canvas.alpha)).filled(true).build();
+    }
+    for (r, colour) in &view.over_fills {
+        canvas.draw.add_rect(canvas.at(r[0], r[1]), canvas.at(r[2], r[3]), fade(*colour, canvas.alpha))
+            .filled(true).build();
     }
     for (r, text, style) in &view.extra {
         canvas.text(text, *r, style, false);

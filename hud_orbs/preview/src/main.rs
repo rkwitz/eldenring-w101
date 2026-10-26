@@ -203,6 +203,8 @@ fn main() {
         ("2_backpack", pages::Tab::Backpack, 0, [0.609, 0.282], ""),
         ("2b_backpack_weapons", pages::Tab::Backpack, 4, [0.609, 0.282], ""),
         ("2c_backpack_armour", pages::Tab::Backpack, 1, [0.74, 0.30], ""),
+        ("2d_backpack_talismans", pages::Tab::Backpack, 6, [0.74, 0.30], ""),
+        ("2e_backpack_arrows", pages::Tab::Backpack, 7, [0.74, 0.30], ""),
         ("3_pets", pages::Tab::Pets, 0, [0.0, 0.0], ""),
         ("3b_pets_ash", pages::Tab::Pets, 0, [0.0, 0.0], "pet:1"),
         ("4_deck", pages::Tab::Deck, 0, [0.565, 0.35], ""),

@@ -27,6 +27,9 @@ pub struct Look {
     pub hair: Option<u32>,
     /// Hair colour (sRGB 0-1).
     pub hair_colour: [f32; 3],
+    /// Instead of the character: this weapon-type model (wp_a_<model>: an arrow, a bolt) alone, standing up and
+    /// filling the picture.
+    pub item: Option<u32>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -1044,7 +1047,51 @@ fn texture_for(material: &str, own: &str, textures: &HashMap<String, Arc<Texture
     None
 }
 
+/// One model on its own (an arrow or bolt in the Backpack): its main FLVER, long axis up, scaled to fill the
+/// full-length picture (Framing::Full's 1.92 m view, centred at 0.9 m).
+fn item_batches(cache: &mut Cache, model: u32) -> Vec<Batch> {
+    let stem = format!("wp_a_{model:04}");
+    let Some(part) = cache.part(&stem) else { return vec![] };
+    let Some(f) = part.flvers.first() else { return vec![] };
+    let own = stem.to_ascii_lowercase();
+    let meshes: Vec<&Mesh> = f.meshes.iter().filter(|m| !m.tris.is_empty()).collect();
+    let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+    for p in meshes.iter().flat_map(|m| m.pos.iter()) {
+        lo = [0, 1, 2].map(|i| lo[i].min(p[i]));
+        hi = [0, 1, 2].map(|i| hi[i].max(p[i]));
+    }
+    if lo[0] > hi[0] {
+        return vec![];
+    }
+    // The longest axis becomes the vertical.
+    let ext = [0, 1, 2].map(|i| hi[i] - lo[i]);
+    let long = (0..3).max_by(|a, b| ext[*a].total_cmp(&ext[*b])).unwrap_or(1);
+    let axes: [usize; 3] = match long { 0 => [1, 0, 2], 2 => [0, 2, 1], _ => [0, 1, 2] };
+    let centre = [0, 1, 2].map(|i| (lo[i] + hi[i]) / 2.0);
+    let k = 1.6 / ext[long].max(1e-3);
+    let place = |p: [f32; 3]| {
+        let q = [0, 1, 2].map(|i| (p[i] - centre[i]) * k);
+        [q[axes[0]], q[axes[1]] + 0.9, q[axes[2]]]
+    };
+    let turn = |n: [f32; 3]| [n[axes[0]], n[axes[1]], n[axes[2]]];
+    meshes
+        .into_iter()
+        .map(|m| Batch {
+            pos: m.pos.iter().map(|p| place(*p)).collect(),
+            nrm: m.nrm.iter().map(|n| turn(*n)).collect(),
+            uv: m.uv.clone(),
+            tris: m.tris.clone(),
+            texture: texture_for(&m.material, &own, &part.textures),
+            colour: [0.55, 0.52, 0.5],
+            alpha_test: true,
+        })
+        .collect()
+}
+
 fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
+    if let Some(model) = look.item {
+        return item_batches(cache, model);
+    }
     let g = if look.male { "m" } else { "f" };
     let gendered = |cache: &Cache, stem: &str| -> String {
         // Female characters use the _f model where there is one.
@@ -1135,8 +1182,14 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
                         b.1 = [0, 1, 2].map(|i| b.1[i].max(p[i]));
                     }
                 } else if let (true, Some((lo, hi))) = (stem.starts_with("hd_"), eyes) {
-                    // Masks and blindfolds over the eyes are left off: the book's wizard looks out at you.
+                    // Masks and blindfolds over the eyes are left off: the book's wizard looks out at you. Only
+                    // what faces forward like a mask: a hat brim over the eyes (facing up or down) stays.
                     tris.retain(|t| {
+                        let [a, b, c] = t.map(|v| pos[v as usize]);
+                        let n = norm(cross(sub(b, a), sub(c, a)));
+                        if n[1].abs() > 0.5 {
+                            return true;
+                        }
                         let c = [0, 1, 2].map(|i| t.iter().map(|&v| pos[v as usize][i]).sum::<f32>() / 3.0);
                         !(c[0] > lo[0] - 0.02 && c[0] < hi[0] + 0.02 && c[1] > lo[1] - 0.03 && c[1] < hi[1] + 0.03
                             && c[2] > lo[2] - 0.08 && c[2] < hi[2])

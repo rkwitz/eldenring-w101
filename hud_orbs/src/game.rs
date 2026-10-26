@@ -28,9 +28,19 @@ pub use crate::sheet::*;
 const DISTANCE_ENTRY: usize = 16;
 const PLAYER_GAME_DATA: usize = 0x8; // GameDataMan -> PlayerGameData: hp 0x10, max 0x14, fp 0x1C, max 0x20, sp 0x2C, max 0x30
 
+/// Elden Ring's own "change equipment" function (EquipGameData, ChrAsm slot 0-21, &item ID, inventory index, 1, 1,
+/// 0), the one its Equipment menu calls; pattern and arguments from The Grand Archives' cheat table (equipItem),
+/// pattern match minus 0x17 is the function start.
+const EQUIP_GEAR: &str = "?? 8B F1 ?? 8B D8 ?? 63 EA ?? 8B F9";
+const EQUIP_GEAR_BACK: usize = 0x17;
+/// PlayerGameData -> EquipGameData (the cheat table's offset; const-asserted against the crate below).
+const EQUIP_GAME_DATA: usize = 0x2B0;
+
 pub struct Game {
     world_chr_man: usize,
     game_data_man: usize,
+    /// The equip function, if its pattern was found (exactly once).
+    equip_gear: Option<usize>,
 }
 
 impl Game {
@@ -41,6 +51,7 @@ impl Game {
         Some(Game {
             world_chr_man: rip_target(&sections, WORLD_CHR_MAN)?,
             game_data_man: rip_target(&sections, GAME_DATA_MAN)?,
+            equip_gear: scan_unique(&sections, EQUIP_GEAR).map(|at| at - EQUIP_GEAR_BACK),
         })
     }
 
@@ -194,6 +205,7 @@ impl Game {
                 read::<u8>(pgd + offset_of!(PlayerGameData, max_fp_flask)).unwrap_or(0),
             ],
             magic_slots: read::<u8>(pgd + offset_of!(PlayerGameData, unlocked_magic_slots)).unwrap_or(0),
+            talisman_slots: read::<u8>(pgd + offset_of!(PlayerGameData, unlocked_talisman_slots)).unwrap_or(0),
             weapon_slots: read::<[u32; 2]>(pgd + offset_of!(PlayerGameData, equipment.chr_asm.equipment.selected_slots))
                 .unwrap_or([0; 2]),
             gender: read::<u8>(pgd + offset_of!(PlayerGameData, gender)).unwrap_or(1),
@@ -230,6 +242,43 @@ impl Game {
             unsafe { (selected as *mut i32).write_volatile(first) };
         }
         true
+    }
+
+    /// Equips the inventory item `item_id` (with its category bits) in ChrAsm `slot` (weapons 0-5 L1 R1 L2 R2 L3 R3,
+    /// arrows 6/8, bolts 7/9, armour 12-15, talismans 17-20) through Elden Ring's own equip function, as its
+    /// Equipment menu does; `item_id` None empties a talisman slot. Err says why not.
+    pub fn equip(&self, slot: u32, item_id: Option<u32>) -> Result<(), &'static str> {
+        use eldenring::cs::{EquipInventoryDataListEntry, InventoryItemsData, PlayerGameData};
+        use std::mem::offset_of;
+        let function = self.equip_gear.ok_or("Elden Ring's equip function wasn't found (game version?)")?;
+        if slot > 21 {
+            return Err("not an equipment slot");
+        }
+        let pgd = read::<usize>(self.game_data_man).and_then(|gdm| read::<usize>(gdm + PLAYER_GAME_DATA))
+            .ok_or("no character")?;
+        let equip_game_data = pgd + EQUIP_GAME_DATA;
+        let items = pgd + offset_of!(PlayerGameData, equipment.equip_inventory_data.items_data);
+        let (id, index) = match item_id {
+            None => (u32::MAX, -1i32),
+            Some(id) => {
+                let head = read::<usize>(items + offset_of!(InventoryItemsData, normal_items_head)).ok_or("no inventory")?;
+                let len = read::<u32>(items + offset_of!(InventoryItemsData, normal_items_len)).unwrap_or(0) as usize;
+                let key_capacity = read::<u32>(items + offset_of!(InventoryItemsData, key_items_capacity)).unwrap_or(0);
+                let size = size_of::<EquipInventoryDataListEntry>();
+                let bytes = read_bytes(head, size * len.min(4096)).ok_or("no inventory")?;
+                let at = offset_of!(EquipInventoryDataListEntry, item_id);
+                let i = bytes.chunks_exact(size)
+                    .position(|e| u32::from_le_bytes(e[at..at + 4].try_into().unwrap()) == id)
+                    .ok_or("not in the inventory")?;
+                // The game numbers key items first, then the normal items.
+                (id, (i as u32 + key_capacity) as i32)
+            }
+        };
+        let item = id;
+        type Equip = unsafe extern "C" fn(usize, i32, *const u32, i32, i32, i32, i32) -> u64;
+        let equip: Equip = unsafe { std::mem::transmute::<usize, Equip>(function) };
+        unsafe { equip(equip_game_data, slot as i32, &item, index, 1, 1, 0) };
+        Ok(())
     }
 
     /// Every candidate value, for `stats` and for the debug log.
@@ -430,6 +479,27 @@ fn readable_regions(start: usize, size: usize) -> Vec<(usize, usize)> {
     regions
 }
 
+/// Address of the only match of `pattern` in the code sections; None when there is none or more than one.
+fn scan_unique(sections: &[(usize, usize)], pattern: &str) -> Option<usize> {
+    let pattern: Vec<Option<u8>> = pattern
+        .split_whitespace()
+        .map(|t| if t == "??" { None } else { u8::from_str_radix(t, 16).ok() })
+        .collect();
+    let mut found = None;
+    for (start, size) in sections.iter().flat_map(|&(start, size)| readable_regions(start, size)) {
+        let bytes = unsafe { std::slice::from_raw_parts(start as *const u8, size) };
+        for (i, w) in bytes.windows(pattern.len()).enumerate() {
+            if w.iter().zip(&pattern).all(|(b, p)| p.map_or(true, |p| p == *b)) {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(start + i);
+            }
+        }
+    }
+    found
+}
+
 /// Address that the first match of a `mov reg, [rip+disp32]` pattern loads from.
 fn rip_target(sections: &[(usize, usize)], pattern: &str) -> Option<usize> {
     let pattern: Vec<Option<u8>> = pattern
@@ -460,6 +530,7 @@ const _: () = {
     assert!(offset_of!(CSChrDataModule, fp) == STAT_FP);
     assert!(offset_of!(CSChrDataModule, stamina) == STAT_SP);
     assert!(offset_of!(PlayerGameData, current_hp) == 0x10);
+    assert!(offset_of!(PlayerGameData, equipment) == EQUIP_GAME_DATA);
     assert!(offset_of!(PlayerGameData, current_fp) == 0x1C);
     assert!(offset_of!(PlayerGameData, current_stamina) == 0x2C);
 };

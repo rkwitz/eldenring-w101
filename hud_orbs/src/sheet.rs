@@ -40,7 +40,10 @@ pub struct Sheet {
     pub max_equip_load: f32,
     /// Flasks of Crimson Tears and of Cerulean Tears.
     pub flasks: [u8; 2],
+    /// Memory Stones found (each one more memory slot on top of the two every character has).
     pub magic_slots: u8,
+    /// Talisman Pouches found (each one more talisman slot on top of the first).
+    pub talisman_slots: u8,
     /// Param IDs by ChrAsm slot: weapons L1 R1 L2 R2 L3 R3, arrows/bolts 6-11, armour 12-15, talismans 17-20.
     pub equipment: [i32; 22],
     /// Which of the three weapons in each hand is held (0-2): left, right.
