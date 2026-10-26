@@ -583,20 +583,33 @@ def main():
     ap.add_argument("--append", action="store_true",
                     help="keep each vanilla navmesh and append our faces (the only variant that loads in game)")
     ap.add_argument("--tiles", nargs="+", help="only write these tiles, e.g. 42,36 41,36")
+    ap.add_argument("--wide", action="append", help="PART=radius: bake this asset alone with a wider agent (n radius, "
+                    "o radius +0.3), e.g. the hedge maze for Malenia, whose body is wider than the 0.4 m default")
     args = ap.parse_args()
     home = tuple(int(x) for x in args.home.split(","))
     only = {tuple(int(x) for x in t.split(",")) for t in args.tiles} if args.tiles else None
 
     map_raw = load_dcx(args.map)
-    tris = placed_triangles(map_raw, [a.split("=", 1) for a in args.asset])
+    wide = {k: float(r) for k, r in (w.split("=", 1) for w in args.wide or [])}
+    assets = [a.split("=", 1) for a in args.asset]
+    # assets in --wide are baked on their own with a larger agent radius (they must not touch the other assets)
+    groups = [([a for a in assets if a[0] not in wide], AGENT, AGENT_LARGE)]
+    groups += [([a for a in assets if a[0] == part], dict(AGENT, radius=r),
+                dict(AGENT_LARGE, radius=max(r + 0.3, AGENT_LARGE["radius"]))) for part, r in wide.items()]
     seed_points = seeds(map_raw)
     meshes = {}
-    for kind, agent in (("n", AGENT), ("o", AGENT_LARGE)):
-        verts, polys = bake(tris, args.recast, agent)
-        print(f"{kind}: Recast {len(verts)} vertices, {len(polys)} polygons")
-        verts, polys = keep_connected(verts, polys, seed_points)
-        polys = orient(verts, polys)
-        print(f"{kind}: kept {len(polys)} polygons connected to the enemies/spawns")
+    for kind in ("n", "o"):
+        verts, polys = [], []
+        for group, agent_n, agent_o in groups:
+            if not group:
+                continue
+            gv, gp = bake(placed_triangles(map_raw, group), args.recast, agent_n if kind == "n" else agent_o)
+            print(f"{kind}: Recast {len(gv)} vertices, {len(gp)} polygons")
+            gv, gp = keep_connected(gv, gp, seed_points)
+            gp = orient(gv, gp)
+            print(f"{kind}: kept {len(gp)} polygons connected to the enemies/spawns")
+            polys += [[len(verts) + i for i in q] for q in gp]
+            verts += gv
         if args.preview and kind == "n":
             preview(args.preview, verts, polys, seed_points)
         meshes[kind] = split_tiles(verts, polys, home)
