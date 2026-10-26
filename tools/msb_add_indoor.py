@@ -1,4 +1,5 @@
-"""Make Unicorn Way's interiors in m60_42_36_00 behave like indoors: no rain, no Torrent.
+"""Make Unicorn Way's interiors in m60_42_36_00 behave like indoors: no rain, no Torrent; and no rune skulls anywhere
+(NO_SKULLS).
 
 Rain fell inside Rattlebones' room (Ryan, 2026-10-23): the rooms are assets 50-60 m under the street, still in the
 open-world tile, so they get its weather. Elden Ring's own answer for weather inside a piece of an open map is the
@@ -20,7 +21,7 @@ Boxes are given in a part's FLVER frame (centre of the floor footprint, size x/z
 under the floor and are HEIGHT m tall. Rerunning updates the boxes in place.
 
 Usage: python msb_add_indoor.py map.msb.dcx vanilla_dir out.msb.dcx [--door-boxes]
-  vanilla_dir: uncompressed vanilla m60_38_50_00.msb and m60_35_51_00.msb
+  vanilla_dir: uncompressed vanilla m60_38_50_00.msb, m60_35_51_00.msb and m61_51_45_00.msb
 """
 
 import struct
@@ -33,9 +34,18 @@ from msb_add_ghost import KNOWN_EVENTS, check_grouped, q, u32  # noqa: E402
 from msb_add_room import to_world  # noqa: E402
 from msb_floor import _list, _set_name, entry_name, find, read_msb, transform, write_msb  # noqa: E402
 
-WEATHER, HORSE, PATROL_EVENT = 35, 53, 20
+WEATHER, HORSE, TUMBLEWEED, PATROL_EVENT = 35, 53, 27, 20
 TEMPLATES = {WEATHER: ("m60_38_50_00.msb", "領域 大エレベータ内 天候変化"),
-             HORSE: ("m60_35_51_00.msb", "湖砦　ボス部屋内　馬禁止エリア")}
+             HORSE: ("m60_35_51_00.msb", "湖砦　ボス部屋内　馬禁止エリア"),
+             TUMBLEWEED: ("m61_51_45_00.msb", "教会地下 タンブルウィード無効")}
+# DisableTumbleweed (type 27) box over the whole of Unicorn Way, its rooms and the garden, in m60_42_36_00's own
+# coordinates (x, z centre, size x, size z, bottom y, height): the glowing "rune skulls" Ryan kept seeing on the road
+# (2026-10-26) are not map parts but Elden Ring's random rolling objects, spawned in the open world round the player
+# like tumbleweeds (mods that drop them edit RollingObjLotParam); vanilla turns them off under the Church of the
+# Crucible with this region type (m61_51_45_00 "tumbleweed disabled"). Covers footprint_clear's footprint
+# (x -541..202, z -658..73) and the garden (to z 140).
+NO_SKULLS = ("W101_NoSkulls", (-170.0, -250.0), 780.0, 860.0, -20.0, 450.0)
+NO_SKULLS_REGION_ID = 9246
 INDOOR_WEATHER = 2000
 NO_RIDING = 1
 BELOW, HEIGHT = 3.0, 40.0
@@ -150,6 +160,24 @@ def place_indoor(raw, vanilla_dir, door_boxes=False):
         else:
             insert_region(lists, bytes(e), kind)
         print(f"{name}: type {kind}, box {size_x} x {size_z} x {HEIGHT} from {tuple(round(c, 2) for c in world)}")
+    name, (cx, cz), size_x, size_z, bottom, height = NO_SKULLS
+    regions = _list(lists, "POINT_PARAM_ST").entries
+    existing = [k for k, e in enumerate(regions) if entry_name(e) == name]
+    e = bytearray(regions[existing[0]] if existing else templates[TUMBLEWEED])
+    if not existing:
+        _set_name(e, name)
+        assert NO_SKULLS_REGION_ID not in {struct.unpack_from("<i", r, 0x2C)[0] for r in regions}
+        struct.pack_into("<i", e, 0x0C, sum(u32(r, 0x08) == TUMBLEWEED for r in regions))
+        struct.pack_into("<i", e, 0x2C, NO_SKULLS_REGION_ID)
+        struct.pack_into("<I", e, q(e, 0x50) + 4, 0)
+    struct.pack_into("<3f", e, 0x14, cx, bottom, cz)
+    struct.pack_into("<3f", e, 0x20, 0.0, 0.0, 0.0)
+    struct.pack_into("<3f", e, q(e, 0x48), size_x, size_z, height)
+    if existing:
+        regions[existing[0]] = bytes(e)
+    else:
+        insert_region(lists, bytes(e), TUMBLEWEED)
+    print(f"{name}: no rolling objects in {size_x} x {size_z} x {height} m round ({cx}, {bottom}, {cz})")
     if door_boxes:
         street_ry = transform(parts[find(_list(lists, "PARTS_PARAM_ST"), STREET)])[1][1]
         for n, (key, trigger) in enumerate(DOOR_TRIGGERS):

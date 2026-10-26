@@ -8,6 +8,11 @@ and stand on the street surface the points were snapped to. The copies are named
 used for that model, so msb_add_mobs --rows still finds them) and get entity ids from FIRST_NEW_ENTITY up, in the order
 of FIRST_MOBS, PER_ROUTE - 1 per mob (printed, for w101_quests.MOBS: the quests' kill counters).
 
+Each copy also walks its own PatrolInfo route (2026-10-26, jellyfish clumped on the shared one: every member of a
+route heads for its first point): a copy of the original's route event with the same patrol point regions, the list
+turned so it starts at the copy's own point (no new regions; new events at the end of the PatrolInfo block, so no
+WalkRouteIndex moves). spread_routes does this for copies already placed, too.
+
 Insertion keeps the map valid as msb_add_mobs.insert_enemy does (end of the enemy block, every later part index
 remapped). Running it on a map that already has the copies does nothing (copies are found by entity id).
 
@@ -85,10 +90,55 @@ def more_mobs(raw, per_route=PER_ROUTE):
             report.append(f"{name}: entity {new_entity}, copy of {entry_name(mob)} ({mob_entity}) on route {route}, "
                           f"point {k} of {len(points)} at {tuple(round(c, 1) for c in here)}")
         report.append(f"{entry_name(mob)} ({mob_entity}) route {route}: + {ids}")
+    report += spread_routes(lists)
     count_users(lists)
     check_grouped(lists)
-    _check_type_indices(parts)
+    _check_type_indices(_list(lists, "PARTS_PARAM_ST").entries)
     return write_msb(header, lists), report
+
+
+def spread_routes(lists):
+    """Give every copy (entity FIRST_NEW_ENTITY..) still on its original's route a route of its own, starting at the
+    patrol point it stands on. Returns report lines."""
+    parts = _list(lists, "PARTS_PARAM_ST").entries
+    events = _list(lists, "EVENT_PARAM_ST").entries
+    copies = range(FIRST_NEW_ENTITY, FIRST_NEW_ENTITY + len(FIRST_MOBS) * (PER_ROUTE - 1))
+    originals = {}
+    for e in parts:
+        if u32(e, 0x0C) == ENEMY and u32(e, q(e, 0x60)) in FIRST_MOBS:
+            originals[u32(e, q(e, 0x60))] = struct.unpack_from("<h", e, q(e, 0x68) + WALK_ROUTE)[0]
+    shared = set(originals.values())
+    patrols = [k for k, e in enumerate(events) if u32(e, 0x0C) == PATROL_EVENT]
+    template = max((events[k] for k in patrols), key=lambda e: len(entry_name(e)))
+    report = []
+    for k, e in enumerate(parts):
+        if u32(e, 0x0C) != ENEMY or u32(e, q(e, 0x60)) not in copies:
+            continue
+        td = q(e, 0x68)
+        route = struct.unpack_from("<h", e, td + WALK_ROUTE)[0]
+        if route not in shared:
+            continue  # has its own already
+        source = events[patrols[route]]
+        regions = [i for i in struct.unpack_from("<64h", source, q(source, 0x20) + 16) if i >= 0]
+        here = struct.unpack_from("<3f", e, 0x20)
+        points = _list(lists, "POINT_PARAM_ST").entries
+        start = min(range(len(regions)), key=lambda n: math.dist(here, struct.unpack_from("<3f", points[regions[n]], 0x14)))
+        turned = regions[start:] + regions[:start]
+        new = bytearray(template)
+        _set_name(new, f"walk_{entry_name(e)}")
+        new_index = sum(1 for x in events if u32(x, 0x0C) == PATROL_EVENT)
+        struct.pack_into("<iii", new, 0x08, 1 + max(u32(x, 0x08) for x in events), PATROL_EVENT, new_index)
+        ntd = q(new, 0x20)
+        new[ntd] = source[q(source, 0x20)]  # patrol type of the original
+        struct.pack_into("<64h", new, ntd + 16, *(turned + [-1] * (64 - len(turned))))
+        at = 1 + max(i for i, x in enumerate(events) if u32(x, 0x0C) == PATROL_EVENT)
+        events.insert(at, bytes(new))
+        patrols = [i for i, x in enumerate(events) if u32(x, 0x0C) == PATROL_EVENT]
+        e = bytearray(e)
+        struct.pack_into("<h", e, td + WALK_ROUTE, new_index)
+        parts[k] = bytes(e)
+        report.append(f"{entry_name(e)}: own route {new_index} (route {route} from point {start})")
+    return report
 
 
 def _check_type_indices(parts):
