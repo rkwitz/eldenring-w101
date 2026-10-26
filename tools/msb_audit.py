@@ -22,7 +22,7 @@ Treasure, retry point and mount events whose parts are all deleted are removed w
 elsewhere: enemies' WalkRouteIndex counts PatrolInfo events only). PlatoonInfo groups and GroupDefeatReward regions
 (flask refills) just lose the deleted members.
 
-Usage: python msb_audit.py home.msb.dcx street.obj out_dir map.msb.dcx... [--apply]
+Usage: python msb_audit.py home.msb.dcx street.obj out_dir map.msb.dcx... [--apply] [--fauna]
   home: m60_42_36_00 (street, garden and room transforms). Prints one line per finding; with --apply writes every
   changed map to out_dir as DFLT DCX (KRAK inputs are read through dcx_krak.py).
 """
@@ -48,6 +48,13 @@ ROOM_RADIUS = 35.0
 OUR_ENTITIES = range(1042360850, 1042360950)  # msb_add_boss (850-853) and msb_add_mobs (860 and up)
 HELPERS = ("c1000",)  # invisible event characters: no model, no runes
 KIND = {2: "enemy", 9: "dummy asset", 10: "dummy enemy", 13: "asset"}
+# Animals that fly over the street (Ryan, 2026-10-26: "I can see Elden Ring birds"): Smithbox aliases c6001 Eagle,
+# c6040 Owl, c6070 Murre, c6080 Dragonfly, c4200 Man-Bat (bat swarms). With --fauna every Enemy of these models
+# within FAUNA_RADIUS of the street or garden is deleted, and SFX / WindSFX regions (fog, smoke, waterfall mist)
+# within SFX_RADIUS are sunk, in the vanilla tiles next to ours (m60_41_37_00, m60_42_37_00, m60_43_37_00) and ours.
+FAUNA = {"c6001", "c6040", "c6070", "c6080", "c4200"}
+FAUNA_RADIUS, SFX_RADIUS = 400.0, 160.0
+SFX_REGIONS = (5, 6)
 
 
 def load(path):
@@ -72,6 +79,12 @@ def zones(home_raw, obj):
         if any(math.hypot(hx - r[0], hz - r[2]) < ROOM_RADIUS for r in rooms):
             return "room"
         return None
+
+    def distance(name, x, z):
+        """XZ metres to the street footprint or the garden part, whichever is nearer."""
+        hx, hz = to_home(name, x, z)
+        return min(street.distance(hx, hz), math.hypot(hx - garden[0], hz - garden[2]))
+    zone.distance = distance
     return zone
 
 
@@ -82,7 +95,7 @@ def ours(e):
     return u32(e, 0x0C) == ENEMY and u32(e, q(e, 0x60)) in OUR_ENTITIES
 
 
-def audit(name, raw, zone, apply=False):
+def audit(name, raw, zone, apply=False, fauna=False):
     """(new map bytes or None, [finding lines]) for map `name`."""
     header, lists = read_msb(raw)
     parts = _list(lists, "PARTS_PARAM_ST").entries
@@ -102,17 +115,33 @@ def audit(name, raw, zone, apply=False):
         if kind == ENEMY:
             if model in HELPERS:
                 continue
-            if ground_gone or where:
+            near = fauna and model in FAUNA and zone.distance(name, x, z) < FAUNA_RADIUS
+            if ground_gone or where or near:
                 td = q(e, 0x68)
                 rows = struct.unpack_from("<ii", e, td + 0x08)
-                why = f"in the {where}" if where else "falls: its tile's collision is sunk"
+                why = (f"in the {where}" if where else "falls: its tile's collision is sunk" if ground_gone
+                       else f"flying animal {zone.distance(name, x, z):.0f} m from the street")
                 lines.append(f"{label}, entity {u32(e, q(e, 0x60))}, Think/NpcParam {rows[0]}/{rows[1]}: deleted ({why})")
                 delete.add(k)
         elif where:
             lines.append(f"{label}: sunk {SINK:.0f} m (over the {where})")
             sink.append(k)
-    if not apply or not (delete or sink):
+    sfx = []
+    if fauna:
+        for k, e in enumerate(_list(lists, "POINT_PARAM_ST").entries):
+            x, y, z = struct.unpack_from("<3f", e, 0x14)
+            if u32(e, 0x08) in SFX_REGIONS and y > -SINK / 2 and zone.distance(name, x, z) < SFX_RADIUS:
+                lines.append(f"{name}: effect region {entry_name(e)} ({x:.1f}, {y:.1f}, {z:.1f}), "
+                             f"{zone.distance(name, x, z):.0f} m from the street: sunk {SINK:.0f} m")
+                sfx.append(k)
+    if not apply or not (delete or sink or sfx):
         return None, lines
+    regions = _list(lists, "POINT_PARAM_ST").entries
+    for k in sfx:
+        e = bytearray(regions[k])
+        x, y, z = struct.unpack_from("<3f", e, 0x14)
+        struct.pack_into("<3f", e, 0x14, x, y - SINK, z)
+        regions[k] = bytes(e)
     for k in sink:
         e = bytearray(parts[k])
         x, y, z = struct.unpack_from("<3f", e, 0x20)
@@ -165,7 +194,7 @@ def dflt(raw, template):
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     home, obj, out, *maps = args
-    apply = "--apply" in sys.argv
+    apply, fauna = "--apply" in sys.argv, "--fauna" in sys.argv
     template = Path(home).read_bytes()
     assert template[0x28:0x2C] == b"DFLT", "home map must be DFLT"
     zone = zones(load(home), obj)
@@ -173,7 +202,7 @@ def main():
         name = Path(path).name.split(".")[0]
         raw = load(path)
         assert write_msb(*read_msb(raw)) == raw, f"{name} does not round-trip"
-        new, lines = audit(name, raw, zone, apply)
+        new, lines = audit(name, raw, zone, apply, fauna)
         print("\n".join(lines) or f"{name}: nothing found")
         if new is not None:
             Path(out).mkdir(parents=True, exist_ok=True)

@@ -169,6 +169,9 @@ ARRIVAL_SETTLE = 1.0  # seconds after the warp before the door listens again
 MOUNTED_EVENT_OFFSET = 20  # door event id + this = its mounted twin (1042362830-839)
 HOME_MAP = (60, 42, 36, 0)  # m60_42_36_00, for 2003[14] Warp Player
 MOUNTED_WAIT = 5.0  # seconds after 2003[14]; the event only gets past it if the map warp did not happen
+# arrival region entity -> its SpawnPoint twin (msb_door_spawns.SPAWNS): 2003[14] targets SpawnPoint regions in vanilla
+SPAWN_OF = {1042362801: 1042362840, 1042362803: 1042362841, 1042362805: 1042362842, 1042362807: 1042362843,
+            1042362817: 1042362844, 1042362819: 1042362845, 1042362821: 1042362846, 1042362823: 1042362847}
 
 
 def rattlebones_doors(d, doors=RATTLEBONES_DOORS, on_foot=False):
@@ -185,7 +188,8 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS, on_foot=False):
 
     Riding (event id + MOUNTED_EVENT_OFFSET): 2004[41] does not move a mounted player (round 6: fade to black, back
     where he was, still riding), and nothing in the EMEVD instruction set dismounts. So the same flag and fade, then
-    2003[14] Warp Player to this very map (HOME_MAP) with the arrival region as the initial area entity, as vanilla
+    2003[14] Warp Player to this very map (HOME_MAP) with the arrival region's SpawnPoint twin (SPAWN_OF,
+    msb_door_spawns.py; every vanilla 2003[14] targets a SpawnPoint region) as the initial area entity, as vanilla
     warps between maps (m12_05 event 12052500 into an m61 tile): a real map load, which always puts the player down
     on foot, facing the region. Should the map warp not happen, the fade is lifted after MOUNTED_WAIT s and the door
     listens again. With `on_foot` (maps with msb_add_indoor.py --door-boxes, which set him down in the trigger
@@ -219,7 +223,7 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS, on_foot=False):
                 _i(1001, 0, "<f", LOAD_SCREEN_LEAD),  # wait for the HUD's screen and the fade
             ]
             if riding:
-                body.append(_i(2003, 14, "<BBBBIi", *HOME_MAP, arrival, 0))  # map warp to the region
+                body.append(_i(2003, 14, "<BBBBIi", *HOME_MAP, SPAWN_OF[arrival], 0))  # map warp to its spawn point
                 body.append(_i(1001, 0, "<f", MOUNTED_WAIT))
             else:
                 body.append(_i(2004, 41, "<IIIi", 10000, 1, arrival, -1))  # short warp to region
