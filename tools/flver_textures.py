@@ -266,11 +266,14 @@ def blend_material(vanilla):
             "textures": [(prefix + "2_AlbedoMap_0", scale), (prefix + "1_NormalMap_0", scale)]}
 
 
-def split_materials(data, vanilla, face_materials, textures, alpha, opaque=None, blend_material=None):
+def split_materials(data, vanilla, face_materials, textures, alpha, opaque=None, blend_material=None, gx=None,
+                    shared_texture=None):
     """New FLVER bytes: one mesh/material per texture. `face_materials[t]` names triangle t's texture (an index into
     `textures`, or None to drop it); `alpha` holds the indices of textures needing the alpha-tested material.
     `opaque` replaces the opaque material template (see `emissive_material`), `blend_material` the alpha-tested one
-    (see `blend_material`)."""
+    (see `blend_material`). `gx` ({index: GX list bytes}) gives those materials their own GX list instead of the
+    template's (e.g. a different emissive glow each, see `set_gxmd`); with `shared_texture` set, every material draws
+    that one texture (texture_name(shared_texture)) and the indices only tell the materials apart."""
     version, counts = ff._counts(data)
     starts, _ = ff._section_starts(counts)
     vertex_data = struct.unpack_from("<i", data, 0x0C)[0]
@@ -336,16 +339,18 @@ def split_materials(data, vanilla, face_materials, textures, alpha, opaque=None,
         kind = ALPHA_MATERIAL if texture in alpha else OPAQUE_MATERIAL
         template = templates[kind]
         material = out_starts["material"] + 32 * m
-        if kind not in gx_offsets:
-            gx_offsets[kind] = blob.add(template["gx"], 4)
+        gx_key = ("own", texture) if gx and texture in gx else kind
+        if gx_key not in gx_offsets:
+            gx_offsets[gx_key] = blob.add(gx[texture] if gx_key != kind else template["gx"], 4)
+        drawn = texture if shared_texture is None else shared_texture
         blob.set(material, "<8i", blob.utf16(texture_name(texture)), blob.utf16(template["mtd"]),
-                 len(template["textures"]), texture_index, template["flags"], gx_offsets[kind], m, 0)
+                 len(template["textures"]), texture_index, template["flags"], gx_offsets[gx_key], m, 0)
         for sampler, rest, *source in template["textures"]:
             header = out_starts["texture"] + 32 * texture_index
             if source == [BLACK]:
                 path = texture_path(black_name())
             elif "AlbedoMap" in sampler or "EmissiveMap" in sampler:
-                path = texture_path(texture_name(texture))
+                path = texture_path(texture_name(drawn))
             else:
                 path = texture_path(FLAT_NORMAL)
             blob.data[header + 8:header + 32] = rest

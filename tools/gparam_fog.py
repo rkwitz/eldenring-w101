@@ -9,6 +9,8 @@ weather, each with its own fog). For each file this sets every time-of-day value
 and leaves everything else (FogVolume local fog boxes) alone. The weather files apply to the whole overworld,
 so their edit is global.
 
+fixed_exposure() and no_bloom() (also blender_build_sky.py only) turn off eye adaptation and bloom.
+
 flat_lighting() (used by blender_build_sky.py, not the command line) also makes the LightSet group light everything
 evenly, as Wizard101 does (unlit textures plus baked vertex colours): every directional light (the sun DiffColor0/
 SpecColor0 that draws the shadows, the fill light 1 and the local lights 1 and 2) gets intensity 0 (a colour's 4th
@@ -119,6 +121,42 @@ def flat_lighting(data, ambient, overhead=0.0):
             else:
                 struct.pack_into("<f", out, at + 12, 0.0)
         changed.append(name)
+    return bytes(out), changed
+
+
+AUTO_EXPOSURE = "GS Presents - ToneMap-Enable AutoExposure"  # type 0x07 (one byte per value)
+BLOOM_OFF = {"Gs Presents-Glare Luminance": 0.0, "Gs Presents-GlareBloom Alpha": 0.0}  # floats
+
+
+def fixed_exposure(data):
+    """(new GPARAM bytes, [names of changed params]) with auto exposure (eye adaptation) off: the tone map then uses
+    its ToneMap-Exposure value as is, as vanilla default.gparam and the overcast/night weathers (0031..0083) do. With
+    it on, a big bright sky filling the view pulls the exposure down (by up to 1.5 stops, Adaption Min) and a view of
+    the street pushes it up, so the same sky looks different by where you look and every glow change is partly
+    undone or overshot. Files without a Tone Map group (e.g. m60_00_0100) are left alone."""
+    out = bytearray(data)
+    changed = []
+    for _, name, kind, count, offset in params(data):
+        if name == AUTO_EXPOSURE:
+            if kind not in (0x07, 0x0B):
+                raise ValueError(f"unexpected type {kind:#x} for {name}")
+            out[offset:offset + count] = bytes(count)
+            changed.append(name)
+    return bytes(out), changed
+
+
+def no_bloom(data):
+    """(new GPARAM bytes, [names of changed params]) without bloom (glare): Glare Luminance and GlareBloom Alpha 0.
+    Light set 100 (The First Step and our map) blooms everything above 0.25 at 1.5x, which turned a large bright sky
+    into a white haze; default.gparam blooms above 0.5. Files without a Bloom group are left alone."""
+    out = bytearray(data)
+    changed = []
+    for _, name, kind, count, offset in params(data):
+        if name in BLOOM_OFF:
+            if kind != 0x09:
+                raise ValueError(f"unexpected type {kind:#x} for {name}")
+            struct.pack_into(f"<{count}f", out, offset, *[BLOOM_OFF[name]] * count)
+            changed.append(name)
     return bytes(out), changed
 
 

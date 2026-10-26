@@ -282,8 +282,16 @@ def zone_points(obj_path, spacing=4.0):
                 corners = [c - 1 if c > 0 else len(positions) + c for c in corners]
                 for k in range(1, len(corners) - 1):
                     faces.append((corners[0], corners[k], corners[k + 1]))
-    positions = np.array(positions)
-    triangles = positions[np.array(faces)]
+    return surface_points(np.array(positions), np.array(faces), spacing)
+
+
+def surface_points(positions, faces, spacing=4.0):
+    """Points (n, 3) covering a triangle mesh (positions (v, 3), faces (t, 3) vertex indices): its vertices plus a
+    grid on every triangle bigger than `spacing`."""
+    positions = np.asarray(positions, dtype=float)
+    if not len(faces):
+        return positions
+    triangles = positions[np.asarray(faces)]
     edge = np.linalg.norm(triangles - np.roll(triangles, 1, axis=1), axis=2).max(1)
     points = [positions]
     for n in (2, 4, 8, 16, 32, 64, 128):
@@ -404,3 +412,128 @@ def dome(radii, centre=(0.0, 0.0, 0.0), segments=SEGMENTS, rings=RINGS):
                 if len({positions[i] for i in tri}) == 3:
                     faces.append((None, tuple((i, i) for i in tri)))
     return positions, uvs, faces
+
+
+def flver_mesh(data):
+    """(positions (v, 3), faces (t, 3)) of every mesh of an uncompressed FLVER2 (all face sets, triangle lists or
+    strips), in FLVER coordinates (OBJ with z negated)."""
+    import flver_fix as ff
+
+    _, counts = ff._counts(data)
+    starts, _ = ff._section_starts(counts)
+    vertex_data = struct.unpack_from("<i", data, 0x0C)[0]
+    header_index_size = data[0x48]
+    positions, faces, base = [], [], 0
+    for i in range(counts["mesh"]):
+        mesh = starts["mesh"] + i * ff.SIZES["mesh"]
+        face_set_count, face_set_indices, buffer_count, buffer_indices = struct.unpack_from("<4i", data, mesh + 0x20)
+        mesh_positions = None
+        for b in struct.unpack_from(f"<{buffer_count}i", data, buffer_indices):
+            vb = starts["vertex_buffer"] + b * ff.SIZES["vertex_buffer"]
+            _, layout, vertex_size, vertex_count, _, _, _, offset = struct.unpack_from("<8i", data, vb)
+            at = ff._position_offset(data, starts, layout)
+            if at is None:
+                continue
+            raw = np.frombuffer(data, np.uint8, vertex_size * vertex_count, vertex_data + offset)
+            rows = raw.reshape(vertex_count, vertex_size)[:, at:at + 12]
+            mesh_positions = np.ascontiguousarray(rows).view("<f4").reshape(vertex_count, 3).astype(float)
+        if mesh_positions is None:
+            continue
+        for f in struct.unpack_from(f"<{face_set_count}i", data, face_set_indices):
+            fs = starts["face_set"] + f * ff.SIZES["face_set"]
+            strip = data[fs + 4]
+            index_count, index_offset = struct.unpack_from("<2i", data, fs + 0x08)
+            size = struct.unpack_from("<i", data, fs + 0x18)[0] or header_index_size or 16
+            index = np.frombuffer(data, "<u4" if size == 32 else "<u2", index_count, vertex_data + index_offset)
+            index = index.astype(np.int64)
+            if strip:
+                tri = np.stack([index[:-2], index[1:-1], index[2:]], 1)
+                tri = tri[(tri[:, 0] != tri[:, 1]) & (tri[:, 1] != tri[:, 2]) & (tri[:, 0] != tri[:, 2])]
+                tri = tri[(tri < 0xFFFF).all(1)] if size == 16 else tri
+            else:
+                tri = index[:len(index) // 3 * 3].reshape(-1, 3)
+            tri = tri[(tri < len(mesh_positions)).all(1)]
+            faces.append(tri + base)
+        positions.append(mesh_positions)
+        base += len(mesh_positions)
+    if not positions:
+        return np.zeros((0, 3)), np.zeros((0, 3), np.int64)
+    return np.concatenate(positions), (np.concatenate(faces) if faces else np.zeros((0, 3), np.int64))
+
+
+def to_street(points, part_position, part_rotation_y, street_position, street_rotation_y):
+    """FLVER-space points (n, 3) of an MSB part (position, y rotation in degrees) in the street OBJ's coordinates
+    (the frame of CENTRE and `hull`): MSB parts map FLVER (x, y, z) to position + (x cos + z sin, y, -x sin + z cos);
+    this goes to the world and back through the street part's transform, then negates z (FLVER -> OBJ)."""
+    def rotate(p, degrees):
+        c, s = math.cos(math.radians(degrees)), math.sin(math.radians(degrees))
+        return np.stack([p[:, 0] * c + p[:, 2] * s, p[:, 1], -p[:, 0] * s + p[:, 2] * c], 1)
+
+    world = rotate(np.asarray(points, dtype=float), part_rotation_y) + np.asarray(part_position)
+    local = rotate(world - np.asarray(street_position), -street_rotation_y)
+    return local * [1.0, 1.0, -1.0]
+
+
+def dome_radius_at(points, radii, centre=CENTRE, segments=SEGMENTS, rings=RINGS):
+    """(distance from `centre`, dome radius in that direction) for points (n, 3) in street OBJ coordinates, the radius
+    interpolated bilinearly over the `hull` grid (the dome's flat triangles sag inward by under 0.1%)."""
+    d = np.asarray(points, dtype=float) - np.array(centre)
+    distance = np.linalg.norm(d, axis=1)
+    elevation = np.degrees(np.arcsin(np.clip(d[:, 1] / np.maximum(distance, 1e-9), -1, 1)))
+    azimuth = np.degrees(np.arctan2(d[:, 2], d[:, 0])) % 360
+    r = np.clip((90 - elevation) / 180 * rings, 0, rings)
+    s = azimuth / 360 * segments
+    r0, s0 = np.minimum(np.floor(r).astype(int), rings - 1), np.floor(s).astype(int) % segments
+    fr, fs = r - r0, s - np.floor(s)
+    grid = np.asarray(radii)
+    a, b = grid[r0, s0], grid[r0, (s0 + 1) % segments]
+    c, e = grid[r0 + 1, s0], grid[r0 + 1, (s0 + 1) % segments]
+    radius = (a * (1 - fs) + b * fs) * (1 - fr) + (c * (1 - fs) + e * fs) * fr
+    return distance, radius * 0.999
+
+
+SEGMENT_DIGITS = {"0": "abcdef", "1": "bc", "2": "abdeg", "3": "abcdg", "4": "bcfg", "5": "acdfg", "6": "acdefg",
+                  "7": "abc", "8": "abcdefg", "9": "abcdfg"}
+
+
+def draw_labels(rgb, labels, elevation=(14.0, 30.0), colour=(1.0, 1.0, 1.0), outline=(0.15, 0.1, 0.3)):
+    """The image `rgb` (rows = dome elevation ELEV_TOP..ELEV_BOTTOM, columns = azimuth) with each label (a string of
+    digits) drawn as big seven-segment numbers centred at its azimuth (degrees, as `directions`) between two dome
+    elevations, white with a dark outline so it reads on any brightness."""
+    out = rgb.copy()
+    rows, columns = rgb.shape[:2]
+    top = int((ELEV_TOP - elevation[1]) / (ELEV_TOP - ELEV_BOTTOM) * rows)
+    bottom = int((ELEV_TOP - elevation[0]) / (ELEV_TOP - ELEV_BOTTOM) * rows)
+    height = bottom - top
+    width, stroke = height * 11 // 20, max(3, height // 6)
+    for azimuth, text in labels:
+        mask = np.zeros((height, (width + stroke * 2) * len(text)), bool)
+        for k, ch in enumerate(text):
+            x0 = k * (width + stroke * 2) + stroke
+            h2 = height // 2
+            bars = {"a": (0, stroke, x0, x0 + width), "g": (h2 - stroke // 2, h2 + stroke - stroke // 2, x0, x0 + width),
+                    "d": (height - stroke, height, x0, x0 + width), "f": (0, h2, x0, x0 + stroke),
+                    "b": (0, h2, x0 + width - stroke, x0 + width), "e": (h2, height, x0, x0 + stroke),
+                    "c": (h2, height, x0 + width - stroke, x0 + width)}
+            for seg in SEGMENT_DIGITS[ch]:
+                r0, r1, c0, c1 = bars[seg]
+                mask[r0:r1, c0:c1] = True
+        padded = np.pad(mask, 2)
+        grown = np.zeros_like(mask)
+        for dr in range(5):
+            for dc in range(5):
+                grown |= padded[dr:dr + mask.shape[0], dc:dc + mask.shape[1]]
+        left = int(round(azimuth / 360 * columns)) - mask.shape[1] // 2
+        cols = (left + np.arange(mask.shape[1])) % columns
+        region = out[top:bottom][:, cols]
+        region[grown] = outline
+        region[mask] = colour
+        out[top:bottom, cols] = region
+    return out
+
+
+def face_sectors(faces, count, segments=SEGMENTS):
+    """For `dome` faces, the azimuth sector (0..count-1, equal slices from azimuth 0 towards +z) of each face, from its
+    first vertex's segment (dome vertices are (segments + 1) per ring)."""
+    per = segments // count
+    return [((corners[0][0] % (segments + 1)) % segments) // per for _, corners in faces]
