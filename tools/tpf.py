@@ -8,6 +8,17 @@ asset/aet/aet030/aet030_518.tpf.dcx (folder from the first 6 characters, file fr
 import struct
 
 FORMATS = {b"DXT1": 0, b"DXT3": 3, b"DXT5": 5}  # TPF format byte for each DDS four-character code
+# DX10 DDS files: TPF format byte by DXGI format. Vanilla colour maps (albedo, emissive: aet030_000_a, aet099_334_em)
+# are BC1_UNORM_SRGB (72) with format 0; a legacy "DXT1" header is read as linear BC1 (vanilla only uses it for
+# normal maps), which shows an sRGB-encoded image washed out and flat.
+DX10_FORMATS = {71: 0, 72: 0, 98: 102, 99: 102}
+
+
+def tpf_format(dds):
+    fourcc = dds[84:88]
+    if fourcc == b"DX10":
+        return DX10_FORMATS[struct.unpack_from("<I", dds, 128)[0]]
+    return FORMATS[fourcc]
 
 
 def dds_info(dds):
@@ -54,8 +65,8 @@ def build_tpf(textures):
     entries = bytearray()
     for (name, dds), name_offset in zip(textures, name_offsets):
         data += bytes(-len(data) % 16)
-        fourcc, _, _, mipmaps = dds_info(dds)
-        entries += struct.pack("<IiBBBBIi", data_start + len(data), len(dds), FORMATS[fourcc], 0, mipmaps, 0,
+        _, _, _, mipmaps = dds_info(dds)
+        entries += struct.pack("<IiBBBBIi", data_start + len(data), len(dds), tpf_format(dds), 0, mipmaps, 0,
                                name_offset, 0)
         data += dds
     # Platform PC (0), flags 3, names in UTF-16 (1).

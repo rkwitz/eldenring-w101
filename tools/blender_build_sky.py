@@ -79,25 +79,31 @@ STREET_PART = "AEG030_518_9000"
 SKY_MATERIAL = "emissive"  # "emissive": unshaded (see above); "lit": the street's material (shows the texture, shaded)
 # Emissive only. How bright the sky is drawn: SKY_GLOW (GXMD 0xF4 of the emissive material, 1.0 in vanilla) times
 # SKY_BRIGHTNESS (<= 1, the texture's own light intensity). Glow 4.0, 1.0 and 0.25 were all blown out (2026-10-25/26)
-# with Elden Ring's eye adaptation and bloom on (now off, FIXED_EXPOSURE and NO_BLOOM below).
-SKY_GLOW = 0.25
-SKY_BRIGHTNESS = 1.0
+# with Elden Ring's eye adaptation and bloom on (now off, FIXED_EXPOSURE and NO_BLOOM below). On the calibration
+# dome (2026-10-26) Ryan picked slice 6-7 for brightness: calibration(6.5) = glow 0.0743, brightness 0.149. That
+# texture was still read as linear (legacy DXT1 header, now SKY_SRGB): shown washed out and flat, "just different
+# colours". Read as sRGB the same values come out much darker, so SKY_BRIGHTNESS 0.6 keeps the sky's mean on-screen
+# light where slice 6.5 had it (compared offline), with the colour and swirls back. Brighter: raise SKY_BRIGHTNESS
+# (up to 1.0), then SKY_GLOW; darker: lower SKY_BRIGHTNESS.
+SKY_GLOW = 0.0743
+SKY_BRIGHTNESS = 0.6
+SKY_SRGB = True  # DX10 BC1_UNORM_SRGB texture, like vanilla colour maps (False: the old legacy DXT1, read as linear)
 # SKY_CALIBRATE: instead of one brightness, the dome is cut into 8 slices around (45 degrees each, numbered 1 to 8 in
 # big white digits in the sky), slice k drawn at glow CALIBRATION_GLOW * 2^(-(k-1)/2) and texture brightness
 # 2^(-(k-1)/2): each slice half as bright as the one before if the glow parameter works as we think, at least
 # 1/1.4 as bright if only the texture counts. Ryan walks the street, says which number looks like the Wizard101
 # sky, and `calibration(k)` gives the SKY_GLOW and SKY_BRIGHTNESS that draw the whole dome exactly like slice k.
-SKY_CALIBRATE = True
+SKY_CALIBRATE = False  # done 2026-10-26: slice 6-7
 CALIBRATION_GLOW = 0.5
 CALIBRATION_SLICES = 8
-SKY_SATURATION = 1.0  # pushes the colours away from grey (1.0 = as graded)
+SKY_SATURATION = 1.3  # pushes the colours away from grey (1.0 = as graded); a bit above the reference for the tone map
 # Ryan's Wizard101 screenshot of the Unicorn Way sky (2026-10-25), as mean colour by elevation (the screenshot's top
 # taken as 35 degrees up, its bottom as the horizon): lavender above, pink-white wisps, pale blue at the horizon. The
 # bake is recoloured to it (sky_bake.grade) keeping SKY_DETAIL of its swirls; None keeps the bake's own colours.
 SKY_TARGET = [(-30, (161, 183, 245)), (0, (161, 183, 245)), (3.5, (185, 193, 252)), (7, (220, 204, 254)),
               (10.5, (238, 201, 254)), (14, (240, 190, 255)), (17.5, (235, 180, 253)), (21, (223, 166, 249)),
               (24.5, (215, 155, 242)), (28, (208, 151, 237)), (35, (206, 151, 236)), (90, (206, 151, 236))]
-SKY_DETAIL = 0.5
+SKY_DETAIL = 1.2  # 0.5 (2026-10-25) flattened the swirls; 1.0 = the bake's own swirls and clouds, above = stronger
 # Lighting for the whole overworld (gparam_fog.flat_lighting): True = no sun, no shadows, ambient light of intensity
 # AMBIENT from every side (raise it if everything is too dark, lower it if washed out; vanilla daylight sun is about
 # 0.5). False = Elden Ring's own lighting (fog stays off either way).
@@ -223,7 +229,7 @@ def build_sky():
     else:
         brightness = min(1.0, SKY_BRIGHTNESS) if emissive else 1.0
         image = sky_bake.dim(image, brightness, SKY_SATURATION)
-    dds = sky_bake.dxt1_dds(image, dither=1 / 64)
+    dds = sky_bake.dxt1_dds(image, dither=1 / 64, srgb=SKY_SRGB)
     (SKY / "sky_baked.dds").write_bytes(dds)
 
     positions, uvs, faces = sky_bake.dome(radii)

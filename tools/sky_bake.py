@@ -252,10 +252,12 @@ def dim(rgb, factor, saturation=1.0):
     return np.where(linear <= 0.0031308, linear * 12.92, 1.055 * linear ** (1 / 2.4) - 0.055)
 
 
-def dxt1_dds(rgb, dither=0.0):
+def dxt1_dds(rgb, dither=0.0, srgb=False):
     """DXT1 DDS bytes, with mipmaps down to 4 texels, of an RGB float image whose sides are powers of 2 (>= 4).
     `dither` adds that much uniform noise (+-, 0..1 units, fixed seed) to the top level first, so smooth gradients
-    don't quantise into visible stripes (DXT1 endpoints are 5/6/5 bits: 1/32 steps in red and blue)."""
+    don't quantise into visible stripes (DXT1 endpoints are 5/6/5 bits: 1/32 steps in red and blue). With `srgb`
+    the header is DX10 BC1_UNORM_SRGB (72), as on vanilla colour textures, so the game decodes the sRGB values;
+    the legacy DXT1 header is read as linear, which drew our sky washed out and flat (2026-10-26)."""
     rows, columns = rgb.shape[:2]
     if dither:
         rgb = np.clip(rgb + np.random.default_rng(0).uniform(-dither, dither, rgb.shape), 0.0, 1.0)
@@ -265,9 +267,10 @@ def dxt1_dds(rgb, dither=0.0):
         levels += 1
         r, c = image.shape[:2]
         image = image.reshape(r // 2, 2, c // 2, 2, 3).mean((1, 3))
-    pixel_format = struct.pack("<II4s5I", 32, 0x4, b"DXT1", 0, 0, 0, 0, 0)
+    pixel_format = struct.pack("<II4s5I", 32, 0x4, b"DX10" if srgb else b"DXT1", 0, 0, 0, 0, 0)
     header = struct.pack("<4s7I44x", b"DDS ", 124, 0xA1007, rows, columns, columns * rows // 2, 0, levels)
-    return header + pixel_format + struct.pack("<5I", 0x401008, 0, 0, 0, 0) + bytes(data)
+    dx10 = struct.pack("<5I", 72, 3, 0, 1, 0) if srgb else b""  # BC1_UNORM_SRGB, 2D texture, one
+    return header + pixel_format + struct.pack("<5I", 0x401008, 0, 0, 0, 0) + dx10 + bytes(data)
 
 
 def zone_points(obj_path, spacing=4.0):
