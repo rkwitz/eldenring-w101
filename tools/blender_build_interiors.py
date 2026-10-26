@@ -39,7 +39,7 @@ import tpf  # noqa: E402
 for module in (dds_color, flver_fix, flver_build, flver_textures, hkx_tag, hkx_collision, tpf):
     importlib.reload(module)
 
-SATURATION, BRIGHTNESS = 1.3, 1.1  # same colour boost as the street and Rattlebones' room
+SATURATION, BRIGHTNESS = 1.0, 1.0  # true Wizard101 colours: textures are now sRGB (tpf.build_tpf); the old 1.3, 1.1 made up for them being read as linear
 
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset"
 GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset")

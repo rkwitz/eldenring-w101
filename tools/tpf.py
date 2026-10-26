@@ -11,7 +11,17 @@ FORMATS = {b"DXT1": 0, b"DXT3": 3, b"DXT5": 5}  # TPF format byte for each DDS f
 # DX10 DDS files: TPF format byte by DXGI format. Vanilla colour maps (albedo, emissive: aet030_000_a, aet099_334_em)
 # are BC1_UNORM_SRGB (72) with format 0; a legacy "DXT1" header is read as linear BC1 (vanilla only uses it for
 # normal maps), which shows an sRGB-encoded image washed out and flat.
-DX10_FORMATS = {71: 0, 72: 0, 98: 102, 99: 102}
+DX10_FORMATS = {71: 0, 72: 0, 74: 3, 75: 3, 77: 5, 78: 5, 98: 102, 99: 102}
+SRGB_DXGI = {b"DXT1": 72, b"DXT3": 75, b"DXT5": 78}  # BC1/BC2/BC3_UNORM_SRGB
+
+
+def srgb(dds):
+    """A legacy DXT1/DXT3/DXT5 DDS re-headed as DX10 BC1/BC2/BC3_UNORM_SRGB (same blocks), so the game decodes its
+    colours as sRGB, as it does for vanilla albedo and emissive maps. Other DDS files are returned unchanged."""
+    fourcc = dds[84:88]
+    if fourcc not in SRGB_DXGI:
+        return dds
+    return dds[:84] + b"DX10" + dds[88:128] + struct.pack("<5I", SRGB_DXGI[fourcc], 3, 0, 1, 0) + dds[128:]
 
 
 def tpf_format(dds):
@@ -51,8 +61,12 @@ def solid_dds(r, g, b):
     return header + struct.pack("<HHI", colour, max(colour - 1, 0), 0)
 
 
-def build_tpf(textures):
-    """TPF bytes for [(name, dds bytes)]."""
+def build_tpf(textures, colour_srgb=True):
+    """TPF bytes for [(name, dds bytes)]. With `colour_srgb`, every texture except normal maps (names ending in _n,
+    kept linear as in vanilla) is stored as sRGB (`srgb`); before 2026-10-26 all were legacy DXT headers, which the
+    game reads as linear, so every colour texture showed washed out and pale."""
+    if colour_srgb:
+        textures = [(name, dds if name.lower().endswith("_n") else srgb(dds)) for name, dds in textures]
     entries_end = 16 + 20 * len(textures)
     names = bytearray()
     name_offsets = []

@@ -46,7 +46,7 @@ for module in (dds_color, flver_fix, flver_build, flver_textures, hkx_tag, hkx_c
 ASSET = "aeg030_519"
 flver_textures.AET = ASSET.replace("aeg", "AET").upper()
 flver_textures.FLAT_NORMAL = f"{flver_textures.AET}_n"
-SATURATION, BRIGHTNESS = 1.3, 1.1  # same colour boost as the classic street (dds_color.py)
+SATURATION, BRIGHTNESS = 1.0, 1.0  # true Wizard101 colours: textures are now sRGB (tpf.build_tpf); the old 1.3, 1.1 made up for them being read as linear
 
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset"
 GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset")

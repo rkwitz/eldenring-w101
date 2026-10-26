@@ -47,11 +47,11 @@ import tpf  # noqa: E402
 for module in (dds_color, flver_fix, flver_build, flver_textures, hkx_tag, hkx_collision, tpf):
     importlib.reload(module)
 
-SATURATION, BRIGHTNESS = 1.3, 1.1  # same colour boost as the classic street (dds_color.py)
+SATURATION, BRIGHTNESS = 1.0, 1.0  # true Wizard101 colours: textures are now sRGB (tpf.build_tpf); the old 1.3, 1.1 made up for them being read as linear
 # The glowing window: the emissive material has no strength setting, and Elden Ring's exposure and bloom turn emitted
 # light near full brightness white (Ryan's test 2026-10-23: "the light is white, it should be blue"). The texture is
 # darkened to a quarter and saturated instead, which keeps W101's pale blue panes (rendered comparison, 0.22-0.25).
-WINDOW_SATURATION, WINDOW_BRIGHTNESS = 1.8, 0.25
+WINDOW_SATURATION, WINDOW_BRIGHTNESS = 1.3, 0.75  # sRGB texture: same mean glow as the old 1.8, 0.25 read as linear
 # The garden used to sit 50 m under the street (since 2026-10-25 it is at road level, msb_add_garden.GARDEN_ORIGIN), so
 # nothing of it could reach the street's ground:
 # its giant backdrop (cliff, city wall tower, trees up to 192 m tall) is cut off at CLIP_TOP m above the garden floor.

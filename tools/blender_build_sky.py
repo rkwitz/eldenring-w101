@@ -108,8 +108,11 @@ SKY_DETAIL = 1.2  # 0.5 (2026-10-25) flattened the swirls; 1.0 = the bake's own 
 # AMBIENT from every side (raise it if everything is too dark, lower it if washed out; vanilla daylight sun is about
 # 0.5). False = Elden Ring's own lighting (fog stays off either way).
 FLAT_LIGHTING = True
-AMBIENT = 1.5  # 0.5 looked very dark (2026-10-23), 0.8 still "like lighting is off" (2026-10-25)
-OVERHEAD = 0.8  # a soft, shadowless white light straight down (directional light 1), 0 = none
+# 2026-10-26: the Wizard101 textures are now sRGB at their true colours (tpf.build_tpf; before they were read as
+# linear with a 1.3/1.1 boost), which decodes about 2.5x darker on average (street 2.5, room 2.6, garden 2.25,
+# interiors 2.5), so both lights are 2.5x what they were (1.5, 0.8) to keep the zone as bright as Ryan last saw it.
+AMBIENT = 3.75  # 0.5 looked very dark (2026-10-23), 0.8 still "like lighting is off" (2026-10-25)
+OVERHEAD = 2.0  # a soft, shadowless white light straight down (directional light 1), 0 = none
 # Elden Ring's eye adaptation (auto exposure) re-exposes the screen by what fills the view: with a big glowing sky it
 # darkened everything, and the same glow looked different by where you looked. FIXED_EXPOSURE turns it off in every
 # file written (the tone map keeps each light set's own ToneMap-Exposure, as vanilla default.gparam does). NO_BLOOM
