@@ -647,7 +647,7 @@ struct Cache {
     folder: PathBuf,
     files: HashMap<String, Option<Arc<Part>>>,
     /// The posed triangles of the last look drawn: turning redraws the same look.
-    posed: Option<(Look, Arc<Vec<Batch>>)>,
+    posed: Option<(Look, Arc<Vec<Batch>>, Option<Head>)>,
     /// Bone name -> world transform of Elden Ring's idle pose (row vectors: p * M + t).
     idle: Option<HashMap<String, (M3, [f32; 3])>>,
 }
@@ -954,9 +954,55 @@ impl Pose {
             })
             .collect();
         let names: HashMap<String, usize> = f.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
-        let weapon = idle.get("@R_Weapon").copied();
+        let mut delta = delta;
+        let mut weapon = idle.get("@R_Weapon").copied();
+        // A natural wand hold, as Wizard101's wizards stand: the right elbow bent so the hand comes forward, in
+        // front of the body (and of any cloak), the weapon pointing forward, out and down from it (HOLD_TIP).
+        // Elden Ring's idle lets a weapon hang straight down beside the leg, where cloaks and robes hide it.
+        if let (Some(&forearm), Some(&hand)) = (names.get("R_Forearm"), names.get("R_Hand")) {
+            let posed = |i: usize, d: &[(M3, [f32; 3])]| add(apply(bind[i].1, &d[i].0), d[i].1);
+            let (elbow, wrist) = (posed(forearm, &delta), posed(hand, &delta));
+            let along = norm(sub(wrist, elbow));
+            let target = norm([along[0] * 0.5 - 0.05, -HOLD_FOREARM[0], -HOLD_FOREARM[1]]);
+            let q = rot_axis(cross(along, target), dot(along, target).clamp(-1.0, 1.0).acos());
+            let moved = |p: [f32; 3]| add(apply(sub(p, elbow), &q), elbow);
+            for i in 0..f.bones.len() {
+                let mut j = i as i32;
+                let mut under = false;
+                for _ in 0..64 {
+                    if j < 0 || j as usize >= f.bones.len() {
+                        break;
+                    }
+                    if j as usize == forearm {
+                        under = true;
+                        break;
+                    }
+                    j = f.bones[j as usize].parent;
+                }
+                if under {
+                    let (r, t) = delta[i];
+                    // (p*r + t - e)*q + e
+                    delta[i] = (mul(&r, &q), moved(t));
+                }
+            }
+            let grip = weapon.map_or_else(|| add(posed(hand, &delta), scale(apply(bind[hand].0[0], &delta[hand].0), 0.09)),
+                                          |w| moved(w.1));
+            let tip = norm(HOLD_TIP);
+            let y = scale(tip, -1.0);
+            let x = norm(cross(y, [0.0, 0.0, 1.0]));
+            weapon = Some(([x, y, cross(x, y)], grip));
+        }
         let grip = weapon.map_or([-0.25, 0.95, -0.15], |w| w.1);
         Pose { names, bind, delta, grip, weapon }
+    }
+
+    /// The head's posed position and the way the face looks (horizontal), for the portrait.
+    fn head(&self) -> Option<Head> {
+        let &h = self.names.get("Head")?;
+        let (r, t) = *self.delta.get(h)?;
+        let at = add(apply(self.bind[h].1, &r), t);
+        let facing = apply([0.0, 0.0, -1.0], &r);
+        Some(Head { at, facing })
     }
 
     /// For each bone of a parts FLVER, the body bone that moves it: the one of the same name, else that of its
@@ -1137,9 +1183,9 @@ fn item_batches(cache: &mut Cache, model: u32) -> Vec<Batch> {
         .collect()
 }
 
-fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
+fn batches(cache: &mut Cache, look: &Look) -> (Vec<Batch>, Option<Head>) {
     if let Some(model) = look.item {
-        return item_batches(cache, model);
+        return (item_batches(cache, model), None);
     }
     let g = if look.male { "m" } else { "f" };
     let gendered = |cache: &Cache, stem: &str| -> String {
@@ -1173,6 +1219,7 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
     }
     let body = parts.first().filter(|(s, _, _)| s.starts_with("fc_")).and_then(|(_, p, _)| p.flvers.first());
     let pose = Pose::new(body, cache.idle.as_ref());
+    let head = pose.head();
     let mut out = Vec::new();
     for (stem, part, weapon) in &parts {
         let is_face = stem.starts_with("fg_");
@@ -1210,8 +1257,7 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
                 let mut nrm = Vec::with_capacity(m.pos.len());
                 for i in 0..m.pos.len() {
                     let (p, n) = if let (true, Some((r, t))) = (*weapon, pose.weapon) {
-                        // In the R_Weapon bone's frame: the model's -Y (its tip) along the bone's +X.
-                        let r = mul(&WEAPON_IN_HAND, &r);
+                        // The hold's frame: the model's -Y (its tip) along HOLD_TIP.
                         let p = [m.pos[i][0], m.pos[i][1] - slide, m.pos[i][2]];
                         (add(apply(scale(p, fit), &r), t), apply(m.nrm[i], &r))
                     } else if *weapon {
@@ -1237,15 +1283,25 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
             }
         }
     }
-    out
+    (out, head)
 }
 
 /// How far cloth is drawn in toward the bone it hangs from, at 0.6 m below it and lower: sideways and from behind.
 const DRAPE_SIDE: f32 = 0.75;
 const DRAPE_BACK: f32 = 0.5;
 
-/// Weapon model axes to R_Weapon's: x -> y, y -> -x, z -> z.
-const WEAPON_IN_HAND: M3 = [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
+/// Where the held weapon's tip points (the character faces -Z, his right is -X): forward, out to his right and a
+/// little down, a relaxed wand hold that shows it in front of the body from the front and while turning.
+const HOLD_TIP: [f32; 3] = [-0.5, -0.5, -0.7];
+/// The right forearm's direction in the hold: (down, forward) parts; the elbow stays at the side.
+const HOLD_FOREARM: [f32; 2] = [0.55, 0.8];
+
+/// The posed head: its joint and the way the face looks.
+#[derive(Clone, Copy, Debug)]
+struct Head {
+    at: [f32; 3],
+    facing: [f32; 3],
+}
 
 /// Longest held weapon, metres (a W101 wand is about half the wizard's height).
 const WEAPON_LENGTH: f32 = 0.75;
@@ -1372,6 +1428,8 @@ fn raster(b: &Batch, screen: &[[f32; 3]], normals: &[[f32; 3]], sw: usize, y0: u
 }
 
 const PORTRAIT_PITCH: f32 = 0.2;
+/// The portrait's centre above the head joint (metres), with a helm / bare-headed.
+const PORTRAIT_ABOVE_HEAD: [f32; 2] = [0.1, 0.06];
 
 /// Draws the request: 2x supersampled, then averaged down; transparent background.
 fn draw(cache: &mut Cache, r: &Request) -> Frame {
@@ -1384,25 +1442,40 @@ fn draw(cache: &mut Cache, r: &Request) -> Frame {
         // The portrait shows the head as worn (hat on), without the weapon.
         look.weapon = None;
     }
-    let batches = match &cache.posed {
-        Some((l, b)) if *l == look => b.clone(),
+    let (batches, head) = match &cache.posed {
+        Some((l, b, head)) if *l == look => (b.clone(), *head),
         _ => {
             // Outer layers first (weapon, armour, then hair, face, body): what they cover fails the depth test
             // before it is shaded.
-            let b = Arc::new(batches(cache, &look).into_iter().rev().collect::<Vec<_>>());
-            cache.posed = Some((look.clone(), b.clone()));
-            b
+            let (b, head) = batches(cache, &look);
+            let b = Arc::new(b.into_iter().rev().collect::<Vec<_>>());
+            cache.posed = Some((look.clone(), b.clone(), head));
+            (b, head)
         }
     };
     // View: turn by yaw around the vertical axis through the body; camera looks along +Z (the character faces
     // -Z), x to the right, y up.
     let helm = look.armour.iter().any(|a| a.starts_with("hd_"));
     let [cy, height] = r.view.unwrap_or_else(|| r.framing.view(helm));
-    let centre = [0.0, cy];
+    let mut centre = [0.0, cy];
     let k = sh as f32 / height;
     // The portrait looks up a little, under a hat's brim.
     let pitch = if r.framing == Framing::Portrait && helm { PORTRAIT_PITCH } else { 0.0 };
-    let turn = mul(&rot_y(r.yaw), &rot_x(pitch));
+    let mut yaw = r.yaw;
+    if let (Framing::Portrait, Some(head)) = (r.framing, head) {
+        // Face to the camera (the idle pose turns the head a little) and centred on the head.
+        let [fx, _, fz] = head.facing;
+        if fx.abs() + fz.abs() > 1e-3 {
+            yaw += fx.atan2(-fz);
+        }
+        let turn = mul(&rot_y(yaw), &rot_x(pitch));
+        centre[0] = apply([head.at[0], head.at[1] - cy, head.at[2]], &turn)[0];
+        if r.view.is_none() {
+            // The face a little below the middle, the hat (if any) above it.
+            centre[1] = head.at[1] + if helm { PORTRAIT_ABOVE_HEAD[0] } else { PORTRAIT_ABOVE_HEAD[1] };
+        }
+    }
+    let turn = mul(&rot_y(yaw), &rot_x(pitch));
     let to_screen = |p: [f32; 3]| -> [f32; 3] {
         // Turned about the vertical axis through the feet and tilted about the view's centre.
         let q = apply([p[0], p[1] - centre[1], p[2]], &turn);

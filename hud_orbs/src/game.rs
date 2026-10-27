@@ -500,6 +500,22 @@ pub fn event_flag(flag: u32) -> Option<bool> {
     Some(man.virtual_memory_flag.get_flag(flag))
 }
 
+/// Whether the event flag manager holds the 1000-flag group `group` (flag / 1000) at all: flags in a group it
+/// doesn't hold read as off and can't be set, by the game's EMEVD or by us.
+pub fn flag_group_exists(group: u32) -> Option<bool> {
+    let man = from_singleton::static_of::<eldenring::cs::CSEventFlagMan>()?;
+    let man = unsafe { (*man.as_ptr()).as_ref()? };
+    Some(man.virtual_memory_flag.flag_block_descriptors.find(&group).is_some())
+}
+
+/// Elden Ring's count of loading screens shown (CSNowLoadingHelper, by name from the game's reflection data): it
+/// goes up by one as each of its loading screens starts (fast travel, map warps, death, loading a save, ...).
+pub fn loading_screens() -> Option<i32> {
+    let helper = from_singleton::static_of::<eldenring::cs::CSNowLoadingHelper>()?;
+    let helper = read::<usize>(helper.as_ptr() as usize)?;
+    read::<i32>(helper + std::mem::offset_of!(eldenring::cs::CSNowLoadingHelper, menu_load_counter))
+}
+
 /// Sets or clears an event flag.
 pub fn set_event_flag(flag: u32, on: bool) {
     let Some(man) = from_singleton::static_of::<eldenring::cs::CSEventFlagMan>() else { return };

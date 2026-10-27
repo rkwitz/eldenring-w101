@@ -471,7 +471,7 @@ impl Book {
         for (node, name) in &view.node_images {
             let (slot, framing, yaw, view) = match name.as_str() {
                 pages::MODEL_FULL => (0, Framing::Full, self.yaw, Some(zoom)),
-                pages::MODEL_PORTRAIT => (1, Framing::Portrait, 0.3, None),
+                pages::MODEL_PORTRAIT => (1, Framing::Portrait, 0.0, None),
                 _ => continue,
             };
             let r = page.nodes[*node].rect;
@@ -560,7 +560,7 @@ impl Book {
         for plate in nameplates::plates(&camera, &enemies, screen) {
             // As Wizard101 shows them (reference nameplate_lost_soul.png): no plate, the name in big yellow
             // WizardFancy capitals with a dark outline, and under it the school's icon and "RANK n", also yellow.
-            let icon = (!plate.school.is_empty()).then(|| format!("GUI/Icons/Icon_SM_{}.png", plate.school));
+            let icon = (!plate.school.is_empty()).then(|| format!("GUI/Icons/Icon_{}.png", plate.school));
             let name = plate.name.to_uppercase();
             let line = plate.line.to_uppercase();
             let (name_scale, line_scale, icon_side) = (NAME_SCALE, RANK_SCALE, RANK_SCALE * 38.0);
@@ -594,6 +594,19 @@ impl Book {
             canvas.text(&line, [tx, name_h, w, h], &TextStyle::new("WizardFancy", line_scale, yellow).outlined(), false);
         }
         self.textures.want(icons);
+    }
+
+    /// The game window lost or regained focus (alt-tab): drop the mouse state the book was tracking (a button
+    /// held when the window went away, a drag), so the open book takes clicks, keys and the pad again at once.
+    pub fn focus_changed(&mut self, focused: bool) {
+        tracing::info!("spellbook: game window {} (book open: {})", if focused { "focused" } else { "lost focus" }, self.open);
+        self.di_buttons = 0;
+        self.dragging = false;
+        self.was_dragging = false;
+        self.last_click = None;
+        self.last_hit = None;
+        self.last_os = [-1.0, -1.0];
+        self.last_frame = Instant::now();
     }
 
     /// Whether the game's keyboard, mouse and controller input are blocked.

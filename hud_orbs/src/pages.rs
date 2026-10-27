@@ -590,6 +590,19 @@ fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     v.set(l.find("CharacterName"), centre(&name));
     v.set(l.find("CharLevel"), format!("Level {}", sheet.level));
     v.set(l.find("CharTitle"), "Tarnished");
+    // The school badge on the portrait's ring: the character's school as the reagent cards' Icon_<School> symbol
+    // on their medallion. Elden Ring has no school, so it follows the casting stat: Intelligence = Myth (the
+    // deck's Glintstone), Faith = Life (Golden Order), Arcane = Death; none of them past 20 = Balance.
+    if let Some(b) = l.find("SchoolIcon") {
+        let [int, fai, arc] = [sheet.attributes[5], sheet.attributes[6], sheet.attributes[7]];
+        let school = if int.max(fai).max(arc) <= 20 { "Balance" }
+            else if int >= fai && int >= arc { "Myth" } else if fai >= arc { "Life" } else { "Death" };
+        let r = l.nodes[b].rect;
+        v.node_art.insert(b, REAGENT_MEDALLION.into());
+        let inset = (r[2] - r[0]) * 0.2;
+        v.images.push(([r[0] + inset, r[1] + inset, r[2] - inset, r[3] - inset], school_icon(school), [0.0, 0.0, 1.0, 1.0]));
+        v.tip(r, vec![format!("School: {school}"), "From your highest casting stat".into()]);
+    }
     if let Some(s) = d.stats {
         v.set(l.find("Health"), centre(&format!("{}/{}", s.hp, s.max_hp)));
         v.set(l.find("Mana"), centre(&format!("{}/{}", s.fp, s.max_fp)));
@@ -1137,6 +1150,16 @@ const DECK_TABS: [(&str, &str, &str); 11] = [
 /// Where the buttons go (DeckConfiguration's button positions, left to right).
 const DECK_TAB_X: [f32; 11] = [74.0, 123.0, 172.0, 221.0, 270.0, 319.0, 414.0, 463.0, 512.0, 561.0, 610.0];
 
+/// The Icon_<School> symbol (GUI/Icons, as on the reagent cards) of a deck tab's school; None for All and Astral
+/// (no Icon_Astral in Wizard101's art). Monster Magic (Dragon Communion) uses Fire's, as its card frame does.
+fn deck_school_icon(button: &str) -> Option<String> {
+    let school = match button {
+        "Cards_MonsterMagic" => "Fire",
+        b => b.strip_prefix("Cards_").filter(|s| !matches!(*s, "All" | "Astral"))?,
+    };
+    Some(school_icon(school))
+}
+
 /// The card art's height in its 128 x 256 texture.
 const CARD_H: f32 = 196.0;
 
@@ -1341,11 +1364,20 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         let ix = (w0[0] + w1[0] - side) / 2.0;
         icon(v, d.items, *id, [ix, w0[1], ix + side, w0[1] + side]);
         v.images.push(([x, y, x + cw, y + ch], frame.into(), [0.0, 0.0, 1.0, CARD_H / 256.0]));
-        if let Some(b) = l.find(DECK_TABS[tab].0) {
-            let n = &l.nodes[b];
-            if let Some(img) = &n.img {
-                let (c0, c1) = (card(101.0, 28.0), card(125.0, 52.0));
-                v.images.push(([c0[0], c0[1], c1[0], c1[1]], img.clone(), n.frames[0].unwrap_or(n.uv)));
+        // The school symbol in the corner circle: the reagent cards' Icon_<School> art (Ryan, round 10: use those
+        // symbols everywhere); Astral has none, so its tab button's own symbol.
+        let (c0, c1) = (card(101.0, 28.0), card(125.0, 52.0));
+        match deck_school_icon(DECK_TABS[tab].0) {
+            Some(icon) => {
+                let inset = (c1[0] - c0[0]) * 0.12;
+                v.images.push(([c0[0] + inset, c0[1] + inset, c1[0] - inset, c1[1] - inset], icon, [0.0, 0.0, 1.0, 1.0]));
+            }
+            None => {
+                if let Some(n) = l.find(DECK_TABS[tab].0).map(|b| &l.nodes[b]) {
+                    if let Some(img) = &n.img {
+                        v.images.push(([c0[0], c0[1], c1[0], c1[1]], img.clone(), n.frames[0].unwrap_or(n.uv)));
+                    }
+                }
             }
         }
         // What it does: Wizard101's type icon in the box at the picture's bottom right (98,97 .. 125,124).
@@ -1467,11 +1499,13 @@ pub fn map_rect(aspect: f32) -> [f32; 4] {
 /// The part of the map screen shown on the page (uv): the middle, its sides cut off (the time of day on the right
 /// with them), above Elden Ring's button hints along the bottom.
 const MAP_UV_X: [f32; 2] = [0.15, 0.85];
-const MAP_UV_BOTTOM: f32 = 0.9;
-/// Elden Ring's button hints (B close, X marker, Y sites of grace ...): the bottom of the map screen, drawn in a
-/// strip inside the frame under the map. The whole width of the screen's bottom eighth, so no hint is cut off
-/// whatever the resolution and HUD scale (the hints are right-aligned in that band, as Elden Ring draws them).
-const HINTS_UV: [f32; 4] = [0.0, 0.875, 1.0, 1.0];
+const MAP_UV_BOTTOM: f32 = 0.875;
+/// Elden Ring's button hints ("View map" over "A: Place beacon  B: Close  X: Marker  Y: Sites of grace ..."): just
+/// their text, cut from the bottom of the map screen and drawn in a strip inside the frame under the map. Measured
+/// on Ryan's 2560x1440 capture (w101_reference/er_map_hint_bar.png, the screen's full width at 0.421 scale, its
+/// bottom 74 px): "View map" rows 32-43, the hints 49-67, left-aligned from x 48 to about 775 of 1078; with a few
+/// pixels' margin that is x 0.03-0.75, y 0.922-0.995 of the screen.
+const HINTS_UV: [f32; 4] = [0.03, 0.922, 0.75, 0.995];
 const HINTS_H: f32 = 40.0;
 
 /// The copied map screen on the page: (map rect, its uv, hints rect, their uv) inside MAP_HOLE's margin, both in

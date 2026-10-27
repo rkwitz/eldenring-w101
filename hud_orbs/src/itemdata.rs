@@ -15,9 +15,9 @@ const TYPE_RESIST: &str = "GUI/Icons/Type_Resist.png";
 /// Every icon a tooltip row can show (for loading).
 pub const TIP_ICONS: [&str; 14] = [
     ICON_ALL, TYPE_DAMAGE, TYPE_RESIST, "GUI/Icons/Type_Stun_Resist.png", "GUI/Icons/Type_Pip.png",
-    "GUI/Icons/Type_PowerPips.png", "GUI/Icons/Icon_SM_Myth.png", "GUI/Icons/Icon_SM_Fire.png",
-    "GUI/Icons/Icon_SM_Storm.png", "GUI/Icons/Icon_SM_Life.png", "GUI/Icons/Icon_SM_Ice.png",
-    "GUI/Icons/Icon_SM_Death.png", "GUI/Icons/Icon_SM_Balance.png", "GUI/Icons/Icon_Shadow.png",
+    "GUI/Icons/Type_PowerPips.png", "GUI/Icons/Icon_Myth.png", "GUI/Icons/Icon_Fire.png",
+    "GUI/Icons/Icon_Storm.png", "GUI/Icons/Icon_Life.png", "GUI/Icons/Icon_Ice.png",
+    "GUI/Icons/Icon_Death.png", "GUI/Icons/Icon_Balance.png", "GUI/Icons/Icon_Shadow.png",
 ];
 
 /// A tooltip stat row as Wizard101 writes them ("+45" then the school's icon and the stat's icon, the stat's name
@@ -288,8 +288,8 @@ impl ItemData {
         // Elden Ring's damage types as Wizard101 schools: physical = all schools, magic = Myth (glintstone),
         // fire = Fire, lightning = Storm, holy = Life.
         const TYPES: [(&str, &str); 5] =
-            [("Physical", ICON_ALL), ("Magic", "GUI/Icons/Icon_SM_Myth.png"), ("Fire", "GUI/Icons/Icon_SM_Fire.png"),
-             ("Lightning", "GUI/Icons/Icon_SM_Storm.png"), ("Holy", "GUI/Icons/Icon_SM_Life.png")];
+            [("Physical", ICON_ALL), ("Magic", "GUI/Icons/Icon_Myth.png"), ("Fire", "GUI/Icons/Icon_Fire.png"),
+             ("Lightning", "GUI/Icons/Icon_Storm.png"), ("Holy", "GUI/Icons/Icon_Life.png")];
         let short = ["Str", "Dex", "Int", "Fai", "Arc"];
         match cat {
             'W' => {
@@ -339,12 +339,12 @@ impl ItemData {
                 if let Some(s) = self.spells.get(&raw) {
                     // The spell's school as the deck's Wizard101 school.
                     let k = s.school.as_str();
-                    let school = [("Glintstone", "Icon_SM_Myth"), ("Carian", "Icon_SM_Ice"), ("Crystal", "Icon_SM_Ice"),
-                                  ("Gravity", "Icon_SM_Balance"), ("Night", "Icon_Shadow"), ("Death", "Icon_SM_Death"),
-                                  ("Blood", "Icon_SM_Death"), ("Godskin", "Icon_SM_Death"), ("Fire", "Icon_SM_Fire"),
-                                  ("Magma", "Icon_SM_Fire"), ("Messmer", "Icon_SM_Fire"), ("Golden", "Icon_SM_Life"),
-                                  ("Erdtree", "Icon_SM_Life"), ("Two Fingers", "Icon_SM_Life"), ("Miquella", "Icon_SM_Life"),
-                                  ("Dragon Cult", "Icon_SM_Storm"), ("Dragon Communion", "Icon_SM_Death")]
+                    let school = [("Glintstone", "Icon_Myth"), ("Carian", "Icon_Ice"), ("Crystal", "Icon_Ice"),
+                                  ("Gravity", "Icon_Balance"), ("Night", "Icon_Shadow"), ("Death", "Icon_Death"),
+                                  ("Blood", "Icon_Death"), ("Godskin", "Icon_Death"), ("Fire", "Icon_Fire"),
+                                  ("Magma", "Icon_Fire"), ("Messmer", "Icon_Fire"), ("Golden", "Icon_Life"),
+                                  ("Erdtree", "Icon_Life"), ("Two Fingers", "Icon_Life"), ("Miquella", "Icon_Life"),
+                                  ("Dragon Cult", "Icon_Storm"), ("Dragon Communion", "Icon_Death")]
                         .iter().find(|(key, _)| k.contains(key)).map_or(ICON_ALL.to_string(), |(_, i)| format!("GUI/Icons/{i}.png"));
                     sub.push(stat_row(&s.fp.to_string(), &school, "GUI/Icons/Type_Pip.png", "FP Cost"));
                     sub.push(stat_row(&s.slots.to_string(), "", "GUI/Icons/Type_PowerPips.png", "Memory Slots"));

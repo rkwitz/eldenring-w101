@@ -8,7 +8,7 @@ pub struct Settings {
     pub scale: f32,
     pub debug: bool,
     pub level: bool,
-    /// Wizard101 loading screens on the mod's door warps.
+    /// The Wizard101 loading screen over all of Elden Ring's loading screens and the mod's door warps.
     pub loadscreen: bool,
     /// The loading screen's picture: a PNG or JPEG, relative to the DLL's folder (or absolute).
     pub loadscreen_image: String,
@@ -51,7 +51,7 @@ pub fn save_settings(path: &Path, s: &Settings) -> std::io::Result<()> {
          # left / bottom: extra gap from the screen's bottom-left corner, in Wizard101 pixels\n\
          # scale: 1 = Wizard101's size on a 768-pixel-tall screen\n\
          # level: 0 hides the level number beside the experience bar\n\
-         # loadscreen: 0 turns off the Wizard101 loading screen on door warps\n\
+         # loadscreen: 0 turns off the Wizard101 loading screen (over Elden Ring's loading screens and door warps)\n\
          # loadscreen_image: the loading screen's picture (PNG or JPEG), relative to this folder or absolute\n\
          # bookmap: 0 shows Elden Ring's map through a window in the map page instead of on it\n\
          # debug: 1 logs the raw values once a second\n\

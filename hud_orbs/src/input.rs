@@ -111,6 +111,43 @@ pub fn set_gameplay(gameplay: bool) {
     GAMEPLAY.store(gameplay, Ordering::SeqCst);
 }
 
+/// Forgets every half-finished input after the game window lost or regained focus (alt-tab): buttons whose release
+/// went to another window would otherwise stay held (no click is ever seen again: the book looked frozen), raw input
+/// packet handles get reused, and DirectInput devices can be made anew at old addresses.
+pub fn reset_after_focus_change() {
+    MOUSE_BUTTONS.store(0, Ordering::SeqCst);
+    MOUSE_DX.store(0, Ordering::SeqCst);
+    MOUSE_DY.store(0, Ordering::SeqCst);
+    MOUSE_WHEEL.store(0, Ordering::SeqCst);
+    PRESSED.store(0, Ordering::SeqCst);
+    HELD.store(0, Ordering::SeqCst);
+    for p in &PREVIOUS {
+        p.store(0, Ordering::SeqCst);
+    }
+    INJECT_BACK_UNTIL.store(0, Ordering::SeqCst);
+    if let Ok(mut seen) = RAW_SEEN.lock() {
+        *seen = [0; 8];
+    }
+    if let Ok(mut devices) = DEVICES.lock() {
+        devices.clear();
+    }
+}
+
+/// Whether the foreground window belongs to this process (the game has focus).
+pub fn game_focused() -> bool {
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    unsafe {
+        let window = GetForegroundWindow();
+        if window.is_null() {
+            return false;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(window, &mut pid);
+        pid == GetCurrentProcessId()
+    }
+}
+
 /// DirectInput mouse movement and wheel since the last call, the buttons held now (bit 0 left, bit 1 right), and
 /// whether the game reads a DirectInput mouse at all (recently).
 pub fn take_mouse() -> (i32, i32, i32, u8, bool) {

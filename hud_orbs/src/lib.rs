@@ -115,6 +115,10 @@ struct Orbs {
     perf: Perf,
     logged_size: [f32; 2],
     last_probe_log: Instant,
+    /// Whether the game window had focus last frame.
+    focused: bool,
+    /// The event flag group check is logged once, when the game is up.
+    flag_check_logged: bool,
 }
 
 /// Frame timing written to w101_orbs.log every few seconds, to see what the overlay costs the game.
@@ -173,6 +177,8 @@ impl Orbs {
             perf: Perf::new(),
             logged_size: [0.0, 0.0],
             last_probe_log: Instant::now(),
+            focused: true,
+            flag_check_logged: false,
         }
     }
 
@@ -226,6 +232,15 @@ impl ImguiRenderLoop for Orbs {
     }
 
     fn before_render<'a>(&'a mut self, ctx: &mut imgui::Context, render: &'a mut dyn RenderContext) {
+        // Alt-tab: imgui and the input hooks keep whatever was held when the window went away (hudhook passes no
+        // focus messages to imgui), which left the open book unresponsive. Clear it all on every focus change.
+        let focused = input::game_focused();
+        if focused != self.focused {
+            self.focused = focused;
+            unsafe { imgui::sys::ImGuiIO_AddFocusEvent(ctx.io_mut() as *mut imgui::Io as *mut imgui::sys::ImGuiIO, focused) };
+            input::reset_after_focus_change();
+            self.book.focus_changed(focused);
+        }
         self.book.load_art(render);
         self.book.capture(render, self.settings.bookmap);
         // Elden Ring hides and confines the cursor; the open book needs it.
@@ -258,19 +273,28 @@ impl ImguiRenderLoop for Orbs {
             self.book.draw_markers(ui, &cx);
             self.book.draw_nameplates(ui, &cx);
         }
-        // Polled every frame: the screen goes up on the first frame the door flag is on. The flag is cleared when
-        // the screen starts to fade (or right away when the loading screen is turned off).
-        if game.is_some() && !self.loadscreen.holding() && game::event_flag(loadscreen::DOOR_FLAG) == Some(true) {
+        // Polled every frame: the screen goes up on the first frame the door flag is on, or Elden Ring starts a
+        // loading screen of its own. The flag is cleared when the screen starts to fade (or right away when the
+        // loading screen is turned off).
+        let door = game.is_some() && game::event_flag(loadscreen::DOOR_FLAG) == Some(true);
+        let loading = self.loadscreen.game_loading_started(game::loading_screens());
+        if !self.loadscreen.holding() && (door || loading) {
             if self.settings.loadscreen {
-                self.loadscreen.show();
-            } else {
+                self.loadscreen.show(if door { "door warp flag" } else { "Elden Ring loading screen" });
+            } else if door {
                 game::set_event_flag(loadscreen::DOOR_FLAG, false);
             }
+        }
+        if !self.flag_check_logged && game.is_some() && stats.is_some() {
+            self.flag_check_logged = true;
+            let group = loadscreen::DOOR_FLAG / 1000;
+            tracing::info!("event flags: group {group} (door / quest / warp flags) held: {:?}; loading screens so far: {:?}",
+                           game::flag_group_exists(group), game::loading_screens());
         }
         // Still warping: no game data, faded out, no player, or Elden Ring's own loading screen (its HUD is not
         // in its default state then).
         let busy = game.is_none() || faded > 0.3 || stats.is_none() || !hud;
-        self.loadscreen.draw(ui, &self.book.textures, busy);
+        self.loadscreen.draw(ui, &self.book.textures, busy, stats.is_some());
         self.perf.frame(begin.elapsed().as_secs_f32());
     }
 

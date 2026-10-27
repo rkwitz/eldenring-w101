@@ -66,6 +66,16 @@ impl hudhook::RenderContext for Render {
         if let Some(id) = self.captures[slot.min(1)] {
             return Some(id);
         }
+        if slot == 1 {
+            // A stand-in map screen (PREVIEW_MAP_SCREEN: a full-screen picture, e.g. with Elden Ring's hint bar).
+            if let Some(i) = std::env::var_os("PREVIEW_MAP_SCREEN").and_then(|p| image::open(p).ok()) {
+                let i = i.to_rgba8();
+                let (w, h) = (i.width(), i.height());
+                let id = self.load_texture(i.as_raw(), w, h).ok()?;
+                self.captures[1] = Some(id);
+                return Some(id);
+            }
+        }
         let (w, h) = (480u32, 270u32);
         let image = RgbaImage::from_fn(w, h, |x, y| {
             let (fx, fy) = (x as f32 / w as f32, y as f32 / h as f32);
@@ -226,6 +236,7 @@ fn main() {
         }
         book.preview_show(tab, sub);
         if show == "map" {
+            book.capture(&mut render, true); // the world as it was before the map opened
             book.preview_map();
         }
         if show == "markers" {
