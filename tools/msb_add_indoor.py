@@ -59,10 +59,9 @@ GARDEN = ("G", "AEG030_555_9000", (6.0, 0.0), 90.0, 90.0, -1.0)
 # --door-boxes: tight no-riding boxes on the door triggers themselves (a square DOOR_MARGIN m wider on each side than
 # the trigger sphere, from 1 m under its centre, DOOR_HEIGHT m tall), for door events that wait for the player on foot
 # (emevd.py --bosses --on-foot): he rides right up to the door and is set down in it, then the on-foot short warp
-# takes him through. Round 10 (2026-10-27) uses them: the riding doors' 2003[14] Warp Player is a map load, which
-# showed Elden Ring's loading screen and, after it, the place-name card of the arrival's MapNameOverride box (a
-# positive TextID applies on map load) - Ryan saw "Unicorn Way" again going into the hedge maze. Without the option
-# they are removed (the round-4 5 m boxes knocked him off well before the door).
+# takes him through. Not used since round 8: Ryan asked to ride through the doors and the riding warp works, so the
+# doors keep their 2003[14] map warp (round 10 silences its title card with emevd.welcome_cards instead). Without
+# the option they are removed (the round-4 5 m boxes knocked him off well before the door).
 DOOR_TRIGGERS = [("T2d", "W101_Rattlebones_door"), ("T1d", "W101_Blackhope_door"), ("H4d", "W101_FearOfFire_door"),
                  ("Gd", "W101_Garden_door"), ("Gx", "W101_Garden_exit")]
 REMOVED = [f"W101_NoRide_{k}" for k, _ in DOOR_TRIGGERS]

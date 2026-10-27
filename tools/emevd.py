@@ -152,7 +152,11 @@ RATTLEBONES_DOORS = (  # (event id, trigger region, arrival region[, character t
 )
 
 
-LOAD_SCREEN_FLAG = 1042366900  # set right before every door warp; the HUD overlay shows its load screen and clears it
+LOAD_SCREEN_FLAG = 1042362900  # set right before every door warp; the HUD overlay shows its load screen and clears it
+# Flag block: Elden Ring stores event flags in blocks of 1000 (id / 1000) and only the blocks its own data declares
+# exist; CSFD4VirtualMemoryFlag::set_flag/get_flag look the block up in a map and do nothing if it is missing
+# (eldenring crate cs/event_flag.rs). No vanilla EMEVD uses a per-map x3/x5/x6 sub-block, so the 1042366xxx flags of
+# rounds 6-9 never stuck (round 9: this flag never came on). Everything of ours is now in 1042362xxx.
 STREET_YAW = -27.011917  # AEG030_518_9000 (the street) and every room part are turned by this about y
 ARRIVAL_YAW = {  # arrival region -> its rotation y in m60_42_36_00 (msb_add_room / _garden / _interiors facings):
     # in game the player faces a region's rotation, and the camera yaw of 2008[4] uses the same convention (vanilla
@@ -187,6 +191,13 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS, on_foot=False):
     2026-10-26); 2008[4] SetCameraAngle (pitch, world yaw; as common event 950 after its warp) to look where the
     arrival region faces (ARRIVAL_YAW), away from the door just come through; 2004[77] with ratio 0 to lift the fade
     and the freeze, as 12032859 does; wait ARRIVAL_SETTLE s and restart (1000[4] with 1).
+
+    The riding branch turns the area welcome message off (2012[8] 0) right before its warp, as vanilla does before
+    every warp that must not announce its destination (common events 910 and 915, m10_01 10010020 / 10012502,
+    common_func 98005100; 10012502 turns it back on with 2012[8] 1 before showing its own card). Its map load
+    otherwise shows the arrival's place name - a MapNameOverride box's positive TextID applies on map load - which
+    is why Ryan saw "Unicorn Way" again going into the hedge maze (round 10); the 2003[14] popup argument was
+    already 0, vanilla's "no explicit card" value. welcome_cards arms the message again a few seconds into the map.
 
     Riding (event id + MOUNTED_EVENT_OFFSET): 2004[41] does not move a mounted player (round 6: fade to black, back
     where he was, still riding), and nothing in the EMEVD instruction set dismounts. So the same flag and fade, then
@@ -225,6 +236,7 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS, on_foot=False):
                 _i(1001, 0, "<f", LOAD_SCREEN_LEAD),  # wait for the HUD's screen and the fade
             ]
             if riding:
+                body.append(_i(2012, 8, "<Bxxx", 0))  # area welcome message off, so the load shows no title card
                 body.append(_i(2003, 14, "<BBBBIi", *HOME_MAP, SPAWN_OF[arrival], 0))  # map warp to its spawn point
                 body.append(_i(1001, 0, "<f", MOUNTED_WAIT))
             else:
@@ -414,11 +426,33 @@ def phase_one_only(d, boss=SERAPH, event_id=PHASE_ONE_EVENT):
     return build(e, events)
 
 
+WELCOME_EVENT = 1042362989
+WELCOME_DELAY = 10.0  # seconds into a map before the welcome message is armed again (the card shows in the first few)
+
+
+def welcome_cards(d, event_id=WELCOME_EVENT, delay=WELCOME_DELAY):
+    """Event `event_id` (started from the top of event 0, rest 0): wait `delay` s, then 2012[8] 1 (area welcome
+    message on). The riding doors turn it off before their map warp and the state survives the load (vanilla relies
+    on that in common event 910), so something has to arm it again or no title card would ever show. Waiting past
+    the card's own moment leaves the door's arrival silent while fast travel to the grace, and the card on walking
+    out of the graveyard door (title_on_door_exit, 2007[14], which the same state gates), still work. Rerunning
+    replaces it."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
+    events.append({"id": event_id, "rest": 0, "pars": [], "ins": [
+        _i(1001, 0, "<f", delay),
+        _i(2012, 8, "<Bxxx", 1),
+        _i(1000, 4, "<Bxxx", 0),  # End
+    ]})
+    return build(e, events)
+
+
 def all_bosses(d, on_foot=False):
     """Every door warp (load-screen flag, fade-out warp) and every boss of Unicorn Way: msb_add_boss.py's four."""
     for doors in (RATTLEBONES_DOORS, GARDEN_DOORS, INTERIOR_DOORS):
         d = rattlebones_doors(d, doors, on_foot)
-    d = clear_weather(window_off(d))
+    d = welcome_cards(clear_weather(window_off(d)))
     for event_id, boss, arena, sigil, name, animation, masks in BOSSES:
         d = boss_bar(d, event_id, boss, arena, sigil, name, animation, masks)
     return phase_one_only(boss_setup(d))
@@ -543,8 +577,8 @@ BOOK_WARPS = (  # (event id, event flag the HUD's map page sets, (area, block, r
     # The First Step on Unicorn Way: m60_42_36_00's own SpawnPoint 1042362020 ("NT版スタート座標（初期リスポン位置）",
     # the network test's start, beside the First Step grace 1042361981); the Roundtable Hold as vanilla common event
     # 945 warps there (11100980, 61000).
-    (1042362996, 1042366910, HOME_MAP, 1042362020, 0),
-    (1042362997, 1042366911, (11, 10, 0, 0), 11100980, 61000),
+    (1042362996, 1042362910, HOME_MAP, 1042362020, 0),
+    (1042362997, 1042362911, (11, 10, 0, 0), 11100980, 61000),
 )
 
 

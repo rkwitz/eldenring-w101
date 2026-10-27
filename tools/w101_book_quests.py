@@ -12,17 +12,17 @@ Lines (tab-separated; text has tabs and line breaks replaced by spaces, markup t
   X  slug  key  text            (the quest's dialogue lines in client order)
   D  slug  event  text          (optional: what an NPC says on a talk press, by event: offer, goal<n>, turnin,
                                  underway; the HUD falls back to the quest state without them)
-Only quests with flags (built in the map events) are written. Quest n: flags 1042366000 + 10n (+0 assigned, +1..+6
-goals, +8 ready, +9 complete); talk flags 1042366600.. are set on every talk press (see the quests README).
+Only quests with flags (built in the map events) are written. Quest n: flags 1042362000 + 10n (+0 assigned, +1..+6
+goals, +8 ready, +9 complete); talk flags 1042362600.. are set on every talk press (see the quests README).
 """
 
 import json
 import re
 import sys
 
-TALK_FLAGS = {"private_connelly": 1042366600, "ceren_nightchant": 1042366601, "olivia_dawnwillow": 1042366602,
-              "lady_oriel": 1042366603, "private_oryan": 1042366604}
-CAGE_FLAGS = [1042366540, 1042366541, 1042366542, 1042366543]
+TALK_FLAGS = {"private_connelly": 1042362600, "ceren_nightchant": 1042362601, "olivia_dawnwillow": 1042362602,
+              "lady_oriel": 1042362603, "private_oryan": 1042362604}
+CAGE_FLAGS = [1042362540, 1042362541, 1042362542, 1042362543]
 PLACES = {"street": "Unicorn Way", "hedge_maze": "The Hedge Maze", "T1": "Blackhope Tower", "T2": "The Archives",
           "H1": "Unicorn Way", "H2": "Unicorn Way", "H3": "Unicorn Way", "H4": "The Thief's House"}
 

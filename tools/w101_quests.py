@@ -1,8 +1,14 @@
 """The Unicorn Way quest line as game logic: quests, goals, event flags, entity ids (no Wizard101 text; the client's
 quest text is merged in by slug outside the repo, see /mnt/project-files/unicorn_way_quests).
 
-Event flags (all in the m60_42_36 tile block; 1042366700+ is left alone: the map uses 1042366710, and 1042366900-999
-is reserved for the door / loading-screen flags):
+Event flags (all in the m60_42_36 tile's 1042362xxx flag group; 1042362900-999 is reserved for the door /
+loading-screen flags). The group matters: Elden Ring keeps event flags in blocks of 1000 (flag id / 1000) and only
+the blocks its own data declares exist - CSFD4VirtualMemoryFlag looks the block up in a map and silently does
+nothing when it is missing (eldenring crate, cs/event_flag.rs). Across 51 vanilla EMEVDs the per-map flags only ever
+use the x0xxx, x2xxx, x7xxx, x8xxx and x9xxx sub-blocks, never x3/x5/x6, and this tile's own flags are 1042360000/1,
+1042362732-734, 1042368540 and 1042369205-9416. Rounds 6-9 put ours in 1042366xxx, a block that does not exist, so
+setting them did nothing and reading them always returned off (round 9: the door's load-screen flag never came on).
+They now live in 1042362xxx, clear of 1042362732-734:
   quest n:  QUEST_BASE + 10*n   +0 assigned (stays on), +1..+6 goal i done, +8 ready to turn in (every goal but the
                                 last one done), +9 complete
   counters: kill counts as 4-bit event values (2003[31] / 3[12]), COUNTER_BASE + 4*k
@@ -19,10 +25,10 @@ quest is active). A goal is current when its quest is assigned, it is not done, 
 the one before it) are done.
 """
 
-QUEST_BASE = 1042366000
-COUNTER_BASE = 1042366500
-CAGE_FLAG = 1042366540
-TALK_FLAG = 1042366600
+QUEST_BASE = 1042362000
+COUNTER_BASE = 1042362500
+CAGE_FLAG = 1042362540
+TALK_FLAG = 1042362600
 EVENT_BASE = 1042363800  # our EMEVD events 1042363800..1042363899 (free in this map)
 
 # Characters (MSB entity ids): 5 street mobs per patrol path (round 6: the 10 originals got 4 copies each, msb_more_mobs.py).
@@ -194,7 +200,7 @@ def flag_table():
         quests=quests,
         talk_flags={slug: TALK_FLAG + k for k, (slug, *_r) in enumerate(NPCS)},
         cage_flags=[CAGE_FLAG + c for c in range(len(CAGES))],
-        reserved={"grim_tales": QUEST_BASE + 70, "door_loadscreen": [1042366900, 1042366999]},
+        reserved={"grim_tales": QUEST_BASE + 70, "door_loadscreen": [1042362900, 1042362999]},
         entities=dict(mobs=MOBS, bosses=BOSSES, givers={s: e for s, _f, _p, _r, _m, e in NPCS},
                       cages=[e for _p, e in CAGES], regions=REGION_ENTITY),
         notes="assigned stays on after completion; a quest is in progress when assigned is on and complete is off; "

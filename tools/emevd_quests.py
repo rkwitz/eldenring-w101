@@ -4,8 +4,9 @@ restarting on rest. Running it again replaces them, and it leaves every other ev
 top of other helpers' changes.
 
 Events, in id order (all flags in w101_quests' docstring):
-  talk    one per quest giver: action button TALK_BUTTON on the giver's asset -> set its talk flag, loop. This is
-          what keeps the prompt up; the HUD shows the dialogue for whatever the press changed and clears the flag.
+  (no always-on talk event: round 10, Ryan saw an "Examine" prompt at Private O'Ryan's spot with no quest running.
+          A giver's prompt now exists only while an assign or goal event of theirs is waiting for the press, and
+          each of those events sets the giver's talk flag itself, so the HUD still gets its dialogue cue.)
   assign  quests not handed on by the quest before them: Unicorn Way when the player reaches Connelly's sphere,
           side quests by talking to their giver once their prerequisite flag is on.
   goal    one per goal: END if done; WAIT for the quest's assigned flag and the goals before it; then wait for the
@@ -19,8 +20,10 @@ Events, in id order (all flags in w101_quests' docstring):
   cage    one per Bone Cage: disabled (not drawn, no collision) at load; if already opened, END; else wait for
           Finding Out Why (the cage goal has no goals before it, so it is current from the assignment until every
           cage is open), enable it, wait for the press, set the cage flag, disable it again (the fairy is free).
-Waiting on the flags first and on the button press last means a giver's quest prompt only exists while that event
-can use it; the talk event's prompt is always there.
+Waiting on the flags first and on the button press last means a giver's prompt only exists while that event can
+use it: before the quest is assigned there is no prompt at all, and a giver who only matters inside a quest (Private
+O'Ryan) is silent until that goal is current. Side-quest givers are talkable as soon as their prerequisite flag is
+on, which is what assigns the quest.
 
 Usage: python emevd_quests.py in.emevd[.dcx] out.emevd[.dcx]   (DFLT DCX in -> DFLT DCX out)
 """
@@ -86,7 +89,7 @@ def asset_enabled(entity, state):
     return _i(2005, 3, "<IBxxx", entity, state)
 
 
-END, RESTART = _i(1000, 4, "<Bxxx", 0), _i(1000, 4, "<Bxxx", 1)
+END = _i(1000, 4, "<Bxxx", 0)
 
 
 def assign(slug):
@@ -109,9 +112,6 @@ def npc_entity(slug):
 def quest_events():
     """[(event id, instructions)] of every quest event, in id order."""
     events = []
-    for slug, *_rest in Q.NPCS:  # talk
-        events.append([if_button(0, Q.TALK_BUTTON, npc_entity(slug)), set_flag(Q.TALK_FLAG + Q.NPC_INDEX[slug]),
-                       RESTART])
     for q in Q.QUESTS:  # assign
         if not q["assign"]:
             continue
@@ -121,6 +121,8 @@ def quest_events():
             body.append(wait_flag(prereq_flag(prereq)))
         body.append(if_area(0, 1, Q.REGION_ENTITY[target]) if how == "goto" else
                     if_button(0, Q.TALK_BUTTON, npc_entity(target)))
+        if how != "goto":
+            body.append(set_flag(Q.TALK_FLAG + Q.NPC_INDEX[target]))  # the HUD's dialogue cue
         events.append(body + assign(q["slug"]) + [END])
     counters = Q.counters()
     kills = []  # (instructions, parameters, enemies)
@@ -132,6 +134,7 @@ def quest_events():
             body = [end_if_flag(flag)] + current
             if g["type"] == "talk":
                 body.append(if_button(0, Q.TALK_BUTTON, npc_entity(g["target"])))
+                body.append(set_flag(Q.TALK_FLAG + Q.NPC_INDEX[g["target"]]))  # the HUD's dialogue cue
             elif g["type"] == "goto":
                 body.append(if_area(0, 1, Q.REGION_ENTITY[g["target"]]))
             elif g["type"] == "defeat":
