@@ -47,7 +47,8 @@ import tpf  # noqa: E402
 for module in (dds_color, flver_fix, flver_build, flver_textures, hkx_tag, hkx_collision, tpf):
     importlib.reload(module)
 
-SATURATION, BRIGHTNESS = 1.0, 1.0  # true Wizard101 colours: textures are now sRGB (tpf.build_tpf); the old 1.3, 1.1 made up for them being read as linear
+SATURATION, BRIGHTNESS = 1.4, 1.0  # sRGB textures (tpf.build_tpf) at 1.4x saturation: Ryan, 2026-10-27, true colours
+# looked right but "crank up the saturation" (the old 1.3, 1.1 made up for textures read as linear)
 # The glowing window: the emissive material has no strength setting, and Elden Ring's exposure and bloom turn emitted
 # light near full brightness white (Ryan's test 2026-10-23: "the light is white, it should be blue"). The texture is
 # darkened to a quarter and saturated instead, which keeps W101's pale blue panes (rendered comparison, 0.22-0.25).

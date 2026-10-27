@@ -46,13 +46,21 @@ for module in (dds_color, flver_fix, flver_build, flver_textures, hkx_tag, hkx_c
 ASSET = "aeg030_519"
 flver_textures.AET = ASSET.replace("aeg", "AET").upper()
 flver_textures.FLAT_NORMAL = f"{flver_textures.AET}_n"
-SATURATION, BRIGHTNESS = 1.0, 1.0  # true Wizard101 colours: textures are now sRGB (tpf.build_tpf); the old 1.3, 1.1 made up for them being read as linear
+SATURATION, BRIGHTNESS = 1.4, 1.0  # sRGB textures (tpf.build_tpf) at 1.4x saturation: Ryan, 2026-10-27, true colours
+# looked right but "crank up the saturation" (the old 1.3, 1.1 made up for textures read as linear)
 
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset"
 GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset")
 STREET_GEOMBND = PROJECT / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx.before_textures"  # single-mesh FLVER template
 VANILLA = GAME / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx"  # its plain lit materials
 GAME_COLLISION = GAME / "aeg" / "aeg030" / f"{ASSET}_l.geomhkxbnd.dcx"
+# Wizard101 draws its rooms unlit (baked colours), and underground Elden Ring gives them almost no light: Lady
+# Blackhope's room was "really dark", the walls unlit (2026-10-27). UNLIT_GLOW > 0 draws every opaque texture with
+# the emissive material (flver_textures.emissive_material: black albedo, the texture as light), like the sky:
+# 0.0446 = the sky's SKY_GLOW 0.0743 x SKY_BRIGHTNESS 0.6, so walls and sky keep Wizard101's brightness ratio at the
+# exposure Ryan picked for the sky. Raise it if still dark, lower if glaring; 0 = lit by Elden Ring's lights again.
+UNLIT_GLOW = 0.0446
+EMISSIVE_VANILLA = GAME.parent / flver_textures.EMISSIVE_ASSET  # the vanilla emissive material we copy
 AET_TEMPLATE = GAME / "aet" / "aet030" / "aet030_000.tpf.dcx"  # for its DCX type
 GEOMBND = PROJECT / "aeg" / "aeg030" / f"{ASSET}.geombnd.dcx"
 COLLISION = PROJECT / "aeg" / "aeg030" / GAME_COLLISION.name
@@ -127,7 +135,10 @@ def build_room():
     alpha = {i for i, data in enumerate(dds) if tpf.has_alpha(data)}  # only the jars' textures
     face_textures = [stems.index(texture_of_material[m]) if m in texture_of_material and not LIGHT_SHAFTS.search(name)
                      else None for m, name in materials]
-    flver = flver_textures.split_materials(single, vanilla, face_textures, stems, alpha,
+    opaque = None
+    if UNLIT_GLOW > 0:
+        opaque = flver_textures.emissive_material(vanilla, flver_fix.flver_in_binder(EMISSIVE_VANILLA), UNLIT_GLOW)
+    flver = flver_textures.split_materials(single, vanilla, face_textures, stems, alpha, opaque=opaque,
                                            blend_material=flver_textures.blend_material(vanilla))
 
     binder = Binder.from_path(STREET_GEOMBND)
@@ -141,6 +152,7 @@ def build_room():
 
     textures = [(flver_textures.texture_name(i), data) for i, data in enumerate(dds)]
     textures.append((flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, 64)))
+    textures.append((flver_textures.black_name(), tpf.solid_dds(0, 0, 0)))  # the emissive material's albedo
     _, dcx_type = decompress(AET_TEMPLATE)
     packed = compress(tpf.build_tpf(textures), dcx_type)
     for path in TEXTURES:

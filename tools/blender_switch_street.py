@@ -38,7 +38,7 @@ for module in (dds_color, flver_fix, flver_build, flver_floor, flver_textures, h
 STYLE = "classic"  # "classic" or "hd"
 # W101's colours look muted under Elden Ring's lighting: the classic textures are made this much more saturated and
 # brighter (1.0 and 1.0 keep them as they are). See dds_color.py.
-SATURATION = 1.0  # true Wizard101 colours: textures are now sRGB (tpf.build_tpf); the old 1.3, 1.1 made up for them being read as linear
+SATURATION = 1.4  # sRGB textures (tpf.build_tpf) at 1.4x saturation: Ryan, 2026-10-27, wanted more than the true colours
 BRIGHTNESS = 1.0
 
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset"

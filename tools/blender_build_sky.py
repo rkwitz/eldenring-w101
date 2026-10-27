@@ -97,12 +97,17 @@ SKY_CALIBRATE = False  # done 2026-10-26: slice 6-7
 CALIBRATION_GLOW = 0.5
 CALIBRATION_SLICES = 8
 SKY_SATURATION = 1.3  # pushes the colours away from grey (1.0 = as graded); a bit above the reference for the tone map
-# Ryan's Wizard101 screenshot of the Unicorn Way sky (2026-10-25), as mean colour by elevation (the screenshot's top
-# taken as 35 degrees up, its bottom as the horizon): lavender above, pink-white wisps, pale blue at the horizon. The
-# bake is recoloured to it (sky_bake.grade) keeping SKY_DETAIL of its swirls; None keeps the bake's own colours.
-SKY_TARGET = [(-30, (161, 183, 245)), (0, (161, 183, 245)), (3.5, (185, 193, 252)), (7, (220, 204, 254)),
-              (10.5, (238, 201, 254)), (14, (240, 190, 255)), (17.5, (235, 180, 253)), (21, (223, 166, 249)),
-              (24.5, (215, 155, 242)), (28, (208, 151, 237)), (35, (206, 151, 236)), (90, (206, 151, 236))]
+# Ryan's Wizard101 screenshot of the Unicorn Way sky (2026-10-25), as mean colour by elevation: lavender above,
+# pink-white wisps, pale blue at the bottom. The bake is recoloured to it (sky_bake.grade) keeping SKY_DETAIL of its
+# swirls; None keeps the bake's own colours. Elevations are Wizard101's (the dome shows W101 15 deg at 34 deg up, 28 at
+# 71, see sky_bake.STRETCH). 2026-10-25 took the screenshot's bottom as the horizon, which left blue only below 3.5
+# deg W101 (dome 3.5): hidden behind the street's skyline (20-40 deg up from the street), so Ryan saw all purple
+# (2026-10-27). The screenshot's bottom is in fact just above the skyline: its 0..35 now spans W101 15..28 (dome
+# 34..71 deg), blue below, as Wizard101's own texture is (its blue band reaches ~15 deg).
+SKY_TARGET = [(-30, (150, 178, 245)), (8, (155, 180, 245)), (15.0, (161, 183, 245)), (16.3, (185, 193, 252)),
+              (17.6, (220, 204, 254)), (18.9, (238, 201, 254)), (20.2, (240, 190, 255)), (21.5, (235, 180, 253)),
+              (22.8, (223, 166, 249)), (24.1, (215, 155, 242)), (25.4, (208, 151, 237)), (28.0, (206, 151, 236)),
+              (90, (206, 151, 236))]
 SKY_DETAIL = 1.2  # 0.5 (2026-10-25) flattened the swirls; 1.0 = the bake's own swirls and clouds, above = stronger
 # Lighting for the whole overworld (gparam_fog.flat_lighting): True = no sun, no shadows, ambient light of intensity
 # AMBIENT from every side (raise it if everything is too dark, lower it if washed out; vanilla daylight sun is about
@@ -111,8 +116,8 @@ FLAT_LIGHTING = True
 # 2026-10-26: the Wizard101 textures are now sRGB at their true colours (tpf.build_tpf; before they were read as
 # linear with a 1.3/1.1 boost), which decodes about 2.5x darker on average (street 2.5, room 2.6, garden 2.25,
 # interiors 2.5), so both lights are 2.5x what they were (1.5, 0.8) to keep the zone as bright as Ryan last saw it.
-AMBIENT = 3.75  # 0.5 looked very dark (2026-10-23), 0.8 still "like lighting is off" (2026-10-25)
-OVERHEAD = 2.0  # a soft, shadowless white light straight down (directional light 1), 0 = none
+AMBIENT = 3.3  # 3.75 "a little too bright" (2026-10-27); 0.5 looked very dark (2026-10-23), 0.8 still "like lighting is off" (2026-10-25)
+OVERHEAD = 1.75  # 2.0 with AMBIENT 3.75. A soft, shadowless white light straight down (directional light 1), 0 = none
 # Elden Ring's eye adaptation (auto exposure) re-exposes the screen by what fills the view: with a big glowing sky it
 # darkened everything, and the same glow looked different by where you looked. FIXED_EXPOSURE turns it off in every
 # file written (the tone map keeps each light set's own ToneMap-Exposure, as vanilla default.gparam does). NO_BLOOM
