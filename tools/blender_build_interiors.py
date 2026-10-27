@@ -52,7 +52,8 @@ AET_TEMPLATE = GAME / "aet" / "aet030" / "aet030_000.tpf.dcx"  # for its DCX typ
 # the emissive material (flver_textures.emissive_material: black albedo, the texture as light), like the sky:
 # 0.0446 = the sky's SKY_GLOW 0.0743 x SKY_BRIGHTNESS 0.6, so walls and sky keep Wizard101's brightness ratio at the
 # exposure Ryan picked for the sky. Raise it if still dark, lower if glaring; 0 = lit by Elden Ring's lights again.
-UNLIT_GLOW = 0.0446
+# 2026-10-27 round 9 "map still too bright": 0.035, down ~21% with the world lights (blender_build_sky AMBIENT/OVERHEAD).
+UNLIT_GLOW = 0.035
 EMISSIVE_VANILLA = GAME.parent / flver_textures.EMISSIVE_ASSET  # the vanilla emissive material we copy
 HOUSE_OBJ = ROOT / "reference" / "w101" / "converted_clubhouse_hd" / "WC_Unicorn_H4_ClubHouse.obj"
 

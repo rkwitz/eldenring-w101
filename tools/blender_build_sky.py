@@ -104,9 +104,11 @@ SKY_SATURATION = 1.3  # pushes the colours away from grey (1.0 = as graded); a b
 # deg W101 (dome 3.5): hidden behind the street's skyline (20-40 deg up from the street), so Ryan saw all purple
 # (2026-10-27). The screenshot's bottom is in fact just above the skyline: its 0..35 now spans W101 15..28 (dome
 # 34..71 deg), blue below, as Wizard101's own texture is (its blue band reaches ~15 deg).
-SKY_TARGET = [(-30, (150, 178, 245)), (8, (155, 180, 245)), (15.0, (161, 183, 245)), (16.3, (185, 193, 252)),
-              (17.6, (220, 204, 254)), (18.9, (238, 201, 254)), (20.2, (240, 190, 255)), (21.5, (235, 180, 253)),
-              (22.8, (223, 166, 249)), (24.1, (215, 155, 242)), (25.4, (208, 151, 237)), (28.0, (206, 151, 236)),
+# 2026-10-27 round 9: "moved the sky a little too high", wants just a little blue: shifted 5 deg down, 0..35 now spans
+# W101 10..23 (dome 19.5..55 deg), blue fading out by W101 11.3 (dome 23), just above the lowest skyline.
+SKY_TARGET = [(-30, (150, 178, 245)), (3, (155, 180, 245)), (10.0, (161, 183, 245)), (11.3, (185, 193, 252)),
+              (12.6, (220, 204, 254)), (13.9, (238, 201, 254)), (15.2, (240, 190, 255)), (16.5, (235, 180, 253)),
+              (17.8, (223, 166, 249)), (19.1, (215, 155, 242)), (20.4, (208, 151, 237)), (23.0, (206, 151, 236)),
               (90, (206, 151, 236))]
 SKY_DETAIL = 1.2  # 0.5 (2026-10-25) flattened the swirls; 1.0 = the bake's own swirls and clouds, above = stronger
 # Lighting for the whole overworld (gparam_fog.flat_lighting): True = no sun, no shadows, ambient light of intensity
@@ -116,8 +118,8 @@ FLAT_LIGHTING = True
 # 2026-10-26: the Wizard101 textures are now sRGB at their true colours (tpf.build_tpf; before they were read as
 # linear with a 1.3/1.1 boost), which decodes about 2.5x darker on average (street 2.5, room 2.6, garden 2.25,
 # interiors 2.5), so both lights are 2.5x what they were (1.5, 0.8) to keep the zone as bright as Ryan last saw it.
-AMBIENT = 3.3  # 3.75 "a little too bright" (2026-10-27); 0.5 looked very dark (2026-10-23), 0.8 still "like lighting is off" (2026-10-25)
-OVERHEAD = 1.75  # 2.0 with AMBIENT 3.75. A soft, shadowless white light straight down (directional light 1), 0 = none
+AMBIENT = 2.6  # 3.3 "still too bright" (2026-10-27 round 9, ~21% down); 3.75 "a little too bright" (2026-10-27); 0.5 looked very dark (2026-10-23), 0.8 still "like lighting is off" (2026-10-25)
+OVERHEAD = 1.4  # 1.75 with AMBIENT 3.3, 2.0 with AMBIENT 3.75. A soft, shadowless white light straight down (directional light 1), 0 = none
 # Elden Ring's eye adaptation (auto exposure) re-exposes the screen by what fills the view: with a big glowing sky it
 # darkened everything, and the same glow looked different by where you looked. FIXED_EXPOSURE turns it off in every
 # file written (the tone map keeps each light set's own ToneMap-Exposure, as vanilla default.gparam does). NO_BLOOM
