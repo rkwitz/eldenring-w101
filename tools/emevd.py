@@ -288,17 +288,18 @@ def garden_doors(d):
     return rattlebones_doors(d, GARDEN_DOORS)
 
 
-INTERIOR_DOORS = (  # msb_add_interiors.py's regions: the other boss interiors, empty for now
+INTERIOR_DOORS = (  # msb_add_interiors.py's regions: the other boss interiors (round 9: Blackhope's exit locked)
     (1042362816, 1042362816, 1042362817),  # Lady Blackhope's tower door (T1) -> into her room
-    (1042362817, 1042362818, 1042362819),  # her room's door -> back on Unicorn Way
+    (1042362817, 1042362818, 1042362819, 1042360851),  # her room's door -> back on Unicorn Way, once she is dead
     (1042362818, 1042362820, 1042362821),  # Fear of Fire's house door (H4) -> into the clubhouse
     (1042362819, 1042362822, 1042362823),  # the clubhouse door -> back on Unicorn Way
 )
 
 
 def interior_doors(d):
-    """Door warps of Lady Blackhope's tower and Fear of Fire's house, events like rattlebones_doors (no boss lock yet;
-    add the boss's entity id as a 4th entry once one is placed). Rerunning replaces them."""
+    """Door warps of Lady Blackhope's tower and Fear of Fire's house, events like rattlebones_doors. Blackhope's exit
+    has her entity as 4th entry (Ryan, round 9: locked until she is dead, like Rattlebones); Fear of Fire's has none
+    yet. Rerunning replaces them."""
     return rattlebones_doors(d, INTERIOR_DOORS)
 
 

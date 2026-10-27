@@ -3,12 +3,13 @@ see emevd.boss_bar and er_text.py --npc-names):
 
   W101 boss       room (asset part, placed by)                 Elden Ring stand-in        Think / NpcParam
   Rattlebones     tower T2 (AEG030_519_9000, msb_add_room)     Giant Skeleton Torso c4960 49600068 / 49600168
-  Lady Blackhope  tower T1 (AEG030_519_9001, msb_add_interiors) Nox Swordstress c3300      33000900 / 33000940
+  Lady Blackhope  tower T1 (AEG030_519_9001, msb_add_interiors) Nox Swordstress c3300      33000000 / 33000062
   Fear of Fire    house H4 (AEG030_557_9000, msb_add_interiors) Mad Pumpkin Head c4340     43400900 / 43400910
   Seraph          hedge maze (AEG030_555_9000, msb_add_garden)  Malenia c2120              21200000 / 21200056
 
-The rows are the ones vanilla maps place: Nox Swordstress + Nox Monk boss duo in m60_49_39_00 (the Swordstress
-alone here), Mad Pumpkin Head boss row from the enemy shortlist (Smithbox names "Mad Pumpkin Head (Boss)"), Malenia's
+The rows are the ones vanilla maps place: Nox Swordstress as m12_01_00_00 places c3300_9001/9002 and 9033/9034 (entity
+0 or plain 90005250 events: shown with no event at all; round 9, 2026-10-27: with the Sellia boss-duo rows 33000900 /
+33000940 of m60_49_39_00 her bar showed but she was nowhere in the room, as Rattlebones with rows no map places), Mad Pumpkin Head boss row from the enemy shortlist (Smithbox names "Mad Pumpkin Head (Boss)"), Malenia's
 phase-1 character c2120_9000 of m15_00_00_00 (her phase 2 is the same character, switched by her arena event when
 her HP hits 1 while immortal; without that event she simply dies, and emevd.phase_one_only kills her at 1 HP in case
 the row keeps her alive), and the Giant Skeleton Torsos of Mohgwyn Palace (m12_05_00_00). Rattlebones first used
@@ -47,7 +48,7 @@ from msb_floor import _list, _set_name, entry_name, find, read_msb, transform, w
 BOSSES = [
     ("Rattlebones", "c4960_9000", 49600068, 49600168, 1042360850, "AEG030_519_9000", (0.0, 0.0, -0.45), 180.0,
      (0.0, 4.0, 0.0), 13.0, (1042362808, 9208), (1042362809, 9209)),
-    ("Blackhope", "c3300_9000", 33000900, 33000940, 1042360851, "AEG030_519_9001", (0.0, 0.0, -0.45), 180.0,
+    ("Blackhope", "c3300_9000", 33000000, 33000062, 1042360851, "AEG030_519_9001", (0.0, 0.0, -0.45), 180.0,
      (0.0, 4.0, 0.0), 13.0, (1042362824, 9218), (1042362825, 9219)),
     # W101 sigil (27.8, -397.2) of the clubhouse; the arrival is at +z
     ("FearOfFire", "c4340_9000", 43400900, 43400910, 1042360852, "AEG030_557_9000", (0.278, 0.0, -3.972), 0.0,

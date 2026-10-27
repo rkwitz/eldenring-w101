@@ -16,6 +16,12 @@ WalkRouteIndex moves). spread_routes does this for copies already placed, too.
 Insertion keeps the map valid as msb_add_mobs.insert_enemy does (end of the enemy block, every later part index
 remapped). Running it on a map that already has the copies does nothing (copies are found by entity id).
 
+Routes stay inside one map tile (2026-10-27, round 9: the five Lost Souls of c4180_9001's route, in the side street at
+the tile seam x = -128 of m60_42_36_00, stood in a heap: an ER enemy only paths on the navmesh of one tile, and vanilla
+meshes have no links across tile borders, so all five walked to the seam and stopped there). off_seams moves every
+patrol point of our mobs' routes that lies outside the tile most of its route is in, or within SEAM_MARGIN of that
+tile's border, back inside by SEAM_MARGIN, and our mobs standing outside it with them.
+
 Usage: python msb_more_mobs.py map.msb.dcx out.msb.dcx
 """
 
@@ -34,6 +40,8 @@ PER_ROUTE = 5
 FIRST_MOBS = list(range(1042360860, 1042360870))
 FIRST_NEW_ENTITY = 1042360870  # ..909 (40 copies); msb_add_boss uses 850-853, the grace helpers 950-951
 PATROL_EVENT = 20
+TILE = 256.0  # m60 tile size; m60_42_36_00 covers -128..128 in x and z, its neighbours are 256 m on
+SEAM_MARGIN = 3.0  # metres between a patrol point and its tile's border
 
 
 def route_points(lists, route):
@@ -91,6 +99,7 @@ def more_mobs(raw, per_route=PER_ROUTE):
                           f"point {k} of {len(points)} at {tuple(round(c, 1) for c in here)}")
         report.append(f"{entry_name(mob)} ({mob_entity}) route {route}: + {ids}")
     report += spread_routes(lists)
+    report += off_seams(lists)
     count_users(lists)
     check_grouped(lists)
     _check_type_indices(_list(lists, "PARTS_PARAM_ST").entries)
@@ -138,6 +147,51 @@ def spread_routes(lists):
         struct.pack_into("<h", e, td + WALK_ROUTE, new_index)
         parts[k] = bytes(e)
         report.append(f"{entry_name(e)}: own route {new_index} (route {route} from point {start})")
+    return report
+
+
+def _tile(x, z):
+    return math.floor((x + TILE / 2) / TILE), math.floor((z + TILE / 2) / TILE)
+
+
+def _inside(value, tile, margin=SEAM_MARGIN):
+    low = tile * TILE - TILE / 2 + margin
+    return min(max(value, low), low + TILE - 2 * margin)
+
+
+def off_seams(lists, margin=SEAM_MARGIN):
+    """Keep every patrol route of our mobs (FIRST_MOBS and their copies) and the mobs on it inside one tile, `margin`
+    m from its borders (see the module doc). Returns report lines."""
+    parts = _list(lists, "PARTS_PARAM_ST").entries
+    events = [e for e in _list(lists, "EVENT_PARAM_ST").entries if u32(e, 0x0C) == PATROL_EVENT]
+    regions = _list(lists, "POINT_PARAM_ST").entries
+    ours = set(FIRST_MOBS) | set(range(FIRST_NEW_ENTITY, FIRST_NEW_ENTITY + len(FIRST_MOBS) * (PER_ROUTE - 1)))
+    report, home = [], {}
+    for k, e in enumerate(parts):
+        if u32(e, 0x0C) != ENEMY or u32(e, q(e, 0x60)) not in ours:
+            continue
+        route = struct.unpack_from("<h", e, q(e, 0x68) + WALK_ROUTE)[0]
+        if route < 0:
+            continue
+        points = [i for i in struct.unpack_from("<64h", events[route], q(events[route], 0x20) + 16) if i >= 0]
+        tiles = [_tile(*struct.unpack_from("<f4xf", regions[i], 0x14)) for i in points]
+        tile = max(set(tiles), key=tiles.count)
+        for i in points:
+            x, y, z = struct.unpack_from("<3f", regions[i], 0x14)
+            nx, nz = _inside(x, tile[0], margin), _inside(z, tile[1], margin)
+            if (nx, nz) != (x, z):
+                r = bytearray(regions[i])
+                struct.pack_into("<3f", r, 0x14, nx, y, nz)
+                regions[i] = bytes(r)
+                report.append(f"patrol point {entry_name(r)}: ({x:.1f}, {z:.1f}) -> ({nx:.1f}, {nz:.1f}), inside tile "
+                              f"{tile} (route {entry_name(events[route])})")
+        x, y, z = struct.unpack_from("<3f", e, 0x20)
+        nx, nz = _inside(x, tile[0], margin), _inside(z, tile[1], margin)
+        if (nx, nz) != (x, z):
+            e = bytearray(e)
+            struct.pack_into("<3f", e, 0x20, nx, y, nz)
+            parts[k] = bytes(e)
+            report.append(f"{entry_name(e)}: ({x:.1f}, {z:.1f}) -> ({nx:.1f}, {nz:.1f})")
     return report
 
 

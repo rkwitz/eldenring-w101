@@ -16,7 +16,15 @@ door_trigger then turns UnicornWay_name_enter into a small Other-type trigger bo
 1042362700) just outside the door, which event 1042362991 (emevd.title_on_door_exit) uses to show the card on walking
 out: in game the override box showed the card after a warp/load but not when walking out of the door.
 
-Usage: python msb_name_region.py in.msb.dcx out.msb.dcx   (DFLT DCX as Smithbox saves, or an uncompressed .msb)
+extra_boxes (--extra; 2026-10-27, round 9: walking into the hedge maze showed "Limgrave") adds more PlaceName 610900
+boxes of the same kind, W101_name_<place>, over the places the door warps lead to outside the street box: the garden
+(maze ~80 m across, a square EXTRA_GARDEN m box round the garden asset, turned like it, from GARDEN_BELOW m under its
+floor) and the three boss rooms 60 m under the street (a square box round each room's arena region). The name then
+never changes going through a door, so no title card shows (the street box stays as it is: lowering it would reach
+the Stranded Graveyard under the exit door). Rerunning moves the existing boxes.
+
+Usage: python msb_name_region.py in.msb.dcx out.msb.dcx [--extra]   (DFLT DCX as Smithbox saves, or an uncompressed
+.msb; --extra only adds/moves the W101_name_* boxes, leaving the street box and the door trigger alone)
 """
 import math
 import struct
@@ -99,15 +107,72 @@ def door_box(lists, door=DOOR, text_id=TEXT_ID):
     return ours
 
 
+GARDEN_PART = "AEG030_555_9000"  # msb_add_garden.GARDEN
+EXTRA_GARDEN, GARDEN_BELOW, GARDEN_HEIGHT = 130.0, 20.0, 120.0
+# (box name, region id, arena region name (msb_add_boss), margin round the arena sphere, height); rooms floor at y 34
+EXTRA_ROOMS = (("W101_name_T2", 9256, "W101_Rattlebones_arena", 8.0),
+               ("W101_name_T1", 9257, "W101_Blackhope_arena", 8.0),
+               ("W101_name_H4", 9258, "W101_FearOfFire_arena", 8.0))
+EXTRA_GARDEN_NAME, EXTRA_GARDEN_ID = "W101_name_maze", 9255
+ROOM_BELOW, ROOM_HEIGHT = 10.0, 40.0  # box from 10 m under the arena centre, 40 m tall
+
+
+def extra_boxes(lists, text_id=TEXT_ID):
+    """Add (or move) the W101_name_* MapNameOverride boxes (see the module doc). Returns their names."""
+    from msb_add_indoor import insert_region
+    from msb_floor import _set_name
+    regions = _list(lists, "POINT_PARAM_ST").entries
+    parts = _list(lists, "PARTS_PARAM_ST").entries
+    template = next(e for e in regions if entry_name(e).startswith(PREFIX)
+                    and struct.unpack_from("<I", e, 0x08)[0] == MAP_NAME_OVERRIDE)
+    garden = next(e for e in parts if entry_name(e) == GARDEN_PART)
+    (gx, gy, gz), gry = struct.unpack_from("<3f", garden, 0x20), struct.unpack_from("<f", garden, 0x30)[0]
+    boxes = [(EXTRA_GARDEN_NAME, EXTRA_GARDEN_ID, (gx, gy - GARDEN_BELOW, gz), gry,
+              (EXTRA_GARDEN, EXTRA_GARDEN, GARDEN_HEIGHT))]
+    for name, region_id, arena, margin in EXTRA_ROOMS:
+        a = next(e for e in regions if entry_name(e) == arena)
+        (ax, ay, az), ary = struct.unpack_from("<3f", a, 0x14), struct.unpack_from("<f", a, 0x24)[0]
+        radius = struct.unpack_from("<f", a, struct.unpack_from("<q", a, 0x48)[0])[0]
+        side = 2 * (radius + margin)
+        boxes.append((name, region_id, (ax, ay - ROOM_BELOW, az), ary, (side, side, ROOM_HEIGHT)))
+    for name, region_id, centre, ry, size in boxes:
+        regions = _list(lists, "POINT_PARAM_ST").entries
+        k = next((k for k, e in enumerate(regions) if entry_name(e) == name), None)
+        e = bytearray(template if k is None else regions[k])
+        if k is None:
+            _set_name(e, name)
+            index = sum(struct.unpack_from("<I", r, 0x08)[0] == MAP_NAME_OVERRIDE for r in regions)
+            struct.pack_into("<i", e, 0x0C, index)
+            struct.pack_into("<i", e, 0x2C, region_id)
+            assert region_id not in {struct.unpack_from("<i", r, 0x2C)[0] for r in regions}, f"region id {region_id}"
+        struct.pack_into("<3f", e, 0x14, *centre)
+        struct.pack_into("<3f", e, 0x20, 0.0, ry, 0.0)
+        struct.pack_into("<3f", e, struct.unpack_from("<q", e, 0x48)[0], *size)
+        struct.pack_into("<i", e, struct.unpack_from("<q", e, 0x58)[0], text_id)
+        if k is None:
+            k = insert_region(lists, bytes(e), MAP_NAME_OVERRIDE)
+        else:
+            regions[k] = bytes(e)
+        print(f"{name} (region {k}, id {region_id}): bottom centre {tuple(round(v, 2) for v in centre)} rot {ry:.2f} "
+              f"box {tuple(round(v, 1) for v in size)} text {text_id}")
+    return [b[0] for b in boxes]
+
+
 def main():
+    extra = "--extra" in sys.argv
+    if extra:
+        sys.argv.remove("--extra")
     src, dst = sys.argv[1], sys.argv[2]
     data = open(src, "rb").read()
     dcx = data[:4] == b"DCX\0"
     raw = zlib.decompress(data[0x4C:]) if dcx else data
     header, lists = read_msb(raw)
     assert write_msb(header, lists) == raw, "map does not round-trip"
-    door_box(lists)
-    door_trigger(lists)
+    if extra:
+        extra_boxes(lists)
+    else:
+        door_box(lists)
+        door_trigger(lists)
     out = write_msb(header, lists)
     if dcx:
         packed = zlib.compress(out, 9)
