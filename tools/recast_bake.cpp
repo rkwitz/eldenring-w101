@@ -1,7 +1,8 @@
 // Bake a Recast polygon mesh from a triangle soup, for tools/er_navmesh.py (stand-alone; Recast is zlib-licensed).
 //
 // Input:  float32 triangle soup (x y z per vertex, 3 vertices per triangle, Y up).
-// Output: text: "v x y z" per vertex (world units), "p n i0 .. in-1" per convex polygon.
+// Output: text: "v x y z" per vertex (world units), "p n i0 .. in-1" per convex polygon, then its detail mesh:
+//         "d n x y z .." (the polygon's vertices first, then interior samples) and "t a b c" per detail triangle.
 // Build:  g++ -O2 -I<recast>/Recast/Include recast_bake.cpp <recast>/Recast/Source/*.cpp -o recast_bake
 // Usage:  recast_bake in.bin out.txt cell_size cell_height agent_height agent_radius agent_climb max_slope_deg
 //                     [max_verts_per_poly=6] [min_region_area=8] [merge_region_area=20] [max_edge_len_m=12]
@@ -84,6 +85,11 @@ int main(int argc, char** argv) {
         for (unsigned int j = 0; j < m[1]; j++) {
             const float* dv = &dm->verts[(m[0] + j) * 3];
             fprintf(o, " %.3f %.3f %.3f", dv[0], dv[1], dv[2]);
+        }
+        // "t" lines: this polygon's detail triangles, as indices into its "d" vertices
+        for (unsigned int j = 0; j < m[3]; j++) {
+            const unsigned char* t = &dm->tris[(m[2] + j) * 4];
+            fprintf(o, "\nt %d %d %d", t[0], t[1], t[2]);
         }
         fprintf(o, "\n");
     }

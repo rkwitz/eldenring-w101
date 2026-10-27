@@ -154,13 +154,18 @@ def _normal(p):
     return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
 
 
-def bake(tris, recast, agent=AGENT):
+def bake(tris, recast, agent=AGENT, detail=True):
+    """(vertices, convex polygons) of the walkable surface. With `detail`, the faces come from Recast's detail mesh
+    (triangles that follow the ground: Recast's own polygons are flat 2D outlines whose corner heights can be 1 m off
+    over steps and sunken plazas, which left enemies standing below their faces, 2026-10-27), welded and merged back
+    into near-planar convex polygons by merge_planar."""
     with tempfile.TemporaryDirectory() as tmp:
         soup, out = Path(tmp, "soup.bin"), Path(tmp, "polys.txt")
         soup.write_bytes(b"".join(struct.pack("<9f", *a, *b, *c) for a, b, c in tris))
         args = [agent[k] for k in ("cell", "cell_height", "height", "radius", "climb", "slope")]
         subprocess.run([recast, str(soup), str(out)] + [str(a) for a in args], check=True)
         verts, polys, heights = [], [], defaultdict(list)
+        dverts, dtris, weld = [], [], {}
         for line in out.read_text().splitlines():
             t = line.split()
             if t[0] == "v":
@@ -171,12 +176,95 @@ def bake(tris, recast, agent=AGENT):
                 dv = [float(x) for x in t[2:]]
                 for k, vi in enumerate(polys[-1]):
                     heights[vi].append(dv[3 * k + 1])
+                local = []
+                for k in range(len(dv) // 3):
+                    key = tuple(dv[3 * k:3 * k + 3])  # printed with 3 decimals: shared vertices match exactly
+                    if key not in weld:
+                        weld[key] = len(dverts)
+                        dverts.append(list(dv[3 * k:3 * k + 3]))
+                    local.append(weld[key])
+            elif t[0] == "t":
+                tri = [local[int(x)] for x in t[1:]]
+                if len(set(tri)) == 3:
+                    dtris.append(tri)
+    if detail:
+        # Recast's detail meshes of neighbouring polygons occasionally overlap (two triangles on one directed edge);
+        # keep the larger of each such pair
+        def area(t):
+            a, b, c = (dverts[i] for i in t)
+            return abs((b[0] - a[0]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[0] - a[0]))
+        users = defaultdict(list)
+        for n, t in enumerate(dtris):
+            for k in range(3):
+                users[(t[k], t[(k + 1) % 3])].append(n)
+        drop = {min(ts, key=lambda n: area(dtris[n])) for ts in users.values() if len(ts) > 1}
+        return dverts, merge_planar(dverts, [t for n, t in enumerate(dtris) if n not in drop])
     for vi, hs in heights.items():
         verts[vi][1] = sum(hs) / len(hs)
     return verts, polys
 
 
-# --- mesh
+def merge_planar(verts, tris, tolerance=0.08, max_verts=8):
+    """Triangles merged greedily across shared edges into convex (x/z) polygons whose vertices stay within
+    `tolerance` m of their least-squares plane."""
+    import numpy as np
+
+    def planar(poly):
+        if len(poly) <= 3:
+            return True
+        m = np.array([[verts[i][0], verts[i][2], 1.0] for i in poly])
+        y = np.array([verts[i][1] for i in poly])
+        coef = np.linalg.lstsq(m, y, rcond=None)[0]
+        return float(np.abs(m @ coef - y).max()) <= tolerance
+
+    def convex(poly):
+        sign = 0
+        for k in range(len(poly)):
+            a, b, c = (verts[poly[k - 2]], verts[poly[k - 1]], verts[poly[k]])
+            cr = (b[0] - a[0]) * (c[2] - b[2]) - (b[2] - a[2]) * (c[0] - b[0])
+            if abs(cr) < 1e-6:
+                return False
+            if sign and (cr > 0) != (sign > 0):
+                return False
+            sign = cr
+        return True
+
+    polys = {i: list(t) for i, t in enumerate(tris)}
+    owner = {}
+    for f, p in polys.items():
+        for k in range(len(p)):
+            owner[(p[k], p[(k + 1) % len(p)])] = f
+    changed = True
+    while changed:
+        changed = False
+        for f in list(polys):
+            if f not in polys:
+                continue
+            p = polys[f]
+            for k in range(len(p)):
+                a, b = p[k], p[(k + 1) % len(p)]
+                g = owner.get((b, a))
+                if g is None or g == f or g not in polys:
+                    continue
+                q = polys[g]
+                j = q.index(b)
+                if q[(j + 1) % len(q)] != a:
+                    continue
+                # walk p from b round to a, then q from a round to b (excluding the shared edge)
+                merged = p[k + 1:] + p[:k + 1]  # starts at b, ends at a
+                qa = q.index(a)
+                rest = [q[(qa + 1 + t) % len(q)] for t in range(len(q) - 2)]
+                cand = merged + rest
+                if len(cand) > max_verts or len(set(cand)) != len(cand) or not convex(cand) or not planar(cand):
+                    continue
+                polys[f] = cand
+                del polys[g]
+                for kk in range(len(cand)):
+                    owner[(cand[kk], cand[(kk + 1) % len(cand)])] = f
+                changed = True
+                break
+    return list(polys.values())
+
 
 def _edge_map(polys):
     owner = {}
