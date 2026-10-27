@@ -336,9 +336,9 @@ def _start_once(events, event_id):
 def boss_bar(d, event_id=BOSS_BAR_EVENT, boss=RATTLEBONES, arena=RATTLEBONES_ARENA, sigil=RATTLEBONES_SIGIL,
              name=RATTLEBONES_NAME, animation=None, disp_masks=()):
     """A new event `event_id` (restarts on rest, started from the top of event 0) for the boss in his room (held
-    disabled and without gravity by boss_setup until then):
+    with AI and gravity off by boss_setup until then, the Seraph also disabled):
       wait until the boss is alive AND the player (10000) is in the arena (condition group 1)
-      2004[5] enable him, 2004[41] short warp onto region `sigil` (as Margit's event moves him), 2004[10] gravity on
+      2004[5] enable him, 2004[1] AI on, 2004[41] short warp onto region `sigil` (as Margit's event moves him), 2004[10] gravity on
       2004[26] DispMask bits `disp_masks` on, 2003[18] ForceAnimation `animation` (packed as m15 15002810's 3006)
       2003[11] DisplayBossHealthBar(1, boss, slot 0, name), packed as vanilla (m10_00 event 10002810, Margit)
       wait until the player has left the arena OR the boss is dead (condition group -1)
@@ -353,7 +353,8 @@ def boss_bar(d, event_id=BOSS_BAR_EVENT, boss=RATTLEBONES, arena=RATTLEBONES_ARE
         _i(4, 0, "<bxxxIBBxxf", 1, boss, 0, 0, 1.0),  # IF boss alive (group 1)
         _i(3, 2, "<bBxxIIi", 1, 1, 10000, arena, 1),  # IF player inside the arena (group 1)
         _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
-        _i(2004, 5, "<IBxxx", boss, 1),  # enable him
+        _i(2004, 5, "<IBxxx", boss, 1),  # enable him (the Seraph is disabled until now; the room bosses already are)
+        _i(2004, 1, "<IBxxx", boss, 1),  # AI on (boss_setup turned it off at load)
         _i(2004, 41, "<IIIi", boss, 1, sigil, -1),  # warp him onto the sigil
         _i(2004, 10, "<IBxxx", boss, 1),  # gravity on
     ]
@@ -372,17 +373,26 @@ def boss_bar(d, event_id=BOSS_BAR_EVENT, boss=RATTLEBONES, arena=RATTLEBONES_ARE
     return build(e, events)
 
 
-def boss_setup(d, bosses=BOSSES, event_id=BOSS_SETUP_EVENT):
-    """A new event `event_id` (restarts on rest, no loop) that disables every boss (2004[5] 0) and turns its gravity
-    off (2004[10] 0) when the map loads: they wait unseen until boss_bar enables them on their sigil as the player
-    walks in (spawning with the map, before the room's asset collision is there, a boss can fall through the floor;
-    and the Seraph's alcove is within sight of the garden's centre). Rerunning replaces it."""
+HIDDEN_AT_LOAD = (SERAPH,)  # bosses kept disabled until the player walks into their arena
+
+
+def boss_setup(d, bosses=BOSSES, event_id=BOSS_SETUP_EVENT, hidden=HIDDEN_AT_LOAD):
+    """A new event `event_id` (restarts on rest, no loop) that, when the map loads, turns every boss's AI off
+    (2004[1] 0) and its gravity off (2004[10] 0): they wait on their sigil until boss_bar wakes them as the player
+    walks in (spawning with the map, before the room's asset collision is there, a boss can fall through the floor).
+    Only the `hidden` ones (the Seraph: her alcove is within sight of the garden's centre) are also disabled (2004[5]
+    0). The room bosses stay enabled, as vanilla's Sellia Nox duo (m60_49_39_00 event 1049392810: AI off at load, on
+    when the fight starts, never disabled while alive): round 9, Lady Blackhope disabled at load and enabled as Ryan
+    walked in showed her name and bar at once but her body only "really slow" later, invisible and unhittable until
+    then. Rerunning replaces it."""
     e = Emevd(d)
     events = events_of(e)
     _start_once(events, event_id)
     body = []
     for b in bosses:
-        body += [_i(2004, 5, "<IBxxx", b[1], 0), _i(2004, 10, "<IBxxx", b[1], 0)]
+        if b[1] in hidden:
+            body.append(_i(2004, 5, "<IBxxx", b[1], 0))
+        body += [_i(2004, 1, "<IBxxx", b[1], 0), _i(2004, 10, "<IBxxx", b[1], 0)]
     events.append({"id": event_id, "rest": 1, "pars": [], "ins": body})
     return build(e, events)
 

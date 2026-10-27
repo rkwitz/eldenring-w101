@@ -56,14 +56,17 @@ ROOMS = [  # (key, part, footprint centre (FLVER), size x, size z, floor height)
     ("H4", "AEG030_557_9000", (0.0, -25.25), 38.0, 79.0, 0.0),
 ]
 GARDEN = ("G", "AEG030_555_9000", (6.0, 0.0), 90.0, 90.0, -1.0)
-# --door-boxes: tight no-riding boxes on the door triggers themselves (DOOR_BOX m square, from 1 m under the trigger
-# centre, DOOR_HEIGHT m tall), for door events that wait for the player on foot (emevd.py --bosses --on-foot), in case
-# a mounted player can't be warped: he rides right up to the door and is set down in it. Without the option they are
-# removed (the round-4 5 m boxes knocked him off before the door).
+# --door-boxes: tight no-riding boxes on the door triggers themselves (a square DOOR_MARGIN m wider on each side than
+# the trigger sphere, from 1 m under its centre, DOOR_HEIGHT m tall), for door events that wait for the player on foot
+# (emevd.py --bosses --on-foot): he rides right up to the door and is set down in it, then the on-foot short warp
+# takes him through. Round 10 (2026-10-27) uses them: the riding doors' 2003[14] Warp Player is a map load, which
+# showed Elden Ring's loading screen and, after it, the place-name card of the arrival's MapNameOverride box (a
+# positive TextID applies on map load) - Ryan saw "Unicorn Way" again going into the hedge maze. Without the option
+# they are removed (the round-4 5 m boxes knocked him off well before the door).
 DOOR_TRIGGERS = [("T2d", "W101_Rattlebones_door"), ("T1d", "W101_Blackhope_door"), ("H4d", "W101_FearOfFire_door"),
                  ("Gd", "W101_Garden_door"), ("Gx", "W101_Garden_exit")]
 REMOVED = [f"W101_NoRide_{k}" for k, _ in DOOR_TRIGGERS]
-DOOR_BOX, DOOR_HEIGHT, DOOR_REGION_ID = 3.0, 5.0, 9237  # region ids 9237-9241
+DOOR_MARGIN, DOOR_HEIGHT, DOOR_REGION_ID = 0.5, 5.0, 9237  # region ids 9237-9241
 FIRST_REGION_ID = 9230
 
 
@@ -182,7 +185,10 @@ def place_indoor(raw, vanilla_dir, door_boxes=False):
         street_ry = transform(parts[find(_list(lists, "PARTS_PARAM_ST"), STREET)])[1][1]
         for n, (key, trigger) in enumerate(DOOR_TRIGGERS):
             regions = _list(lists, "POINT_PARAM_ST").entries
-            x, y, z = struct.unpack_from("<3f", regions[next(k for k, e in enumerate(regions) if entry_name(e) == trigger)], 0x14)
+            t = regions[next(k for k, e in enumerate(regions) if entry_name(e) == trigger)]
+            assert u32(t, 0x10) == 2, f"{trigger} is not a sphere"  # shape 2: data = radius
+            x, y, z = struct.unpack_from("<3f", t, 0x14)
+            side = 2.0 * (struct.unpack_from("<f", t, q(t, 0x48))[0] + DOOR_MARGIN)
             e = bytearray(templates[HORSE])
             _set_name(e, f"W101_NoRide_{key}")
             assert DOOR_REGION_ID + n not in {struct.unpack_from("<i", r, 0x2C)[0] for r in regions}
@@ -192,9 +198,9 @@ def place_indoor(raw, vanilla_dir, door_boxes=False):
             struct.pack_into("<i", e, q(e, 0x58), NO_RIDING)
             struct.pack_into("<3f", e, 0x14, x, y - 1.0, z)
             struct.pack_into("<3f", e, 0x20, 0.0, street_ry, 0.0)
-            struct.pack_into("<3f", e, q(e, 0x48), DOOR_BOX, DOOR_BOX, DOOR_HEIGHT)
+            struct.pack_into("<3f", e, q(e, 0x48), side, side, DOOR_HEIGHT)
             insert_region(lists, bytes(e), HORSE)
-            print(f"W101_NoRide_{key}: {DOOR_BOX} m no-riding box on {trigger}")
+            print(f"W101_NoRide_{key}: {side:.1f} m no-riding box on {trigger}")
     check_grouped(lists)
     return write_msb(header, lists)
 
