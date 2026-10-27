@@ -138,8 +138,8 @@ pub enum Action {
 /// Event flags the map page's buttons set; common.emevd events (tools/emevd.py book_warps) see one come on, clear
 /// it, show the HUD's load screen and warp the player with 2003[14] Warp Player: to The First Step on Unicorn Way
 /// (the arrows, Wizard101's Go to the Commons) and to the Roundtable Hold (the house, Go Home).
-pub const WARP_UNICORN_WAY: u32 = 1042366910;
-pub const WARP_ROUNDTABLE: u32 = 1042366911;
+pub const WARP_UNICORN_WAY: u32 = 1042362910;
+pub const WARP_ROUNDTABLE: u32 = 1042362911;
 
 /// Everything the pages show.
 pub struct Data<'a> {

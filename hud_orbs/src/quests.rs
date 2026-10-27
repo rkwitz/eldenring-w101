@@ -1,7 +1,7 @@
 //! The Unicorn Way quests for the Quests page and NPC dialogue: `w101_orbs/book/quests.tsv` (made by
 //! tools/w101_book_quests.py) plus the quest event flags the map's events set.
 //!
-//! Quest n uses flags 1042366000 + 10n: +0 assigned (stays on), +1..+6 goal i done, +8 ready to turn in, +9 complete.
+//! Quest n uses flags 1042362000 + 10n: +0 assigned (stays on), +1..+6 goal i done, +8 ready to turn in, +9 complete.
 //! A quest is shown while assigned and not complete; its current goals are those not done whose "after" goals are.
 
 use std::collections::HashMap;

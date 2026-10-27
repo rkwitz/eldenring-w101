@@ -30,26 +30,26 @@ const GIVERS: [(&str, u32, [f32; 3]); 5] = [
 
 /// Quests given by talking to their giver: (giver, assigned flag, the flag that makes it available).
 const OFFERS: [(&str, u32, u32); 3] = [
-    ("olivia_dawnwillow", 1042366100, 1042366020), // Pesky Pirates once Skeleton Crew is assigned
-    ("private_connelly", 1042366110, 1042366019), // Saving Private Oryan once Ghost Hunters is complete
-    ("olivia_dawnwillow", 1042366150, 1042366109), // Fear of Fire once Pesky Pirates is complete
+    ("olivia_dawnwillow", 1042362100, 1042362020), // Pesky Pirates once Skeleton Crew is assigned
+    ("private_connelly", 1042362110, 1042362019), // Saving Private Oryan once Ghost Hunters is complete
+    ("olivia_dawnwillow", 1042362150, 1042362109), // Fear of Fire once Pesky Pirates is complete
 ];
 
 /// Talk goals: (npc, quest assigned flag, quest complete flag, goal flag, flags of the goals it comes after).
 const TALKS: &[(&str, u32, u32, u32, &[u32])] = &[
-    ("private_connelly", 1042366000, 1042366009, 1042366001, &[]),
-    ("private_connelly", 1042366010, 1042366019, 1042366012, &[1042366011]),
-    ("ceren_nightchant", 1042366010, 1042366019, 1042366013, &[1042366012]),
-    ("ceren_nightchant", 1042366020, 1042366029, 1042366022, &[1042366021]),
-    ("lady_oriel", 1042366030, 1042366039, 1042366032, &[1042366031]),
-    ("lady_oriel", 1042366040, 1042366049, 1042366044, &[1042366043]),
-    ("ceren_nightchant", 1042366050, 1042366059, 1042366051, &[]),
-    ("ceren_nightchant", 1042366060, 1042366069, 1042366064, &[1042366063]),
-    ("olivia_dawnwillow", 1042366100, 1042366109, 1042366102, &[1042366101]),
-    ("private_oryan", 1042366110, 1042366119, 1042366112, &[1042366111]),
-    ("private_oryan", 1042366110, 1042366119, 1042366115, &[1042366114]),
-    ("private_connelly", 1042366110, 1042366119, 1042366116, &[1042366115]),
-    ("olivia_dawnwillow", 1042366150, 1042366159, 1042366153, &[1042366152]),
+    ("private_connelly", 1042362000, 1042362009, 1042362001, &[]),
+    ("private_connelly", 1042362010, 1042362019, 1042362012, &[1042362011]),
+    ("ceren_nightchant", 1042362010, 1042362019, 1042362013, &[1042362012]),
+    ("ceren_nightchant", 1042362020, 1042362029, 1042362022, &[1042362021]),
+    ("lady_oriel", 1042362030, 1042362039, 1042362032, &[1042362031]),
+    ("lady_oriel", 1042362040, 1042362049, 1042362044, &[1042362043]),
+    ("ceren_nightchant", 1042362050, 1042362059, 1042362051, &[]),
+    ("ceren_nightchant", 1042362060, 1042362069, 1042362064, &[1042362063]),
+    ("olivia_dawnwillow", 1042362100, 1042362109, 1042362102, &[1042362101]),
+    ("private_oryan", 1042362110, 1042362119, 1042362112, &[1042362111]),
+    ("private_oryan", 1042362110, 1042362119, 1042362115, &[1042362114]),
+    ("private_connelly", 1042362110, 1042362119, 1042362116, &[1042362115]),
+    ("olivia_dawnwillow", 1042362150, 1042362159, 1042362153, &[1042362152]),
 ];
 
 /// Markers are drawn this far (metres) and fade out over the last part.

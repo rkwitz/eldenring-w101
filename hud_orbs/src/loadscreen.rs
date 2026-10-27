@@ -20,7 +20,7 @@ use hudhook::RenderContext;
 use crate::layout::Textures;
 
 /// Set by the warp events (m60_42_36_00.emevd doors, common.emevd map-page warps) just before a warp; cleared here.
-pub const DOOR_FLAG: u32 = 1042366900;
+pub const DOOR_FLAG: u32 = 1042362900;
 /// The door events: flag on, 0.75 s, fade-out and warp, fade-in about 1 s after the flag. The screen holds
 /// fully up this long from the flag, covering all of it.
 const SHOW: f32 = 1.8;
