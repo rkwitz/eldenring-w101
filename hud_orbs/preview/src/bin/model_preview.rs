@@ -13,6 +13,7 @@ fn main() {
     let hide = args[3..].iter().find_map(|a| a.strip_prefix("hide=")).map_or(0u128, |h| {
         h.split('.').filter_map(|n| n.parse::<u32>().ok()).fold(0, |m, n| m | (1u128 << n))
     });
+    if let Ok(s) = std::env::var("DUMP") { model::dump(args[1].clone().into(), &s); return; }
     let mut r = model::Renderer::new(args[1].clone().into());
     if let Some(p) = std::env::var_os("IDLE") {
         r = r.with_idle(p.into());

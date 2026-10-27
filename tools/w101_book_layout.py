@@ -71,6 +71,15 @@ EXTRA_ART += [f"GUI/Icons/{i}.dds" for i in ("Icon_All", "Type_Damage", "Type_Re
 EXTRA_ART += [f"GUI/Icons/Icon_SM_{s}.dds" for s in ("Myth", "Fire", "Storm", "Life", "Ice", "Death", "Balance")]
 EXTRA_ART += ["GUI/Cards/School_Resource_Blnk.dds", "GUI/Reagents/Resource_Nothing.dds"]
 EXTRA_ART += [f"GUI/Art/Art_Badge0{i}.dds" for i in range(1, 7)]
+# The backpack's unequip (open hand) button, and the card type icons a spell card shows in its bottom-right corner.
+EXTRA_ART += ["GUI/Buttons/Button_Unequip.dds"]
+# The school icons in the reagent cards' circle.
+EXTRA_ART += [f"GUI/Icons/Icon_{s}.dds" for s in ("Balance", "Death", "Fire", "Ice", "Life", "Myth", "Storm", "Shadow")]
+EXTRA_ART += [f"GUI/Icons/Type_{t}.dds" for t in ("AOE", "Heal", "HealOverTime", "DamageOverTime", "Charm", "Ward",
+              "Curse", "Jinx", "Global", "Enchantment", "Manipulation", "Steal", "Aura", "Polymorph", "Blade", "Trap",
+              "Absorb", "Cloak", "Mutate", "Shadow_Self", "Shadow_Creature", "MaxHealth", "MaxMana")]
+# Fonts the DLL draws with that no page names: the card description and card title fonts.
+EXTRA_FONTS = ["SpellDescription", "SpellTitle_sm"]
 FONT_FILE = re.compile(r"([A-Za-z0-9_]+)\.xml$")
 
 
@@ -368,7 +377,7 @@ def main():
         target.parent.mkdir(parents=True, exist_ok=True)
         image.save(target)
         images[target_name] = image
-    for font in sorted(conv.fonts):
+    for font in sorted(conv.fonts | set(EXTRA_FONTS)):
         xml = wads.read(f"Fonts/{font}.xml")
         if xml is None:
             missing.append(f"Fonts/{font}.xml")

@@ -16,7 +16,8 @@ pub enum Title {
     Boss,
 }
 
-/// (model, name, rank, school ("" = none shown), title, height of the plate above the feet in metres).
+/// (model, name, rank, school ("" = none shown), title, the creature's height in metres when the game's hit capsule
+/// can't be read).
 pub const CREATURES: [(u32, &str, u32, &str, Title, f32); 7] = [
     (4180, "Lost Soul", 1, "Death", Title::Normal, 2.3),
     (3500, "Skeletal Pirate", 1, "Death", Title::Normal, 2.3),
@@ -29,6 +30,9 @@ pub const CREATURES: [(u32, &str, u32, &str, Title, f32); 7] = [
 
 /// Plates show this far away (metres), fading over the last part.
 const RANGE: f32 = 40.0;
+/// How far above the top of the creature (its hit capsule) the plate's bottom floats, metres: Wizard101 floats the
+/// name clearly over the head.
+const GAP: f32 = 0.55;
 
 pub fn models() -> Vec<u32> {
     CREATURES.iter().map(|c| c.0).collect()
@@ -45,11 +49,12 @@ pub struct Plate {
     pub school: &'static str,
 }
 
-/// The plates for the enemies (model, physics position) in view, farthest first (nearer ones over them).
-pub fn plates(camera: &Camera, enemies: &[(u32, [f32; 3])], screen: [f32; 2]) -> Vec<Plate> {
+/// The plates for the enemies (model, physics position, hit capsule height or 0) in view, farthest first (nearer ones over them).
+pub fn plates(camera: &Camera, enemies: &[(u32, [f32; 3], f32)], screen: [f32; 2]) -> Vec<Plate> {
     let mut out: Vec<(f32, Plate)> = Vec::new();
-    for &(model, p) in enemies {
-        let Some(&(_, name, rank, school, title, lift)) = CREATURES.iter().find(|c| c.0 == model) else { continue };
+    for &(model, p, height) in enemies {
+        let Some(&(_, name, rank, school, title, tall)) = CREATURES.iter().find(|c| c.0 == model) else { continue };
+        let lift = if height > 0.0 { height } else { tall } + GAP;
         let d = ((p[0] - camera.player[0]).powi(2) + (p[1] - camera.player[1]).powi(2)
             + (p[2] - camera.player[2]).powi(2)).sqrt();
         if d > RANGE {

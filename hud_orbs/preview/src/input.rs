@@ -23,3 +23,4 @@ pub fn pad_connected() -> bool { std::env::var("PREVIEW_PAD").is_ok() }
 pub fn press_map() {}
 pub fn right_x() -> f32 { 0.0 }
 pub fn take_mouse() -> (i32, i32, i32, u8, bool) { (0, 0, 0, 0, false) }
+pub fn end_map_press() {}

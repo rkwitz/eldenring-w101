@@ -373,6 +373,16 @@ fn with_mips(px: Vec<[u8; 4]>, w: usize, h: usize) -> Texture {
 
 /// ER's eye albedo is only the white; the shader paints the iris and pupil from the `_3m` mask (green = iris and
 /// pupil, blue = not pupil, red = iris fibres). Baked here with a hazel iris.
+/// Fur colour maps ("..._fur_color_a") are white; Elden Ring's fur shader colours them by a material value the
+/// book doesn't read. This tint matches the fur of Blaidd's Armor in Ryan's in-game screenshot (its median against
+/// the render's, 2026-10-27).
+const FUR_TINT: [f32; 3] = [0.5, 0.54, 0.6];
+
+fn tinted(t: &Texture, k: [f32; 3]) -> Texture {
+    let px = t.px.iter().map(|p| [0, 1, 2, 3].map(|i| if i < 3 { (p[i] as f32 * k[i]) as u8 } else { p[3] })).collect();
+    with_mips(px, t.w, t.h)
+}
+
 fn eye(white: &Texture, mask: &Texture) -> Texture {
     const IRIS: [f32; 3] = [92.0, 64.0, 38.0];
     let px = (0..white.w * white.h)
@@ -702,8 +712,9 @@ impl Cache {
                         // Only albedo is used.
                         let t = tex.to_ascii_lowercase();
                         if t.ends_with("_a") || t.ends_with("_a_l") {
-                            if let Some(t) = dds(dds_bytes) {
-                                part.textures.insert(tex.to_ascii_lowercase(), Arc::new(t));
+                            if let Some(d) = dds(dds_bytes) {
+                                let d = if t.contains("fur_color") { tinted(&d, FUR_TINT) } else { d };
+                                part.textures.insert(t, Arc::new(d));
                             }
                         } else if t.contains("eye_3m") {
                             if let Some(m) = dds(dds_bytes) {
@@ -982,9 +993,40 @@ impl Pose {
             .collect()
     }
 
-    /// A skinned vertex: the weighted blend of its bones' bind-to-posed transforms.
+    /// Cloth hanging under its own weight: Elden Ring's cloth bones ("[cloth]..." in a part's skeleton) are posed
+    /// by its cloth simulation, which lets capes and mantles fall from their spread-out rest shape (the A-pose's)
+    /// to hang close around the body. Without a simulation, each cloth bone follows the body bone it hangs from and
+    /// is drawn in toward that bone sideways (DRAPE_SIDE) and from behind (DRAPE_BACK), more the lower it hangs.
+    fn drape(&self, f: &Flver, map: &[Option<usize>]) -> Vec<Option<(M3, [f32; 3])>> {
+        let bind = bind_pose(&f.bones);
+        (0..f.bones.len())
+            .map(|i| {
+                if !f.bones[i].name.starts_with("[cloth]") {
+                    return None;
+                }
+                // The body bone the chain hangs from.
+                let mut j = f.bones[i].parent;
+                for _ in 0..16 {
+                    if j < 0 || !f.bones[j as usize].name.starts_with("[cloth]") {
+                        break;
+                    }
+                    j = f.bones[j as usize].parent;
+                }
+                let root = usize::try_from(j).ok()?;
+                let k = map.get(root).copied().flatten()?;
+                let (r, t) = self.delta[k];
+                let (b, a) = (bind[i].1, bind[root].1);
+                let drop = ((a[1] - b[1]) / 0.6).clamp(0.0, 1.0);
+                let pull = [(b[0] - a[0]) * DRAPE_SIDE * drop, 0.0, (b[2] - a[2]).max(0.0) * DRAPE_BACK * drop];
+                Some((r, sub(t, apply(pull, &r))))
+            })
+            .collect()
+    }
+
+    /// A skinned vertex: the weighted blend of its bones' bind-to-posed transforms (`cloth`: a part's own posed
+    /// cloth bones, used instead of the body's).
     fn vertex(&self, p: [f32; 3], n: [f32; 3], bones: Option<&[u16; 4]>, weights: Option<&[f32; 4]>,
-              map: &[Option<usize>]) -> ([f32; 3], [f32; 3]) {
+              map: &[Option<usize>], cloth: &[Option<(M3, [f32; 3])>]) -> ([f32; 3], [f32; 3]) {
         let (Some(b), Some(w)) = (bones, weights) else { return (p, n) };
         let total: f32 = w.iter().sum();
         let mut op = [0.0; 3];
@@ -995,8 +1037,11 @@ impl Pose {
             if wk <= 0.0 {
                 continue;
             }
-            let Some(Some(bone)) = map.get(b[k] as usize) else { continue };
-            let (r, t) = &self.delta[*bone];
+            let (r, t) = match (cloth.get(b[k] as usize), map.get(b[k] as usize)) {
+                (Some(Some(c)), _) => c,
+                (_, Some(Some(bone))) => &self.delta[*bone],
+                _ => continue,
+            };
             op = add(op, scale(add(apply(p, r), *t), wk));
             on = add(on, scale(apply(n, r), wk));
             used += wk;
@@ -1035,10 +1080,14 @@ fn texture_for(material: &str, own: &str, textures: &HashMap<String, Arc<Texture
         if candidates.is_empty() {
             continue;
         }
+        let middle = |n: &str| n[k.len()..].trim_end_matches("_l").trim_end_matches("_a").trim_matches('_').to_string();
         let named = candidates.iter().find(|(n, _)| {
-            let middle = n[k.len()..].trim_end_matches("_l").trim_end_matches("_a").trim_matches('_');
-            !middle.is_empty() && (rest.contains(middle) || middle.contains(rest.as_str()) && !rest.is_empty())
-        });
+            let middle = middle(n);
+            !middle.is_empty() && (rest.contains(&middle) || middle.contains(rest.as_str()) && !rest.is_empty())
+        }).or_else(|| candidates.iter().find(|(n, _)| {
+            // A word of the texture's name in the material's ("..._fur_color_a_l" for "CloakFur").
+            middle(n).split('_').any(|w| w.len() >= 3 && !["color", "colour", "base"].contains(&w) && rest.contains(w))
+        }));
         if let Some((_, t)) = named {
             return Some((*t).clone());
         }
@@ -1125,8 +1174,6 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
     let body = parts.first().filter(|(s, _, _)| s.starts_with("fc_")).and_then(|(_, p, _)| p.flvers.first());
     let pose = Pose::new(body, cache.idle.as_ref());
     let mut out = Vec::new();
-    // The eyes' posed bounds (they come before the armour).
-    let mut eyes: Option<([f32; 3], [f32; 3])> = None;
     for (stem, part, weapon) in &parts {
         let is_face = stem.starts_with("fg_");
         let is_hair = stem.starts_with("hr_");
@@ -1134,6 +1181,7 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
         let flvers = if *weapon { &part.flvers[..part.flvers.len().min(1)] } else { &part.flvers[..] };
         for f in flvers {
             let map = pose.map(f);
+            let cloth = pose.drape(f, &map);
             // Held weapons are shrunk to a wand's size (at most WEAPON_LENGTH from end to end), like W101's.
             // Some models (staffs) are centred on their origin rather than gripped there: they slide down so the
             // hand holds them near the butt, as Elden Ring's idle does, with at most GRIP_END of them behind it.
@@ -1169,32 +1217,12 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
                     } else if *weapon {
                         weapon_vertex(scale(m.pos[i], fit), m.nrm[i], pose.grip)
                     } else {
-                        pose.vertex(m.pos[i], m.nrm[i], m.bones.get(i), m.weights.get(i), &map)
+                        pose.vertex(m.pos[i], m.nrm[i], m.bones.get(i), m.weights.get(i), &map, &cloth)
                     };
                     pos.push(p);
                     nrm.push(n);
                 }
-                let mut tris = m.tris.clone();
-                if stem.starts_with("fg_a_15") {
-                    for p in &pos {
-                        let b = eyes.get_or_insert((*p, *p));
-                        b.0 = [0, 1, 2].map(|i| b.0[i].min(p[i]));
-                        b.1 = [0, 1, 2].map(|i| b.1[i].max(p[i]));
-                    }
-                } else if let (true, Some((lo, hi))) = (stem.starts_with("hd_"), eyes) {
-                    // Masks and blindfolds over the eyes are left off: the book's wizard looks out at you. Only
-                    // what faces forward like a mask: a hat brim over the eyes (facing up or down) stays.
-                    tris.retain(|t| {
-                        let [a, b, c] = t.map(|v| pos[v as usize]);
-                        let n = norm(cross(sub(b, a), sub(c, a)));
-                        if n[1].abs() > 0.5 {
-                            return true;
-                        }
-                        let c = [0, 1, 2].map(|i| t.iter().map(|&v| pos[v as usize][i]).sum::<f32>() / 3.0);
-                        !(c[0] > lo[0] - 0.02 && c[0] < hi[0] + 0.02 && c[1] > lo[1] - 0.03 && c[1] < hi[1] + 0.03
-                            && c[2] > lo[2] - 0.08 && c[2] < hi[2])
-                    });
-                }
+                let tris = m.tris.clone();
                 let own = stem.to_ascii_lowercase();
                 let texture = if is_hair { None } else { texture_for(&m.material, &own, &textures) };
                 out.push(Batch {
@@ -1211,6 +1239,10 @@ fn batches(cache: &mut Cache, look: &Look) -> Vec<Batch> {
     }
     out
 }
+
+/// How far cloth is drawn in toward the bone it hangs from, at 0.6 m below it and lower: sideways and from behind.
+const DRAPE_SIDE: f32 = 0.75;
+const DRAPE_BACK: f32 = 0.5;
 
 /// Weapon model axes to R_Weapon's: x -> y, y -> -x, z -> z.
 const WEAPON_IN_HAND: M3 = [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
@@ -1453,4 +1485,37 @@ fn draw(cache: &mut Cache, r: &Request) -> Frame {
         }
     }
     Frame { rgba, size: [w as u32, h as u32] }
+}
+
+/// Debug: prints a part's bones and meshes (the preview's DUMP=stem).
+#[allow(dead_code)]
+pub fn dump(folder: PathBuf, stem: &str) {
+    let mut cache = Cache { folder, files: HashMap::new(), posed: None, idle: None };
+    let body = cache.part("fc_m_0000");
+    let pose = Pose::new(body.as_ref().and_then(|b| b.flvers.first()), None);
+    let Some(part) = cache.part(stem) else { println!("no {stem}"); return };
+    let mut keys: Vec<_> = part.textures.iter().map(|(k, t)| format!("{k} {}x{}", t.w, t.h)).collect();
+    keys.sort();
+    println!("textures: {keys:?}");
+    for (fi, f) in part.flvers.iter().enumerate() {
+        let map = pose.map(f);
+        let bind = bind_pose(&f.bones);
+        println!("flver {fi}: {} bones {} meshes", f.bones.len(), f.meshes.len());
+        for (i, b) in f.bones.iter().enumerate() {
+            let m = map[i].map(|k| f_name(&pose, k)).unwrap_or_default();
+            println!("  bone {i} {} parent {} at {:?} -> {m}", b.name, b.parent, bind[i].1.map(|v| (v * 1000.0).round() / 1000.0));
+        }
+        for m in &f.meshes {
+            let mut used: Vec<u16> = m.bones.iter().zip(&m.weights).flat_map(|(b, w)| (0..4).filter(|k| w[*k] > 0.0).map(|k| b[k]).collect::<Vec<_>>()).collect();
+            used.sort();
+            used.dedup();
+            let (lo, hi) = m.pos.iter().fold(([9f32; 3], [-9f32; 3]), |(lo, hi), p| ([0, 1, 2].map(|i| lo[i].min(p[i])), [0, 1, 2].map(|i| hi[i].max(p[i]))));
+            let tex = texture_for(&m.material, &stem.to_ascii_lowercase(), &part.textures).map(|t| format!("{}x{}", t.w, t.h));
+            println!("  mesh tex {tex:?}");
+            println!("  mesh {} [{}] tris {} bones {:?} y {:.2}..{:.2} z {:.2}..{:.2}", m.name, m.material, m.tris.len(), used, lo[1], hi[1], lo[2], hi[2]);
+        }
+    }
+    fn f_name(p: &Pose, k: usize) -> String {
+        p.names.iter().find(|(_, v)| **v == k).map(|(n, _)| n.clone()).unwrap_or_default()
+    }
 }

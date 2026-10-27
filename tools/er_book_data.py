@@ -21,7 +21,8 @@ row (item id - upgrade level), P armour, A talisman, G goods, M spell (goods id)
   R: atk = attack rates, sc = scaling rates
   P: icon, wt, slot (0 head .. 3 legs), cut = physical,strike,slash,pierce,magic,fire,lightning,holy absorption %,
      res = immunity,robustness,focus,vitality, poise
-  A: icon, wt;  E: icon;  G: icon, type (goodsType), max, rank (rarity + 1: the reagent card rank)
+  A: icon, wt;  E: icon;  G: icon, type (goodsType), max, rank (rarity + 1: the reagent card rank), and for crafting
+     materials sg (sortGroupId: 10/15 creature parts, 20/25 plants, 30/35/50 stones) and shop (1 = a shop sells it)
   M: fp, slots, req = int,fai,arc, school (the W101 school tab: Fire Ice Storm Myth Life Death Balance Astral),
      erschool (Elden Ring's own school)
 er_item_text.tsv: `<cat>\\t<id>\\t<one-line Info text>`; category C: a cookbook's full caption (its recipes), line
@@ -127,10 +128,17 @@ def stats(regulation, defs, msgbnd, out):
             lines.append(("E", row_id, {"icon": e["iconId"]}))
     goods = reg.param("EquipParamGoods")
     magic = reg.param("Magic", "MagicParam")
+    # Goods some shop sells (the merchants' and the bell bearings' lineups), for the crafting page's "bought" tab.
+    sold = {r["equipId"] for r in reg.param("ShopLineupParam").values() if r["equipType"] == 3}
     for row_id, g in goods.items():
         if g["iconId"] > 0:
-            lines.append(("G", row_id, {"icon": g["iconId"], "type": g["goodsType"], "max": g["maxNum"],
-                                        "rank": g["rarity"] + 1}))
+            row = {"icon": g["iconId"], "type": g["goodsType"], "max": g["maxNum"], "rank": g["rarity"] + 1}
+            if 15000 <= row_id % 2_000_000 < 22000:
+                # Crafting materials: the game's sort group (10/15 creature parts, 20/25 plants, 30/35/50 stones)
+                # and whether a shop sells it.
+                row["sg"] = g["sortGroupId"]
+                row["shop"] = int(row_id in sold)
+            lines.append(("G", row_id, row))
         kind = {5: "S", 17: "S", 16: "I", 18: "I"}.get(g["goodsType"])
         m = magic.get(row_id)
         if kind and m:

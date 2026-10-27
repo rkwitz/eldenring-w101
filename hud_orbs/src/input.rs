@@ -149,10 +149,19 @@ pub fn pad_connected() -> bool {
     seen != 0 && now_ms() - seen < 3000
 }
 
+/// How long a replayed View press is held: a few of the game's frames, short enough that the press that closes
+/// the map is over before gameplay comes back (a View still held then opens the map again: the book flickered).
+const MAP_PRESS_MS: u64 = 80;
+
+/// Ends a replayed View press now (the map has opened or closed).
+pub fn end_map_press() {
+    INJECT_BACK_UNTIL.store(0, Ordering::SeqCst);
+}
+
 /// Opens Elden Ring's own map: a View press replayed to the game on the controller, or the map key (G) without one.
 pub fn press_map() {
     if pad_connected() {
-        INJECT_BACK_UNTIL.store(now_ms() + 150, Ordering::SeqCst);
+        INJECT_BACK_UNTIL.store(now_ms() + MAP_PRESS_MS, Ordering::SeqCst);
     } else {
         press_key(0x22, false); // scan code of G
         std::thread::spawn(|| {

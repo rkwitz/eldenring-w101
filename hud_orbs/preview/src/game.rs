@@ -19,14 +19,19 @@ static SPELLS: std::sync::Mutex<[i32; 14]> = std::sync::Mutex::new([4010, 4200, 
 
 impl Game {
     /// A Lost Soul and Rattlebones up the street, a Dark Sprite nearer.
-    pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3])> {
-        [(4180, [-23.0, 93.5, -100.0]), (4960, [-5.0, 93.5, -86.0]), (3450, [-17.5, 94.0, -106.0])]
+    pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3], f32)> {
+        [(4180, [-23.0, 93.5, -100.0], 1.6), (4960, [-5.0, 93.5, -86.0], 0.0), (3450, [-17.5, 94.0, -106.0], 1.4),
+         (3500, [-21.0, 93.5, -104.0], 1.7)]
             .into_iter().filter(|e| models.contains(&e.0)).collect()
     }
 
     pub fn set_spell(&self, index: usize, spell: i32) -> bool {
         SPELLS.lock().unwrap()[index] = spell;
         true
+    }
+
+    pub fn set_quick_item(&self, _item_id: u32, _on: bool) -> Result<(), &'static str> {
+        Err("preview")
     }
 
     pub fn equip(&self, _slot: u32, _item_id: Option<u32>) -> Result<(), &'static str> {
@@ -90,6 +95,7 @@ impl Game {
             items,
             key_items: vec![(goods(130), 1), (goods(8000), 1), (goods(8500), 1), (goods(9500), 1), (goods(9300), 1),
                             (goods(9340), 1)],
+            quick_items: [goods(1007), 0, 0, 0, 0, 0, 0, 0, 0, 0],
         })
     }
 }

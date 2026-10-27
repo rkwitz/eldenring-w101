@@ -217,7 +217,8 @@ impl ImguiRenderLoop for Orbs {
             Err(e) => tracing::warn!("WizardFancy font not loaded, using imgui's default font: {e}"),
         }
         self.book.load(&self.folder.join("w101_orbs").join("book"), render);
-        self.book.textures.want([loadscreen::IMAGE, loadscreen::BAR, loadscreen::FILL].map(String::from));
+        self.book.textures.want([loadscreen::IMAGE.to_string()]);
+        self.loadscreen.load(&self.folder, &self.settings.loadscreen_image, render);
         self.book.load_art(render);
         for line in input::install() {
             tracing::info!("input hook: {line}");
@@ -266,7 +267,9 @@ impl ImguiRenderLoop for Orbs {
                 game::set_event_flag(loadscreen::DOOR_FLAG, false);
             }
         }
-        let busy = game.is_none() || faded > 0.3 || stats.is_none();
+        // Still warping: no game data, faded out, no player, or Elden Ring's own loading screen (its HUD is not
+        // in its default state then).
+        let busy = game.is_none() || faded > 0.3 || stats.is_none() || !hud;
         self.loadscreen.draw(ui, &self.book.textures, busy);
         self.perf.frame(begin.elapsed().as_secs_f32());
     }

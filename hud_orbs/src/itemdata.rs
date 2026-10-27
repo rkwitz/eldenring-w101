@@ -78,6 +78,9 @@ pub struct ItemData {
     spells: HashMap<u32, Spell>,
     /// Goods rarity + 1 (the reagent cards' rank).
     ranks: HashMap<u32, u32>,
+    /// Crafting materials: Elden Ring's sort group (10/15 creature parts, 20/25 plants, 30/35/50 stones) and
+    /// whether a shop sells it.
+    sources: HashMap<u32, (u32, bool)>,
     text: HashMap<(char, u32), String>,
     kinds: Vec<&'static str>,
 }
@@ -156,6 +159,9 @@ impl ItemData {
                     if num("rank") > 0.0 {
                         data.ranks.insert(id, num("rank") as u32);
                     }
+                    if !get("sg").is_empty() {
+                        data.sources.insert(id, (num("sg") as u32, get("shop") == "1"));
+                    }
                 }
                 'M' => {
                     data.spells.insert(id, Spell {
@@ -186,6 +192,11 @@ impl ItemData {
     /// A cookbook's full caption: what it is, then the recipes it teaches, one per line.
     pub fn caption(&self, goods_id: u32) -> Option<String> {
         self.text.get(&('C', goods_id)).map(|t| t.replace("\\n", "\n"))
+    }
+
+    /// A goods item's short description (Elden Ring's info line: what a spell does).
+    pub fn info(&self, goods_id: u32) -> Option<&str> {
+        self.text.get(&('G', goods_id)).map(String::as_str)
     }
 
     fn intern(&mut self, s: &str) -> &'static str {
@@ -384,6 +395,11 @@ impl ItemData {
     }
 
     /// A goods item's rank (its rarity + 1), 1 when unknown.
+    /// A crafting material's sort group and whether a shop sells it (see `sources`).
+    pub fn source(&self, goods_id: u32) -> Option<(u32, bool)> {
+        self.sources.get(&goods_id).copied()
+    }
+
     pub fn rank(&self, goods_id: u32) -> u32 {
         self.ranks.get(&goods_id).copied().unwrap_or(1)
     }

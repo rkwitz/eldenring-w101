@@ -17,6 +17,8 @@ python emevd.py --interiors m60_42_36_00.emevd out.emevd
   door warps of Lady Blackhope's tower and Fear of Fire's house (see interior_doors; msb_add_interiors.py).
 python emevd.py --bosses m60_42_36_00.emevd out.emevd
   all door warps (rideable up to the door, load-screen flag, camera turned) and all four bosses (see all_bosses).
+python emevd.py --book-warps common.emevd out.emevd
+  the HUD spellbook map page's warp buttons (see book_warps).
 python emevd.py --no-leaves common.emevd|m60.emevd out.emevd
   every falling-leaf source of those events off, in place (see no_leaves).
 python emevd.py --midday m60_42_36_00.emevd out.emevd [first_id second_id]
@@ -527,6 +529,40 @@ def midday(d, event_ids=(MIDDAY_EVENT, REFREEZE_EVENT)):
     return build(e, events)
 
 
+BOOK_WARPS = (  # (event id, event flag the HUD's map page sets, (area, block, region, index), initial area entity, unk)
+    # The First Step on Unicorn Way: m60_42_36_00's own SpawnPoint 1042362020 ("NT版スタート座標（初期リスポン位置）",
+    # the network test's start, beside the First Step grace 1042361981); the Roundtable Hold as vanilla common event
+    # 945 warps there (11100980, 61000).
+    (1042362996, 1042366910, HOME_MAP, 1042362020, 0),
+    (1042362997, 1042366911, (11, 10, 0, 0), 11100980, 61000),
+)
+
+
+def book_warps(d, warps=BOOK_WARPS):
+    """common.emevd (always loaded): one event per map-page button of the HUD's spellbook (pages.rs WARP_*). Each
+    waits for its flag (3[0], condition group 1), turns it off, turns LOAD_SCREEN_FLAG on for the HUD's load screen,
+    fades to black (2004[77]) and after LOAD_SCREEN_LEAD s warps the player with 2003[14] Warp Player (a map load,
+    which also sets a rider down on foot); after MOUNTED_WAIT s it lifts the fade (in case no warp happened) and
+    restarts. Started from the top of event 0; rerunning replaces them."""
+    e = Emevd(d)
+    events = events_of(e)
+    for event_id, flag, where, entity, unk in warps:
+        _start_once(events, event_id)
+        events.append({"id": event_id, "rest": 0, "pars": [], "ins": [
+            _i(3, 0, "<bBBxI", 1, 1, 0, flag),  # IF event flag on (group 1)
+            _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
+            _i(2003, 66, "<BxxxIBxxx", 0, flag, 0),  # the button's flag off
+            _i(2003, 66, "<BxxxIBxxx", 0, LOAD_SCREEN_FLAG, 1),  # load screen flag on (the HUD clears it)
+            _i(2004, 77, "<ffBxxxf", 1.0, FADE, 1, 0.0),  # fade to black, player frozen
+            _i(1001, 0, "<f", LOAD_SCREEN_LEAD),
+            _i(2003, 14, "<BBBBIi", *where, entity, unk),  # Warp Player
+            _i(1001, 0, "<f", MOUNTED_WAIT),
+            _i(2004, 77, "<ffBxxxf", 0.0, 0.0, 0, 0.0),  # lift the fade and the freeze
+            _i(1000, 4, "<Bxxx", 1),  # restart
+        ]})
+    return build(e, events)
+
+
 def build(e, events):
     """EMEVD bytes from `events` [{id, rest, ins: [{bank, id, args, layer}], pars: [(index, target, source, size, unk)]}]
     with the header flags, linked files and strings of the parsed file `e` (no layers)."""
@@ -567,6 +603,9 @@ def events_of(e):
 
 if __name__ == "__main__":
     import sys
+    if sys.argv[1] == "--book-warps":  # emevd.py --book-warps common.emevd out.emevd
+        open(sys.argv[3], "wb").write(book_warps(open(sys.argv[2], "rb").read()))
+        sys.exit()
     if sys.argv[1] == "--no-leaf-gusts":  # emevd.py --no-leaf-gusts common.emevd out.emevd
         open(sys.argv[3], "wb").write(no_leaf_gusts(open(sys.argv[2], "rb").read()))
         sys.exit()

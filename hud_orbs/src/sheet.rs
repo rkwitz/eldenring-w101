@@ -57,5 +57,7 @@ pub struct Sheet {
     /// (item ID with category bits, quantity) of the normal and key item inventories.
     pub items: Vec<(u32, u32)>,
     pub key_items: Vec<(u32, u32)>,
+    /// Item IDs (with category bits) in the ten quick item slots, 0 = empty (spirit ashes are used from there).
+    pub quick_items: [u32; 10],
 }
 

@@ -1,31 +1,34 @@
-//! A placeholder Wizard101 loading screen for the mod's doors.
+//! The Wizard101 loading screen for the mod's warps.
 //!
-//! The doors in the Wizard101 areas are instant EMEVD warps (no Elden Ring loading screen). Each door event turns on
-//! event flag `DOOR_FLAG` right before its warp; the overlay shows Wizard City's loading screen
-//! (GUI/LoadScreen_W01_WC_01) with Wizard101's loading bar filling for `SHOW` seconds, fades it out, and turns the
-//! flag back off.
+//! The door and map-page warps are EMEVD warps. Each event turns on event flag `DOOR_FLAG` right before its warp; the
+//! overlay then covers the whole screen with the loading picture (Wizard City's by default; `loadscreen_image` in
+//! w101_orbs.ini swaps it) and no loading bar, over Elden Ring's own loading screen and bar, until the game is back
+//! (at least `SHOW` seconds), fades it out, and turns the flag back off.
 
+use std::path::Path;
 use std::time::Instant;
 
-use hudhook::imgui::{ImColor32, Ui};
+use hudhook::imgui::{ImColor32, TextureId, Ui};
+use hudhook::RenderContext;
 
 use crate::layout::Textures;
 
-/// Set by the door events (m60_42_36_00.emevd) just before a door warp; cleared here.
+/// Set by the warp events (m60_42_36_00.emevd doors, common.emevd map-page warps) just before a warp; cleared here.
 pub const DOOR_FLAG: u32 = 1042366900;
 /// The door events: flag on, 0.75 s, fade-out and warp, fade-in about 1 s after the flag. The screen holds
 /// fully up this long from the flag, covering all of it.
 const SHOW: f32 = 1.8;
 const FADE: f32 = 0.35;
 /// The longest the screen waits for the game to come back from a warp (its own fade or loading) before fading out.
-const MAX_WAIT: f32 = 15.0;
+const MAX_WAIT: f32 = 60.0;
 
+/// Wizard City's loading screen in the book's art, used when the ini's picture can't be loaded.
 pub const IMAGE: &str = "GUI/LoadScreen_W01_WC_01.png";
-pub const BAR: &str = "GUI/Art/Art_Progress_Bar_Large.png";
-pub const FILL: &str = "GUI/Bar/Bar_Exp01.png";
 
 #[derive(Default)]
 pub struct LoadScreen {
+    /// The picture from w101_orbs.ini's loadscreen_image, and its size.
+    image: Option<(TextureId, [f32; 2])>,
     shown_at: Option<Instant>,
     /// When the fade-out began: after SHOW seconds, once the game has finished its warp.
     fading_at: Option<Instant>,
@@ -35,6 +38,22 @@ impl LoadScreen {
     /// Whether the screen is up and still holding (the door flag is left on until then).
     pub fn holding(&self) -> bool {
         self.shown_at.is_some() && self.fading_at.is_none()
+    }
+
+    /// Loads the picture `path` (relative to `folder`, or absolute); without it the book's Wizard City picture is
+    /// used.
+    pub fn load(&mut self, folder: &Path, path: &str, render: &mut dyn RenderContext) {
+        let path = folder.join(path);
+        match image::open(&path) {
+            Ok(image) => {
+                let image = image.into_rgba8();
+                match render.load_texture(&image, image.width(), image.height()) {
+                    Ok(id) => self.image = Some((id, [image.width() as f32, image.height() as f32])),
+                    Err(e) => tracing::warn!("loading screen picture {}: {e:?}", path.display()),
+                }
+            }
+            Err(e) => tracing::warn!("loading screen picture {}: {e}", path.display()),
+        }
     }
 
     /// Shows the loading screen from now.
@@ -65,30 +84,14 @@ impl LoadScreen {
         let a = |c: ImColor32| ImColor32::from_rgba(c.r, c.g, c.b, (c.a as f32 * alpha) as u8);
         let [w, h] = ui.io().display_size;
         let draw = ui.get_foreground_draw_list();
-        // Wizard101's night-sky purple behind the (square) picture, which fills the screen's height.
+        // The whole screen: Wizard101's night-sky purple, then the picture as large as fits (the default one is
+        // square, so the full height, centred). Nothing of Elden Ring's loading screen shows through.
         draw.add_rect([0.0, 0.0], [w, h], a(ImColor32::from_rgb(18, 12, 40))).filled(true).build();
-        if let Some((image, [iw, ih])) = textures.get(IMAGE) {
-            let size = [h * iw / ih, h];
-            let x = (w - size[0]) / 2.0;
-            draw.add_image(image, [x, 0.0], [x + size[0], size[1]]).col(a(ImColor32::WHITE)).build();
-        }
-        // The loading bar along the bottom: its frame, then the fill over the frame's empty middle.
-        if let Some((bar, [bw, bh])) = textures.get(BAR) {
-            let width = w * 0.6;
-            let height = width * bh / bw;
-            let x = (w - width) / 2.0;
-            let y = h - height * 2.2;
-            draw.add_image(bar, [x, y], [x + width, y + height]).col(a(ImColor32::WHITE)).build();
-            let fill = (t / SHOW).min(1.0);
-            if let Some((f, _)) = textures.get(FILL) {
-                let inset = [width * 16.0 / bw, height * 7.0 / bh];
-                let x0 = x + inset[0];
-                let x1 = x0 + (width - inset[0] * 2.0) * fill;
-                draw.add_image(f, [x0, y + inset[1]], [x1, y + height - inset[1]])
-                    .uv_max([fill, 1.0])
-                    .col(a(ImColor32::WHITE))
-                    .build();
-            }
+        if let Some((image, [iw, ih])) = self.image.or_else(|| textures.get(IMAGE)) {
+            let k = (w / iw).min(h / ih);
+            let size = [iw * k, ih * k];
+            let (x, y) = ((w - size[0]) / 2.0, (h - size[1]) / 2.0);
+            draw.add_image(image, [x, y], [x + size[0], y + size[1]]).col(a(ImColor32::WHITE)).build();
         }
     }
 }

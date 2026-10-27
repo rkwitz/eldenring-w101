@@ -41,6 +41,9 @@ pub struct Game {
     game_data_man: usize,
     /// The equip function, if its pattern was found (exactly once).
     equip_gear: Option<usize>,
+    /// The loaded characters (ChrIns, model), re-read every half second, and the models last logged.
+    characters: std::sync::Mutex<(Option<std::time::Instant>, Vec<(usize, u32)>)>,
+    models_logged: std::sync::Mutex<Vec<u32>>,
 }
 
 impl Game {
@@ -52,6 +55,8 @@ impl Game {
             world_chr_man: rip_target(&sections, WORLD_CHR_MAN)?,
             game_data_man: rip_target(&sections, GAME_DATA_MAN)?,
             equip_gear: scan_unique(&sections, EQUIP_GEAR).map(|at| at - EQUIP_GEAR_BACK),
+            characters: Default::default(),
+            models_logged: Default::default(),
         })
     }
 
@@ -91,24 +96,26 @@ impl Game {
     }
 
     /// The characters near the player whose model (character_id) is in `models` and that are alive: (model,
-    /// physics position, in the camera's space), from WorldChrMan's characters-by-distance list.
-    pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3])> {
-        use eldenring::cs::{CSChrDataModule, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer, WorldChrMan};
+    /// physics position in the camera's space, hit capsule height in metres). Every character the game has loaded is
+    /// looked at: the map's characters (WorldChrMan's open-field set and its per-map sets) and the by-distance list
+    /// (which only holds some of them: round 8 found only the Lost Souls in it).
+    pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3], f32)> {
+        use eldenring::cs::{CSChrDataModule, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
         use std::mem::offset_of;
         let mut out = Vec::new();
-        let Some(wcm) = read::<usize>(self.world_chr_man) else { return out };
-        // DLVector: allocator, first, last, end.
-        let list = wcm + offset_of!(WorldChrMan, chr_inses_by_distance);
-        let (Some(first), Some(last)) = (read::<usize>(list + 8), read::<usize>(list + 16)) else { return out };
-        if last < first || first < 0x10000 {
-            return out;
-        }
-        let count = ((last - first) / DISTANCE_ENTRY).min(1024);
-        let Some(entries) = read_bytes(first, count * DISTANCE_ENTRY) else { return out };
-        for e in entries.chunks_exact(DISTANCE_ENTRY) {
-            let chr = usize::from_le_bytes(e[..8].try_into().unwrap());
-            let Some(model) = read::<u32>(chr + offset_of!(ChrIns, character_id)) else { continue };
+        let list = {
+            let mut cache = self.characters.lock().unwrap_or_else(|e| e.into_inner());
+            if cache.0.is_none_or(|t| t.elapsed() > std::time::Duration::from_millis(500)) {
+                *cache = (Some(std::time::Instant::now()), self.characters());
+            }
+            cache.1.clone()
+        };
+        for (chr, model) in list {
             if !models.contains(&model) {
+                continue;
+            }
+            // Still the same character (the list is half a second old).
+            if read::<u32>(chr + offset_of!(ChrIns, character_id)) != Some(model) {
                 continue;
             }
             let Some(modules) = read::<usize>(chr + offset_of!(ChrIns, modules)) else { continue };
@@ -119,9 +126,63 @@ impl Game {
             }
             let Some(physics) = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics)) else { continue };
             let Some([x, y, z, _]) = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position)) else { continue };
+            let height = read::<f32>(physics + offset_of!(CSChrPhysicsModule, hit_height)).unwrap_or(0.0);
             if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6) {
-                out.push((model, [x, y, z]));
+                out.push((model, [x, y, z], if height.is_finite() && (0.2..30.0).contains(&height) { height } else { 0.0 }));
             }
+        }
+        out
+    }
+
+    /// Every loaded character and its model: (ChrIns address, character_id).
+    fn characters(&self) -> Vec<(usize, u32)> {
+        use eldenring::cs::{ChrIns, ChrSet, ChrSetEntry, OpenFieldChrSet, WorldChrMan};
+        use std::mem::{offset_of, size_of};
+        let mut chrs: Vec<usize> = Vec::new();
+        let Some(wcm) = read::<usize>(self.world_chr_man) else { return vec![] };
+        // The by-distance list (DLVector: allocator, first, last, end).
+        let list = wcm + offset_of!(WorldChrMan, chr_inses_by_distance);
+        if let (Some(first), Some(last)) = (read::<usize>(list + 8), read::<usize>(list + 16)) {
+            if last >= first && first >= 0x10000 {
+                let count = ((last - first) / DISTANCE_ENTRY).min(2048);
+                if let Some(entries) = read_bytes(first, count * DISTANCE_ENTRY) {
+                    chrs.extend(entries.chunks_exact(DISTANCE_ENTRY).map(|e| usize::from_le_bytes(e[..8].try_into().unwrap())));
+                }
+            }
+        }
+        // A ChrSet's entries: capacity, then an array of (ChrIns pointer, status bytes).
+        let entry = size_of::<ChrSetEntry<ChrIns>>();
+        let mut set = |at: usize| {
+            let (Some(capacity), Some(entries)) = (read::<u32>(at + offset_of!(ChrSet<ChrIns>, capacity)),
+                                                   read::<usize>(at + offset_of!(ChrSet<ChrIns>, entries))) else { return };
+            let n = (capacity as usize).min(4096);
+            if n == 0 {
+                return;
+            }
+            if let Some(bytes) = read_bytes(entries, n * entry) {
+                chrs.extend(bytes.chunks_exact(entry).map(|e| usize::from_le_bytes(e[..8].try_into().unwrap())));
+            }
+        };
+        set(wcm + offset_of!(WorldChrMan, open_field_chr_set) + offset_of!(OpenFieldChrSet, base));
+        let sets = wcm + offset_of!(WorldChrMan, chr_sets);
+        for i in 0..196 {
+            if let Some(p) = read::<usize>(sets + 8 * i).filter(|p| *p >= 0x10000) {
+                set(p);
+            }
+        }
+        chrs.retain(|c| *c >= 0x10000);
+        chrs.sort_unstable();
+        chrs.dedup();
+        let out: Vec<(usize, u32)> = chrs.into_iter()
+            .filter_map(|c| read::<u32>(c + offset_of!(ChrIns, character_id)).map(|m| (c, m)))
+            .collect();
+        let mut models: Vec<u32> = out.iter().map(|c| c.1).collect();
+        models.sort_unstable();
+        models.dedup();
+        let mut seen = self.models_logged.lock().unwrap_or_else(|e| e.into_inner());
+        if *seen != models && models.len() < 400 {
+            tracing::info!("characters: {} loaded, models {:?}", out.len(), models);
+            *seen = models;
         }
         out
     }
@@ -175,7 +236,9 @@ impl Game {
             offset_of!(PlayerGameData, equipment.equip_inventory_data.items_data.key_items_head),
             offset_of!(PlayerGameData, equipment.equip_inventory_data.items_data.key_items_len),
         );
+        let quick_items = self.quick_slots(pgd).map(|slots| slots.map(|(_, _, id)| id)).unwrap_or([0; 10]);
         Some(Sheet {
+            quick_items,
             name: String::from_utf16_lossy(&name),
             level,
             runes: u32_at(offset_of!(PlayerGameData, rune_count)),
@@ -278,6 +341,68 @@ impl Game {
         type Equip = unsafe extern "C" fn(usize, i32, *const u32, i32, i32, i32, i32) -> u64;
         let equip: Equip = unsafe { std::mem::transmute::<usize, Equip>(function) };
         unsafe { equip(equip_game_data, slot as i32, &item, index, 1, 1, 0) };
+        Ok(())
+    }
+
+    /// The normal inventory's entries (gaitem handle, item ID) and the key item list's capacity: the game numbers
+    /// the key items first, so normal entry i is inventory index capacity + i.
+    fn normal_inventory(&self, pgd: usize) -> Option<(Vec<(u32, u32)>, u32)> {
+        use eldenring::cs::{EquipInventoryDataListEntry, InventoryItemsData, PlayerGameData};
+        use std::mem::offset_of;
+        let items = pgd + offset_of!(PlayerGameData, equipment.equip_inventory_data.items_data);
+        let head = read::<usize>(items + offset_of!(InventoryItemsData, normal_items_head))?;
+        let len = read::<u32>(items + offset_of!(InventoryItemsData, normal_items_len)).unwrap_or(0) as usize;
+        let key_capacity = read::<u32>(items + offset_of!(InventoryItemsData, key_items_capacity)).unwrap_or(0);
+        let size = size_of::<EquipInventoryDataListEntry>();
+        let bytes = read_bytes(head, size * len.min(4096))?;
+        let (h, at) = (offset_of!(EquipInventoryDataListEntry, gaitem_handle), offset_of!(EquipInventoryDataListEntry, item_id));
+        let field = |e: &[u8], o: usize| u32::from_le_bytes(e[o..o + 4].try_into().unwrap());
+        Some((bytes.chunks_exact(size).map(|e| (field(e, h), field(e, at))).collect(), key_capacity))
+    }
+
+    /// EquipItemData's ten quick item slots: (gaitem handle, inventory index, item ID or 0).
+    fn quick_slots(&self, pgd: usize) -> Option<[(u32, i32, u32); 10]> {
+        use eldenring::cs::PlayerGameData;
+        use std::mem::offset_of;
+        let raw = read::<[(u32, i32); 10]>(pgd + offset_of!(PlayerGameData, equipment.equip_item_data.quick_slots))?;
+        let (normal, key_capacity) = self.normal_inventory(pgd)?;
+        Some(raw.map(|(handle, index)| {
+            let id = (index >= key_capacity as i32)
+                .then(|| normal.get((index - key_capacity as i32) as usize).map(|e| e.1))
+                .flatten()
+                .filter(|id| *id != u32::MAX)
+                .unwrap_or(0);
+            (handle, index, id)
+        }))
+    }
+
+    /// Puts the inventory item `item_id` (a spirit ash: Elden Ring uses them from the quick items) in the first
+    /// empty quick item slot (`on`), or empties the slots that hold it, by writing EquipItemData's slot entries
+    /// (gaitem handle and inventory index) as the Equipment menu leaves them.
+    pub fn set_quick_item(&self, item_id: u32, on: bool) -> Result<(), &'static str> {
+        use eldenring::cs::PlayerGameData;
+        use std::mem::offset_of;
+        let pgd = read::<usize>(self.game_data_man).and_then(|gdm| read::<usize>(gdm + PLAYER_GAME_DATA))
+            .ok_or("no character")?;
+        let slots = self.quick_slots(pgd).ok_or("the quick items can't be read")?;
+        let at = pgd + offset_of!(PlayerGameData, equipment.equip_item_data.quick_slots);
+        let empty = slots.iter().find(|s| s.1 < 0).map(|s| (s.0, s.1)).unwrap_or((0, -1));
+        tracing::info!("quick items before: {slots:?}");
+        let write = |slot: usize, (handle, index): (u32, i32)| unsafe {
+            ((at + slot * 8) as *mut u32).write_volatile(handle);
+            ((at + slot * 8 + 4) as *mut i32).write_volatile(index);
+        };
+        if !on {
+            slots.iter().enumerate().filter(|(_, s)| s.2 == item_id).for_each(|(i, _)| write(i, empty));
+            return Ok(());
+        }
+        if slots.iter().any(|s| s.2 == item_id) {
+            return Ok(());
+        }
+        let (normal, key_capacity) = self.normal_inventory(pgd).ok_or("no inventory")?;
+        let i = normal.iter().position(|e| e.1 == item_id).ok_or("not in the inventory")?;
+        let free = slots.iter().position(|s| s.1 < 0).ok_or("the quick item slots are full")?;
+        write(free, (normal[i].0, (i as u32 + key_capacity) as i32));
         Ok(())
     }
 

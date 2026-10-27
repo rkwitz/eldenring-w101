@@ -53,7 +53,7 @@ const IN_DECK: ImColor32 = ImColor32::from_rgba(30, 20, 10, 120);
 /// DeckConfiguration's slot frame (its top half: a spell slot; the bottom half is for treasure cards).
 const DECK_SLOT: &str = "GUI/DeckConfig/Background_Slot.png";
 /// Memory slot cells per row in the deck.
-const DECK_COLUMNS: usize = 4;
+const DECK_COLUMNS: usize = 8;
 
 /// The Moon of Nokstella talisman: two more memory slots.
 const NOKSTELLA: i32 = 1140;
@@ -104,6 +104,9 @@ pub struct State {
     subs: usize,
     /// How many pets there are to page through.
     pets: usize,
+    /// Set while binding: what the page's equip button acts on (the Backpack's chosen item, the Pets page's
+    /// spirit ash), if it can be equipped.
+    equip_target: Option<u32>,
 }
 
 /// Something on a page that a click (or double click) acts on, besides its layout buttons.
@@ -115,6 +118,8 @@ pub enum Hit {
     Learn(i32),
     /// A memorised spell in the deck: memory slot index.
     Forget(usize),
+    /// A category tab the page draws itself (the crafting page's reagent tabs): choose sub-page n.
+    Sub(usize),
 }
 
 pub enum Action {
@@ -124,7 +129,17 @@ pub enum Action {
     Tab(Tab),
     /// Settings row, step (-1 or +1).
     Setting(usize, i32),
+    /// The equip button: equip the item (inventory ID), or take it off if it is equipped.
+    Equip(u32),
+    /// A warp button on the map page: the event flag that asks the mod's common.emevd event to warp the player.
+    Warp(u32),
 }
+
+/// Event flags the map page's buttons set; common.emevd events (tools/emevd.py book_warps) see one come on, clear
+/// it, show the HUD's load screen and warp the player with 2003[14] Warp Player: to The First Step on Unicorn Way
+/// (the arrows, Wizard101's Go to the Commons) and to the Roundtable Hold (the house, Go Home).
+pub const WARP_UNICORN_WAY: u32 = 1042366910;
+pub const WARP_ROUNDTABLE: u32 = 1042366911;
 
 /// Everything the pages show.
 pub struct Data<'a> {
@@ -346,13 +361,31 @@ fn equipped_ids(sheet: &Sheet) -> Vec<u32> {
     out
 }
 
-/// Where a double click in the Backpack puts an item: (ChrAsm slot, Some(item) to equip / None to take a talisman
-/// off). Weapons go in the right hand's first slot, shields and torches the left's, arrows and bolts their first
-/// slot, armour its own slot, talismans the first free talisman slot (worn ones come off); None for other items.
-pub fn equip_slot(sheet: &Sheet, items: &ItemData, item_id: u32) -> Option<(u32, Option<u32>)> {
+/// What equipping or taking off an item does: a ChrAsm slot and Some(item) to put there or None to empty it
+/// (Elden Ring's equip function), or a spirit ash into (true) or out of (false) the quick items, where Elden Ring
+/// uses them from.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Equip {
+    Gear(u32, Option<u32>),
+    Quick(bool),
+}
+
+/// Whether the item is worn, held, or (a spirit ash) in the quick items.
+pub fn is_equipped(sheet: &Sheet, item_id: u32) -> bool {
+    equipped_ids(sheet).contains(&item_id) || (item_id >> 28 == 4 && sheet.quick_items.contains(&item_id))
+}
+
+/// What a double click in the Backpack (or the equip button under it, or the Pets page's) does with an item: an
+/// equipped one comes off (its slot is left empty); otherwise weapons go in the right hand's first slot, shields
+/// and torches the left's, arrows and bolts their first slot, armour its own slot, talismans the first free
+/// talisman slot, spirit ashes the first free quick item slot. None for items that can't be equipped.
+pub fn equip_slot(sheet: &Sheet, items: &ItemData, name: &str, item_id: u32) -> Option<Equip> {
     let raw = item_id & 0x0FFF_FFFF;
+    let worn = |range: std::ops::Range<usize>| {
+        sheet.equipment[range.clone()].iter().position(|e| *e == raw as i32).map(|i| Equip::Gear((range.start + i) as u32, None))
+    };
     match item_id >> 28 {
-        0 => {
+        0 => worn(0..12).or_else(|| {
             let kind = items.weapon_kind(raw).unwrap_or("");
             let slot = match kind {
                 k if k.contains("Shield") || k == "Torch" => 0,
@@ -360,25 +393,29 @@ pub fn equip_slot(sheet: &Sheet, items: &ItemData, item_id: u32) -> Option<(u32,
                 "Bolt" | "Greatbolt" => 7,
                 _ => 1,
             };
-            Some((slot, Some(item_id)))
-        }
-        1 => items.armour(raw).map(|a| (12 + a.slot.min(3), Some(item_id))),
-        2 => {
+            Some(Equip::Gear(slot, Some(item_id)))
+        }),
+        1 => worn(12..16).or_else(|| items.armour(raw).map(|a| Equip::Gear(12 + a.slot.min(3), Some(item_id)))),
+        2 => worn(17..21).or_else(|| {
             let pouches = (1 + sheet.talisman_slots as usize).min(4);
-            if let Some(i) = sheet.equipment[17..21].iter().position(|e| *e == raw as i32) {
-                return Some((17 + i as u32, None));
-            }
             let free = sheet.equipment[17..17 + pouches].iter().position(|e| *e <= 0).unwrap_or(0);
-            Some((17 + free as u32, Some(item_id)))
-        }
+            Some(Equip::Gear(17 + free as u32, Some(item_id)))
+        }),
+        4 if is_spirit_ash(name) => Some(Equip::Quick(!sheet.quick_items.contains(&item_id))),
         _ => None,
     }
 }
+
+/// Wizard101's equip buttons: the fist (Button_Equip) equips, the open hand (Button_Unequip) takes off; frames
+/// normal, highlighted, pressed, greyed.
+pub const EQUIP_ART: &str = "GUI/InventoryPage/Button_Equip.png";
+pub const UNEQUIP_ART: &str = "GUI/Buttons/Button_Unequip.png";
 
 /// Fills the page for `tab`.
 pub fn bind(tab: Tab, l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.hits.clear();
     st.item_model = None;
+    st.equip_target = None;
     match tab {
         Tab::Character => character(l, d, st, v),
         Tab::Backpack => backpack(l, d, st, v),
@@ -411,6 +448,11 @@ pub fn click(tab: Tab, l: &Layout, id: usize, st: &mut State) -> Action {
                 (st.sub, st.page) = (i, 0);
             }
         }
+        (Tab::Backpack, "Equip_Item") | (Tab::Pets, "EquipButton") => {
+            if let Some(id) = st.equip_target {
+                return Action::Equip(id);
+            }
+        }
         (Tab::Pets, "btnPrevPet") => st.pet = (st.pet + st.pets.max(1) - 1) % st.pets.max(1),
         (Tab::Pets, "btnNextPet") => st.pet = (st.pet + 1) % st.pets.max(1),
         (Tab::Deck, _) if name.starts_with("Cards_") => {
@@ -419,6 +461,8 @@ pub fn click(tab: Tab, l: &Layout, id: usize, st: &mut State) -> Action {
             }
         }
         (Tab::Map, "PlusMinusButton") => return Action::OpenMap,
+        (Tab::Map, "GoHomeButton") => return Action::Warp(WARP_UNICORN_WAY),
+        (Tab::Map, "GotoDormButton") => return Action::Warp(WARP_ROUNDTABLE),
         (Tab::Crafting, "Reagent_Toggle" | "Reagent_Toggle2") => {
             st.cookbooks = !st.cookbooks;
             st.page = 0;
@@ -519,6 +563,12 @@ const CHARACTER_SUBPAGES: [&str; 9] = [
     "StatsPageBG", "BadgeFilterPageBG", "BadgePageBG", "AdvancedStatsPageBG", "PvPPageBG", "TimersPageBG",
     "ActivitiesPageBG", "NewPvPBG", "SecondarySchoolsPageBG",
 ];
+
+/// The badge rows' seal (centre x and y from the row's top left, half width and height of the medal inside the
+/// spikes) and bar (x from, y from the row's top, x to, y to the row's top), measured in
+/// Background_Character_Right_Badges (256 x 512 drawn at 390,0 - 720,600: 1.289 x 1.172).
+const BADGE_SEAL: [f32; 4] = [0.5, 30.5, 20.0, 20.0];
+const BADGE_BAR: [f32; 4] = [474.0, 9.5, 675.0, 41.0];
 
 fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.subs = 2;
@@ -683,15 +733,22 @@ fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 v.greyed.insert(*row);
             }
             let fade = |c: ImColor32| if state == Some(true) { c } else { ImColor32::from_rgba(c.r, c.g, c.b, 140) };
-            // The badge's picture on the left (Wizard101's medal badges, GUI/Art/Art_Badge01-06), the status and
-            // name beside it, inside the row's frame.
-            let side = r[3] - r[1] - 8.0;
-            let pic = [r[0] + 8.0, r[1] + 4.0, r[0] + 8.0 + side, r[1] + 4.0 + side];
-            v.images.push((pic, badge_art(a).into(), [0.0, 0.0, 1.0, 1.0]));
-            let left = pic[2] + 4.0;
-            v.add([left, r[1] + 7.0, r[2] - 12.0, r[1] + 22.0], status.to_string(),
-                  TextStyle::new("WizardFancy", 0.32, fade(LIGHT_YELLOW)).centred());
-            v.add([left, r[1] + 22.0, r[2] - 12.0, r[3] - 12.0], name.to_string(),
+            // Background_Character_Right_Badges has, per row, a spiky round seal on the left and a bar beside it
+            // (measured in the art: seal centred on the row's left edge, 30 below its top, 20 across inside the
+            // spikes; bar from x 474 to 675, 9 to 41 below the row's top). The row's own button art (Button_Item)
+            // lies on the bar, the badge's medal (Art_Badge01-06) in the seal, the status and name on the bar.
+            let bar = [BADGE_BAR[0], r[1] + BADGE_BAR[1], BADGE_BAR[2], r[1] + BADGE_BAR[3]];
+            v.rect.insert(*row, bar);
+            let (cx, cy) = (r[0] + BADGE_SEAL[0], r[1] + BADGE_SEAL[1]);
+            let (hw, hh) = (BADGE_SEAL[2], BADGE_SEAL[3]);
+            v.images.push(([cx - hw, cy - hh, cx + hw, cy + hh], badge_art(a).into(), [0.0, 0.0, 1.0, 1.0]));
+            if state != Some(true) {
+                // Not earned: the medal faded, as Wizard101 shows badges still to earn.
+                v.over_fills.push(([cx - hw, cy - hh, cx + hw, cy + hh], ImColor32::from_rgba(200, 170, 130, 130)));
+            }
+            v.add([bar[0] + 6.0, bar[1] + 1.0, bar[2] - 6.0, bar[1] + 12.0], status.to_string(),
+                  TextStyle::new("WizardFancy", 0.28, fade(LIGHT_YELLOW)).centred());
+            v.add([bar[0] + 6.0, bar[1] + 11.0, bar[2] - 6.0, bar[3] - 1.0], name.to_string(),
                   TextStyle::new("WizardFancy", 0.4, fade(YELLOW)).centred());
             v.tip(r, vec![name.to_string(), about.to_string(), status.to_string()]);
         }
@@ -754,14 +811,17 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     }
     marker(l, v, "TabBackground", "Tab_All", chosen);
     v.tab_row = row_of(l, &BACKPACK.map(|b| b.0));
-    v.set(l.find("title"), centre(title));
+    // Wizard101 keeps "Backpack" over every category (the category's name is in its button's tip).
+    let _ = title;
+    v.set(l.find("title"), centre("Backpack"));
     for prefix in ["crowns", "pvp", "rental", "crafted", "lock"] {
         for i in 0..8 {
             v.show(l.find(&format!("{prefix}{i}")), false);
         }
     }
-    grey(l, v, &["Tab_HousingStuff", "Tab_MonsterMagic", "Tab_Photography", "Equip_Item", "Lock_Item", "Socket_Item",
-                 "btnFeedPet", "RecyclingBinButton", "QuickSell_Item", "EquipmentManager"]);
+    grey(l, v, &["Tab_HousingStuff", "Tab_MonsterMagic", "Tab_Photography", "EquipmentManager"]);
+    // Only the equip button and the (greyed) armor sets button stay along the bottom.
+    hide(l, v, &["Lock_Item", "Socket_Item", "btnFeedPet", "RecyclingBinButton", "QuickSell_Item", "Trash_Item"]);
     let rows: Vec<usize> = (1..=8).filter_map(|i| l.find(&format!("Item_{i}"))).collect();
     let Some(sheet) = d.sheet else {
         for r in &rows {
@@ -770,7 +830,6 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         return;
     };
     let names = d.names;
-    let equipped = equipped_ids(sheet);
     let source: Vec<(u32, u32)> = match filter {
         Filter::KeyItems => sheet.key_items.clone(),
         Filter::SpiritAshes => sheet.items.iter().chain(&sheet.key_items).copied().collect(),
@@ -797,12 +856,14 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 }
             }
         })
-        .map(|(id, n)| (names.item(*id), *n, equipped.contains(id), *id))
+        .map(|(id, n)| (names.item(*id), *n, is_equipped(sheet, *id), *id))
         .collect();
     // What is worn or held comes first (with Wizard101's fist beside it), then the rest by name.
     items.sort_by(|a, b| (!a.2, &a.0, a.3).cmp(&(!b.2, &b.0, b.3)));
     v.set(l.find("inventorySpace"), centre(&items.len().to_string()));
     let page = paging(l, v, st, items.len(), rows.len(), ("PageNumber", "leftscroll", "rightscroll"));
+    // The chosen item (the last one clicked, else the first): the picture and the equip button act on it.
+    let shown = st.selected.filter(|s| items.iter().any(|i| i.3 == *s)).or(items.first().map(|i| i.3));
     for (i, row) in rows.iter().enumerate() {
         let fist = l.find_under(*row, "fist");
         match items.get(page * rows.len() + i) {
@@ -820,7 +881,16 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                     v.add([r[2] - 50.0, r[1], r[2] - 16.0, r[3]], format!("x{count}"),
                           TextStyle::new("WizardFancy", 0.42, LIGHT_YELLOW).right());
                 }
-                v.show(fist, *is_equipped);
+                // Beside each item that can be equipped, the hand its equip button shows: the open hand on what is
+                // equipped (a double click takes it off), the fist on the rest (a double click equips it).
+                v.show(fist, false);
+                if let (Some(f), Some(_)) = (fist, equip_slot(sheet, d.items, name, *id)) {
+                    let art = if *is_equipped { UNEQUIP_ART } else { EQUIP_ART };
+                    v.images.push((l.nodes[f].rect, art.into(), [0.0, 0.0, 0.5, 0.5]));
+                }
+                if shown == Some(*id) {
+                    v.checked.insert(*row);
+                }
                 v.tip(r, d.items.tooltip(*id, *count, names, *is_equipped));
                 st.hits.push((r, Hit::Item(*id)));
             }
@@ -829,24 +899,38 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             }
         }
     }
+    // The equip button (Wizard101's Equip_Item): the fist equips the chosen item, the open hand (Button_Unequip)
+    // takes it off when it is equipped; greyed when it can't be equipped.
+    let target = shown.and_then(|id| items.iter().find(|i| i.3 == id))
+        .filter(|(name, _, _, id)| equip_slot(sheet, d.items, name, *id).is_some());
+    match (l.find("Equip_Item"), target) {
+        (Some(b), Some((_, _, equipped, id))) => {
+            st.equip_target = Some(*id);
+            if *equipped {
+                v.node_art.insert(b, UNEQUIP_ART.into());
+            }
+        }
+        _ => grey(l, v, &["Equip_Item"]),
+    }
     // The portrait window shows the character, drawn from Elden Ring's models (model.rs, book.rs). On the
-    // talisman, arrow and key item pages it shows the chosen item (the last one clicked, else the first): arrows
-    // and bolts as their own 3D model; talismans and key items have no model in the game (they are only icons),
-    // so their icon, large.
+    // arrow page it shows the chosen item's own 3D model; talismans, spirit ashes, spells, consumables, ashes of
+    // war and key items have no model in the game (they are only icons), so the chosen one's icon, large and
+    // still.
     if let Some(p) = l.find("3DCharacter") {
-        let shown = st.selected.filter(|s| items.iter().any(|i| i.3 == *s)).or(items.first().map(|i| i.3));
         match (filter, shown) {
             (Filter::Ammo, Some(id)) if d.items.weapon_model(id & 0x0FFF_FFFF).is_some() => {
                 st.item_model = d.items.weapon_model(id & 0x0FFF_FFFF);
                 v.node_images.insert(p, MODEL_FULL.into());
             }
-            (Filter::Talismans | Filter::KeyItems | Filter::Ammo, Some(id)) => {
+            (Filter::Talismans | Filter::KeyItems | Filter::Ammo | Filter::SpiritAshes | Filter::Spells
+             | Filter::Consumables | Filter::AshesOfWar, Some(id)) => {
                 let r = l.nodes[p].rect;
                 let side = (r[2] - r[0]).min(r[3] - r[1]) * 0.8;
                 let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
                 icon(v, d.items, id, [cx - side / 2.0, cy - side / 2.0, cx + side / 2.0, cy + side / 2.0]);
             }
-            (Filter::Talismans | Filter::KeyItems | Filter::Ammo, None) => {}
+            (Filter::Talismans | Filter::KeyItems | Filter::Ammo | Filter::SpiritAshes | Filter::Spells
+             | Filter::Consumables | Filter::AshesOfWar, None) => {}
             _ => {
                 v.node_images.insert(p, MODEL_FULL.into());
             }
@@ -868,8 +952,7 @@ const TALENT_BOX: ImColor32 = ImColor32::from_rgb(206, 182, 136);
 
 fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.subs = 1;
-    grey(l, v, &["EquipButton", "SnackButton", "EquipJewelButton", "ToggleTalentDisplay", "PetTomeButton",
-                 "PetBadgesButton"]);
+    grey(l, v, &["SnackButton", "EquipJewelButton", "ToggleTalentDisplay", "PetTomeButton", "PetBadgesButton"]);
     hide(l, v, &["wndRatingBkg", "wndAgingBkg", "eggHatchTimer", "_NOT_USED_SnackToggleWin", "ctrlGenetics", "cardBkg",
                  "spellCard", "spellCardSmall1", "spellCardSmall2", "spellCardSmall3", "spriteSchoolIcon"]);
     // (name, kind, upgrade level, item)
@@ -905,6 +988,18 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     let i = st.pet % pets.len();
     st.pet = i;
     let (name, kind, level, id) = &pets[i];
+    // The equip button (Wizard101's, which makes a pet the one that follows you): a spirit ash goes into the
+    // quick items, where Elden Ring uses it from; the open hand when it is there already (a click takes it out),
+    // the fist when not. Torrent is always at hand.
+    match (d.sheet, level) {
+        (Some(sheet), Some(_)) => {
+            st.equip_target = Some(*id);
+            if sheet.quick_items.contains(id) {
+                v.node_art.insert(l.find("EquipButton").unwrap_or(usize::MAX), UNEQUIP_ART.into());
+            }
+        }
+        _ => grey(l, v, &["EquipButton"]),
+    }
     v.set(l.find("txtPetName"), centre(name));
     // Between the arrow buttons.
     if let (Some(t), Some(a), Some(b)) = (l.find("txtPetName"), l.find("btnPrevPet"), l.find("btnNextPet")) {
@@ -1062,6 +1157,55 @@ fn card_frame(button: &str) -> &'static str {
     }
 }
 
+/// The Wizard101 card type icon (GUI/Icons/Type_*, the symbol in the card's bottom-right box) for what a spell
+/// does, from its Elden Ring description: heals (over time: HealOverTime), cures (Manipulation), weapon and shield
+/// enchantments (Enchantment), damage negation and barriers (Ward), boosts (Charm), stealth (Cloak), life-sapping
+/// (Steal), light (Global), poison, rot and madness (DamageOverTime), area attacks (AOE), the rest attacks (Damage).
+fn spell_type(items: &ItemData, raw: u32) -> &'static str {
+    let info = items.info(raw).unwrap_or("").to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| info.contains(w));
+    let kind = if has(&["heals hp over", "continuously heals"]) {
+        "HealOverTime"
+    } else if has(&["ailment", "alleviates", "cures", "dispels"]) {
+        "Manipulation"
+    } else if has(&["heal"]) {
+        "Heal"
+    } else if has(&["armament", "shield"]) {
+        "Enchantment"
+    } else if has(&["negation", "defensive", "resistance", "deflect", "forcefield", "retaliate", "covers self",
+                    "guardian", "draws in spells", "surrounds the caster"]) {
+        "Ward"
+    } else if has(&["raises the", "raises physical", "increases", "blessing", "bolster", "charge body"]) {
+        "Charm"
+    } else if has(&["conceal", "silences", "caster semi-invisible", "lures"]) {
+        "Cloak"
+    } else if has(&["sapping", "drain"]) {
+        "Steal"
+    } else if has(&["illuminate"]) {
+        "Global"
+    } else if has(&["poison", "rot", "madness", "frenzy", "putrescen", "bloodflies", "threads"]) {
+        "DamageOverTime"
+    } else if has(&["area", "surroundings", "around caster", "downpour", "rain of", "hail of"]) {
+        "AOE"
+    } else {
+        "Damage"
+    };
+    match kind {
+        "HealOverTime" => "GUI/Icons/Type_HealOverTime.png",
+        "Manipulation" => "GUI/Icons/Type_Manipulation.png",
+        "Heal" => "GUI/Icons/Type_Heal.png",
+        "Enchantment" => "GUI/Icons/Type_Enchantment.png",
+        "Ward" => "GUI/Icons/Type_Ward.png",
+        "Charm" => "GUI/Icons/Type_Charm.png",
+        "Cloak" => "GUI/Icons/Type_Cloak.png",
+        "Global" => "GUI/Icons/Type_Global.png",
+        "Steal" => "GUI/Icons/Type_Steal.png",
+        "DamageOverTime" => "GUI/Icons/Type_DamageOverTime.png",
+        "AOE" => "GUI/Icons/Type_AOE.png",
+        _ => "GUI/Icons/Type_Damage.png",
+    }
+}
+
 /// A spell's class tab.
 fn school(items: &ItemData, item_id: u32) -> String {
     let raw = item_id & 0x0FFF_FFFF;
@@ -1111,7 +1255,7 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     let used = slots_used(sheet, d.items);
     v.set(l.find("DeckName"), centre(&format!("Memory Slots {used}/{total}")));
     // The deck (Wizard101's grid of the cards in the deck, slot frames edge to edge, Background_Slot's top half):
-    // one cell per memory slot, four to a row filling the deck's width. Each memorised spell takes as many cells as
+    // one cell per memory slot, eight to a row filling the deck's width (more slots wrap to the next row). Each memorised spell takes as many cells as
     // it takes memory slots (its icon in the first, the rest shaded), in Elden Ring's order. A click forgets it.
     if let Some(grid) = l.find("CardsInDeck") {
         let r = l.nodes[grid].rect;
@@ -1204,6 +1348,9 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 v.images.push(([c0[0], c0[1], c1[0], c1[1]], img.clone(), n.frames[0].unwrap_or(n.uv)));
             }
         }
+        // What it does: Wizard101's type icon in the box at the picture's bottom right (98,97 .. 125,124).
+        let (y0, y1) = (card(100.0, 99.0), card(123.0, 122.0));
+        v.images.push(([y0[0], y0[1], y1[0], y1[1]], spell_type(d.items, raw).into(), [0.0, 0.0, 1.0, 1.0]));
         let (t0, t1) = (card(8.0, 4.0), card(120.0, 28.0));
         v.add([t0[0], t0[1], t1[0], t1[1]], name.clone(), TextStyle::new("WizardFancy", 0.34, YELLOW).centred().outlined());
         if let Some(spell) = spell {
@@ -1321,10 +1468,10 @@ pub fn map_rect(aspect: f32) -> [f32; 4] {
 /// with them), above Elden Ring's button hints along the bottom.
 const MAP_UV_X: [f32; 2] = [0.15, 0.85];
 const MAP_UV_BOTTOM: f32 = 0.9;
-/// Elden Ring's button hints (B close, X marker, Y sites of grace ...): the bottom right of the map screen, drawn
-/// in a strip inside the frame under the map. Taken generously (the bottom tenth of the screen, from 30% across)
-/// so no hint is cut off.
-const HINTS_UV: [f32; 4] = [0.30, 0.90, 1.0, 1.0];
+/// Elden Ring's button hints (B close, X marker, Y sites of grace ...): the bottom of the map screen, drawn in a
+/// strip inside the frame under the map. The whole width of the screen's bottom eighth, so no hint is cut off
+/// whatever the resolution and HUD scale (the hints are right-aligned in that band, as Elden Ring draws them).
+const HINTS_UV: [f32; 4] = [0.0, 0.875, 1.0, 1.0];
 const HINTS_H: f32 = 40.0;
 
 /// The copied map screen on the page: (map rect, its uv, hints rect, their uv) inside MAP_HOLE's margin, both in
@@ -1334,8 +1481,11 @@ pub fn map_picture_rect(aspect: f32) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4])
     let area = [h[0] + 8.0, h[1] + 8.0, h[2] - 8.0, h[3] - 8.0];
     let cx = (area[0] + area[2]) / 2.0;
     let hints_bottom = area[3] - 2.0;
-    let hints_w = ((HINTS_UV[2] - HINTS_UV[0]) * aspect / (HINTS_UV[3] - HINTS_UV[1]) * HINTS_H).min(area[2] - area[0] - 8.0);
-    let hints = [cx - hints_w / 2.0, hints_bottom - HINTS_H, cx + hints_w / 2.0, hints_bottom];
+    // In the band's own shape: as wide as the page allows, never squeezed.
+    let band = (HINTS_UV[2] - HINTS_UV[0]) * aspect / (HINTS_UV[3] - HINTS_UV[1]);
+    let hints_w = (band * HINTS_H).min(area[2] - area[0] - 8.0);
+    let hints_h = hints_w / band;
+    let hints = [cx - hints_w / 2.0, hints_bottom - hints_h, cx + hints_w / 2.0, hints_bottom];
     let map_h = hints[1] - 6.0 - area[1];
     let map_w = ((MAP_UV_X[1] - MAP_UV_X[0]) * aspect / MAP_UV_BOTTOM * map_h).min(area[2] - area[0]);
     let map = [cx - map_w / 2.0, area[1], cx + map_w / 2.0, area[1] + map_h];
@@ -1347,7 +1497,12 @@ fn map(l: &Layout, d: &Data, v: &mut View) {
     v.show(l.find("MapLoadingIndicator"), d.map_opening);
     v.set(l.path("MapLoadingIndicator/PackageNameText"), centre("Opening Map..."));
     hide(l, v, &["txtGoHomeTimer", "txtGotoDormTimer"]);
-    grey(l, v, &["GoHomeButton", "GotoDormButton"]);
+    for (button, place, to) in [("GoHomeButton", "Unicorn Way", "Travel to The First Step"),
+                                ("GotoDormButton", "Roundtable Hold", "Travel to the Roundtable Hold")] {
+        if let Some(b) = l.find(button) {
+            v.tip(l.nodes[b].rect, vec![place.into(), to.into()]);
+        }
+    }
     if d.map_open {
         // The whole map screen, scaled onto the page in its own shape; or, without a copy of the screen, a window
         // of that shape onto the map behind the book.
@@ -1503,6 +1658,23 @@ fn crafting(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         }
     }
     if !st.cookbooks {
+        // ReagentWindow's category tabs (REAGENT_TABS): all, harvested, rare harvested, bought, dropped. Elden
+        // Ring's own sort groups say what a material is: creature parts (10, 15) are dropped, plants and stones
+        // (20-50) harvested, rare ones (rarity above 0) rare harvested; bought is what a shop sells.
+        st.subs = REAGENT_TABS.len() - 1;
+        let tab = st.sub % st.subs;
+        list.retain(|(_, _, id)| {
+            let raw = id & 0x0FFF_FFFF;
+            let source = d.items.source(raw);
+            let creature = source.is_some_and(|(sg, _)| sg == 10 || sg == 15);
+            match tab {
+                1 => source.is_some() && !creature && d.items.rank(raw) == 1,
+                2 => source.is_some() && !creature && d.items.rank(raw) > 1,
+                3 => source.is_some_and(|(_, shop)| shop),
+                4 => creature,
+                _ => true,
+            }
+        });
         reagents(l, d, st, v, &list, &rows);
         return;
     }
@@ -1536,7 +1708,8 @@ fn crafting(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
 fn reagents(l: &Layout, d: &Data, st: &mut State, v: &mut View, list: &[(String, u32, u32)], rows: &[usize]) {
     v.set(l.find("title"), centre("Materials"));
     hide(l, v, &["portrait_background", "card_background", "IngredientBackground", "TabLayoutEquipment",
-                 "TabBackground", "CreateButton", "FiltersButton", "EquipButton"]);
+                 "TabBackground", "CreateButton", "EquipButton"]);
+    // (The filters button stays, greyed as in the crafting view.)
     // The kit's name banner and the station's doodles (ReagentWindow keeps only the one down the right edge).
     v.show(l.find("labelItemHighlighted").and_then(|t| l.nodes[t].parent), false);
     for (i, n) in l.nodes.iter().enumerate() {
@@ -1547,19 +1720,25 @@ fn reagents(l: &Layout, d: &Data, st: &mut State, v: &mut View, list: &[(String,
     for r in rows {
         v.show(Some(*r), false);
     }
+    let chosen = st.sub % REAGENT_TABS.len();
     for (i, (button, tip)) in REAGENT_TABS.iter().enumerate() {
         let x = 71.0 + 49.0 * i as f32;
         v.backs.push(([x - 7.0, 44.0, x + 49.0, 106.0], "GUI/Art/Art_CraftingTab.png".into(), [0.0, 0.0, 1.0, 1.0]));
-        // Frames: normal top left, greyed bottom right.
-        // (Button_Class_Project is one picture, not four.)
-        let uv = match i {
-            0 => [0.0, 0.0, 0.5, 0.5],
-            5 => [0.0, 0.0, 1.0, 1.0],
-            _ => [0.5, 0.5, 1.0, 1.0],
-        };
-        v.images.push(([x, 52.0, x + 40.0, 92.0], format!("GUI/Buttons/{button}.png"), uv));
-        v.tip([x, 52.0, x + 40.0, 92.0], vec![tip.to_string()]);
+        // Frames: normal top left, highlighted top right (the chosen tab). Button_Class_Project is one picture,
+        // not four; Elden Ring has no class projects, so it stays faded.
+        let r = [x, 52.0, x + 40.0, 92.0];
+        if i == REAGENT_TABS.len() - 1 {
+            v.images.push((r, format!("GUI/Buttons/{button}.png"), [0.0, 0.0, 1.0, 1.0]));
+            v.over_fills.push((r, ImColor32::from_rgba(150, 140, 120, 130)));
+            v.tip(r, vec![tip.to_string(), "None in Elden Ring".into()]);
+            continue;
+        }
+        let uv = if i == chosen { [0.5, 0.0, 1.0, 0.5] } else { [0.0, 0.0, 0.5, 0.5] };
+        v.images.push((r, format!("GUI/Buttons/{button}.png"), uv));
+        v.tip(r, vec![tip.to_string()]);
+        st.hits.push((r, Hit::Sub(i)));
     }
+    v.tab_row = Some([71.0, 52.0, 71.0 + 49.0 * (REAGENT_TABS.len() - 1) as f32 + 40.0, 92.0]);
     // The page buttons where ReagentWindow has them (PageButtons, under the left page).
     for (name, r) in [("PageNumber", [134.0, 535.0, 293.0, 570.0]), ("leftscroll", [81.0, 534.0, 119.0, 572.0]),
                       ("rightscroll", [309.0, 534.0, 347.0, 572.0])] {
@@ -1589,12 +1768,20 @@ fn reagents(l: &Layout, d: &Data, st: &mut State, v: &mut View, list: &[(String,
         // Name on the green band (white), rank in the yellow triangle, school in the circle, name on the paper.
         v.add(rect(6.0, 5.0, 122.0, 24.0), name.clone(), TextStyle::new("WizardFancy", 0.3, WHITE).centred().outlined());
         let rank = d.items.rank(id & 0x0FFF_FFFF);
-        // The rank triangle is yellow in Wizard101's cards.
-        v.over_tris.push(([at(6.0, 27.5), at(29.5, 27.5), at(17.75, 48.0)], ImColor32::from_rgb(250, 222, 60)));
-        v.add(rect(4.0, 26.0, 31.0, 42.0), rank.to_string(), TextStyle::new("WizardFancy", 0.4, BLACK).centred());
+        // The rank: a plain yellow number in the card's own triangle, as Wizard101 prints it.
+        v.add(rect(5.0, 26.0, 30.0, 44.0), rank.to_string(),
+              TextStyle::new("WizardFancy", 0.4, YELLOW).centred().outlined());
+        // The school: Wizard101's school icon (GUI/Icons/Icon_<School>) inside the card's circle (centre 111.8, 39,
+        // 21 across inside its rim), kept square on the page.
         let school = reagent_school(name);
-        v.images.push((rect(100.0, 28.0, 124.0, 52.0), school_icon(school), [0.0, 0.0, 1.0, 1.0]));
-        v.add(rect(9.0, 128.0, 119.0, 160.0), name.clone(), TextStyle::new("WizardNormal", 0.42, BLACK).centred().wrapped());
+        let (c, e) = (at(111.8, 39.0), at(111.8 + 10.5, 39.0 + 10.5));
+        let half = (e[0] - c[0]).min(e[1] - c[1]);
+        v.images.push(([c[0] - half, c[1] - half, c[0] + half, c[1] + half], school_icon(school), [0.0, 0.0, 1.0, 1.0]));
+        // The name on the paper in Wizard101's card text font (SpellDescription), one size on every card: the
+        // largest at which the longest material name fits the paper (two lines).
+        let mut paper = TextStyle::new("SpellDescription", REAGENT_TEXT_SCALE, BLACK).centred().wrapped();
+        paper.middle = false;
+        v.add(rect(12.0, 132.0, 116.0, 186.0), name.clone(), paper);
         // The count on the sun (CardNumber, 128,171 .. 153,190).
         let (n0, n1) = (card(126.0, 171.0), card(155.0, 191.0));
         v.add([n0[0], n0[1], n1[0], n1[1]], count.to_string(), TextStyle::new("WizardFancy", 0.42, BLACK).centred());
@@ -1603,7 +1790,8 @@ fn reagents(l: &Layout, d: &Data, st: &mut State, v: &mut View, list: &[(String,
         v.tip([x, y, x + w, y + h], tip);
     }
     if list.is_empty() {
-        v.add([61.0, 200.0, 387.0, 240.0], "No materials yet", TextStyle::new("WizardFancy", 0.55, BLACK).centred());
+        let text = if chosen == 0 { "No materials yet" } else { "None of these yet" };
+        v.add([61.0, 200.0, 387.0, 240.0], text, TextStyle::new("WizardFancy", 0.55, BLACK).centred());
     }
 }
 
@@ -1617,40 +1805,61 @@ const REAGENT_TABS: [(&str, &str); 6] = [
 const REAGENT_FRAME: &str = "GUI/Cards/School_Resource_Blnk.png";
 const REAGENT_MEDALLION: &str = "GUI/Reagents/Resource_Nothing.png";
 
-/// A Wizard101 school's small round icon (GUI/Icons; Shadow has only the large one).
+/// A Wizard101 school's icon (GUI/Icons/Icon_<School>, 32 x 32, the art the reagent cards show in their circle).
 fn school_icon(school: &str) -> String {
-    if school == "Shadow" { "GUI/Icons/Icon_Shadow.png".into() } else { format!("GUI/Icons/Icon_SM_{school}.png") }
+    format!("GUI/Icons/Icon_{school}.png")
 }
+/// SpellDescription's scale for the reagent cards' names: the largest at which every Elden Ring material name
+/// (the longest, Tarnished Golden Sunflower) wraps into the paper box (104 x 54 card pixels, 80 x 42 on the page)
+/// (worked out from SpellDescription.xml's glyph widths).
+const REAGENT_TEXT_SCALE: f32 = 0.73;
 
 // ---------------------------------------------------------------------------------------------------------------
 // Help: HelpSpellbookPage.gui. Its topic buttons pick the help text (Wizard101 loads its help pages from other
 // layouts; here the text is drawn on the book's pages in Wizard101's fonts).
 
-/// (topic button, title, text)
-const HELP: [(&str, &str, &str); 4] = [
-    ("Tab_Questing", "The Spellbook",
-     "Open and close the book with B on the keyboard or the View button on the controller (Elden Ring's map button). \
-      Esc or the controller's B button also close it.\n\nThe tabs down the right edge are the book's pages, as in \
-      Wizard101; the round buttons along the top of a page are its categories. Point at an item for its stats."),
-    ("Tab_Combat", "Controller",
-     "LT / RT or D-pad up and down: previous / next page of the book (the tabs on the right).\n\
-      LB / RB: previous / next category along the top of the page.\nD-pad left and right: turn the page of a list.\n\
-      Right stick: turn your character in the Backpack (it turns by itself; a click on it stops it).\n\
-      A: use the tab (the World Map tab opens Elden Ring's map).\nB or View: close the book."),
-    ("Tab_Interface", "Keyboard and Mouse",
-     "Click a tab or a button; point at an item for its stats. Up / Down arrows: previous / next page of the book. \
-      Q / E: previous / next category. Left / Right arrows or the mouse wheel: turn the page of a list. Drag your \
-      character in the Backpack to turn it. Enter: use the tab. B or Esc: close the book."),
-    ("Tab_Character", "The Pages",
-     "Character: level, health, mana (FP), energy (stamina), flasks, attributes and achievements.\nBackpack: your \
-      character and everything you carry; double-click an item to equip it (a talisman again to take it off).\nPets: Torrent and your spirit ashes.\nDeck: your memory slots on the left, your \
-      spells by school on the right; click a spell to memorize it, click a slot to forget it (anywhere, not only at a grace).\nQuests: the Unicorn Way quests you have taken on.\nWorld Map: Elden Ring's map.\nCrafting: \
-      reagents (materials) and cookbooks with their recipes.\nSettings: the HUD's settings."),
+/// (topic button, left page (heading, text), right page (heading, text)): each topic laid out as a spread, one
+/// heading and its text on each page, as Wizard101's help book does.
+const HELP: [(&str, (&str, &str), (&str, &str)); 4] = [
+    ("Tab_Questing",
+     ("The Spellbook",
+      "Open and close the book with B on the keyboard or the View button on the controller (Elden Ring's map \
+       button).\n\nEsc or the controller's B button also close it."),
+     ("Tabs and Categories",
+      "The tabs down the right edge are the book's pages, as in Wizard101.\n\nThe round buttons along the top of a \
+       page are its categories.\n\nPoint at an item for its stats.")),
+    ("Tab_Combat",
+     ("Controller",
+      "LT / RT or D-pad up and down: previous / next page of the book.\n\nLB / RB: previous / next category along \
+       the top of the page.\n\nD-pad left and right: turn the page of a list."),
+     ("More Buttons",
+      "Right stick: turn your character in the Backpack (it turns by itself; a click on it stops it).\n\nA: use \
+       the tab (the World Map tab opens Elden Ring's map).\n\nB or View: close the book.")),
+    ("Tab_Interface",
+     ("Keyboard",
+      "Up / Down arrows: previous / next page of the book.\n\nQ / E: previous / next category.\n\nLeft / Right \
+       arrows: turn the page of a list.\n\nEnter: use the tab.\n\nB or Esc: close the book."),
+     ("Mouse",
+      "Click a tab or a button; point at an item for its stats.\n\nThe mouse wheel turns the page of a list.\n\n\
+       Drag your character in the Backpack to turn it.\n\nClick an item to choose it; double-click it to equip it, \
+       or to take it off when it is equipped.")),
+    ("Tab_Character",
+     ("The Pages",
+      "Character: level, health, mana (FP), energy (stamina), flasks, attributes and badges.\n\nBackpack: \
+       everything you carry. The fist equips the chosen item, the open hand takes it off.\n\nPets: Torrent and your \
+       spirit ashes (the fist puts one in your quick items)."),
+     ("More Pages",
+      "Deck: your memory slots, and your spells by school. Click a spell to memorize it, a slot to forget it, \
+       anywhere.\n\nQuests: the Unicorn Way quests you have taken on.\n\nWorld Map: Elden Ring's map.\n\n\
+       Crafting: materials by kind, and cookbooks with their recipes.\n\nSettings: the HUD's settings.")),
 ];
+
+/// The help spread's two pages (page pixels, inside the book's margins and clear of the spine).
+const HELP_PAGES: [[f32; 4]; 2] = [[84.0, 112.0, 360.0, 528.0], [412.0, 112.0, 688.0, 528.0]];
 
 fn help(l: &Layout, st: &mut State, v: &mut View) {
     st.subs = HELP.len();
-    let (button, title, text) = HELP[st.sub % HELP.len()];
+    let (button, left, right) = HELP[st.sub % HELP.len()];
     let chosen = l.find(button);
     if let Some(c) = chosen {
         v.checked.insert(c);
@@ -1661,8 +1870,13 @@ fn help(l: &Layout, st: &mut State, v: &mut View) {
     grey(l, v, &["Tab_Housing", "Tab_Crafting", "Tab_CrownShop", "Tab_Pets", "Tab_Gardening", "NextHelpPage",
                  "leftscroll", "rightscroll"]);
     v.set(l.find("pageText"), centre("1/1"));
-    v.add([90.0, 112.0, 690.0, 146.0], title, TextStyle::new("WizardFancy", 0.8, BLACK).centred());
-    v.add([110.0, 160.0, 670.0, 520.0], text, TextStyle::new("WizardNormal", 0.5, BLACK).wrapped());
+    for ((heading, text), r) in [left, right].into_iter().zip(HELP_PAGES) {
+        v.add([r[0], r[1], r[2], r[1] + 36.0], heading, TextStyle::new("WizardFancy", 0.7, BLACK).centred());
+        v.fills.push(([r[0] + 40.0, r[1] + 42.0, r[2] - 40.0, r[1] + 43.5], ImColor32::from_rgba(90, 60, 30, 110)));
+        let mut body = TextStyle::new("WizardNormal", 0.46, BLACK).wrapped();
+        body.middle = false;
+        v.add([r[0], r[1] + 54.0, r[2], r[3]], text, body);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------

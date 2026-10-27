@@ -69,6 +69,12 @@ const EQUIP_FIST: &str = "GUI/InventoryPage/Button_Equip.png";
 /// A tooltip row's school and stat icons (Wizard101's 32 px icons drawn small, beside the value).
 const TIP_ICON: f32 = 20.0;
 
+/// Nameplate text sizes (WizardFancy scale at 768 pixels of screen height): the reference crop
+/// (w101_reference/nameplate_lost_soul.png, taken at about 1.1x Wizard101's 768 size like the reagent card beside it)
+/// has the name about 20 pixels tall, the rank line about 14.
+const NAME_SCALE: f32 = 0.5;
+const RANK_SCALE: f32 = 0.34;
+
 /// The Backpack picture's own turning (radians per second), like Wizard101's slowly turning wizard.
 const SPIN: f32 = 1.0;
 /// How quickly the Backpack picture zooms to a category (per second).
@@ -288,7 +294,7 @@ impl Book {
     /// first drawn.
     pub fn load(&mut self, folder: &Path, render: &mut dyn RenderContext) {
         self.folder = folder.to_path_buf();
-        for font in ["WizardFancy", "WizardNormal"] {
+        for font in ["WizardFancy", "WizardNormal", "SpellDescription", "SpellTitle_sm"] {
             match BitmapFont::load(folder, font, render) {
                 Ok(f) => {
                     self.fonts.insert(font.to_string(), f);
@@ -557,7 +563,7 @@ impl Book {
             let icon = (!plate.school.is_empty()).then(|| format!("GUI/Icons/Icon_SM_{}.png", plate.school));
             let name = plate.name.to_uppercase();
             let line = plate.line.to_uppercase();
-            let (name_scale, line_scale, icon_side) = (0.62, 0.42, 16.0);
+            let (name_scale, line_scale, icon_side) = (NAME_SCALE, RANK_SCALE, RANK_SCALE * 38.0);
             let name_w = fancy.width(&name) * name_scale;
             let line_w = fancy.width(&line) * line_scale + if icon.is_some() { icon_side + 3.0 } else { 0.0 };
             let w = name_w.max(line_w) + 8.0;
@@ -750,6 +756,16 @@ impl Book {
             Action::Close => self.set_open(false),
             Action::Tab(tab) => self.select(tab, false),
             Action::Setting(row, step) => self.change_setting(row, step, cx),
+            Action::Warp(flag) => {
+                tracing::info!("map page: warp flag {flag}");
+                game::set_event_flag(flag, true);
+                self.set_open(false);
+            }
+            Action::Equip(id) => {
+                if let Some(sheet) = self.sheet.clone() {
+                    self.equip(id, &sheet, cx);
+                }
+            }
         }
     }
 
@@ -798,22 +814,44 @@ impl Book {
                 }
             }
             Hit::Item(id) if double => {
-                let name = self.names.as_ref().map(|n| n.item(id)).unwrap_or_default();
-                let text = match (pages::equip_slot(&sheet, &self.items, id), cx.game) {
-                    (None, _) => format!("{name} can't be equipped"),
-                    (Some(_), None) => "Equipping needs the game".into(),
-                    (Some((slot, item)), Some(game)) => match game.equip(slot, item) {
-                        Ok(()) => {
-                            self.sheet_time = None;
-                            if item.is_some() { format!("Equipped {name}") } else { format!("Took off {name}") }
-                        }
-                        Err(why) => format!("Couldn't equip {name}: {why}"),
-                    },
-                };
-                note(&mut self.state, text);
+                self.state.selected = Some(id);
+                self.equip(id, &sheet, cx);
             }
             Hit::Item(id) => self.state.selected = Some(id),
+            Hit::Sub(i) => {
+                self.state.sub = i;
+                self.state.page = 0;
+            }
         }
+    }
+
+    /// Equips the item, or takes it off when it is equipped (the slot is left empty): a double click in the
+    /// Backpack, or the equip button there and on the Pets page.
+    fn equip(&mut self, id: u32, sheet: &Sheet, cx: &Context) {
+        let name = self.names.as_ref().map(|n| n.item(id)).unwrap_or_default();
+        let text = match (pages::equip_slot(sheet, &self.items, &name, id), cx.game) {
+            (None, _) => format!("{name} can't be equipped"),
+            (Some(_), None) => "Equipping needs the game".into(),
+            (Some(how), Some(game)) => {
+                let (done, on) = match how {
+                    pages::Equip::Gear(slot, item) => (game.equip(slot, item), item.is_some()),
+                    pages::Equip::Quick(on) => (game.set_quick_item(id, on), on),
+                };
+                match done {
+                    Ok(()) => {
+                        self.sheet_time = None;
+                        match (on, how) {
+                            (true, pages::Equip::Quick(_)) => format!("{name} is in your quick items"),
+                            (true, _) => format!("Equipped {name}"),
+                            (false, _) => format!("Took off {name}"),
+                        }
+                    }
+                    Err(why) => format!("Couldn't equip {name}: {why}"),
+                }
+            }
+        };
+        tracing::info!("equip {id:#x}: {text}");
+        self.state.note = Some((text, Instant::now()));
     }
 
     /// The mouse: the system cursor when it moves, else DirectInput's movement (Elden Ring can hold the system
@@ -1298,13 +1336,17 @@ impl Book {
             }
         }
         match self.map {
-            MapState::Opening(_) if !cx.hud => self.map = MapState::Open,
+            MapState::Opening(_) if !cx.hud => {
+                input::end_map_press();
+                self.map = MapState::Open;
+            }
             MapState::Opening(since) if since.elapsed().as_secs_f32() > 4.0 => {
                 self.after_map = None;
                 tracing::warn!("spellbook: Elden Ring's map didn't open");
                 self.map = MapState::Idle;
             }
             MapState::Open if cx.gameplay => {
+                input::end_map_press();
                 self.map = MapState::Idle;
                 if self.travelled {
                     tracing::info!("spellbook: travelled from the map; the book stays closed");
