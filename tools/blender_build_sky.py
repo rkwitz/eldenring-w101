@@ -106,9 +106,12 @@ SKY_SATURATION = 1.3  # pushes the colours away from grey (1.0 = as graded); a b
 # 34..71 deg), blue below, as Wizard101's own texture is (its blue band reaches ~15 deg).
 # 2026-10-27 round 9: "moved the sky a little too high", wants just a little blue: shifted 5 deg down, 0..35 now spans
 # W101 10..23 (dome 19.5..55 deg), blue fading out by W101 11.3 (dome 23), just above the lowest skyline.
-SKY_TARGET = [(-30, (150, 178, 245)), (3, (155, 180, 245)), (10.0, (161, 183, 245)), (11.3, (185, 193, 252)),
-              (12.6, (220, 204, 254)), (13.9, (238, 201, 254)), (15.2, (240, 190, 255)), (16.5, (235, 180, 253)),
-              (17.8, (223, 166, 249)), (19.1, (215, 155, 242)), (20.4, (208, 151, 237)), (23.0, (206, 151, 236)),
+# 2026-10-29 round 11: "still showing too much blue, lower it more": 4 deg down again, 0..35 now spans W101 6..19
+# (dome 8..45.5 deg), blue fading out by W101 7.3 (dome 11.7), pink by dome 15: all of it under the street's skyline
+# (20-40 deg up), so above the rooftops only pink and lavender show.
+SKY_TARGET = [(-30, (150, 178, 245)), (-1, (155, 180, 245)), (6.0, (161, 183, 245)), (7.3, (185, 193, 252)),
+              (8.6, (220, 204, 254)), (9.9, (238, 201, 254)), (11.2, (240, 190, 255)), (12.5, (235, 180, 253)),
+              (13.8, (223, 166, 249)), (15.1, (215, 155, 242)), (16.4, (208, 151, 237)), (19.0, (206, 151, 236)),
               (90, (206, 151, 236))]
 SKY_DETAIL = 1.2  # 0.5 (2026-10-25) flattened the swirls; 1.0 = the bake's own swirls and clouds, above = stronger
 # Lighting for the whole overworld (gparam_fog.flat_lighting): True = no sun, no shadows, ambient light of intensity
