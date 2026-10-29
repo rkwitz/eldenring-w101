@@ -281,6 +281,8 @@ pub struct View {
     pub frames: Vec<([f32; 4], [Option<String>; 9])>,
     /// Images drawn after the nodes: (rect, image, uv).
     pub images: Vec<([f32; 4], String, [f32; 4])>,
+    /// Images drawn with the images, tinted (rect, image, uv, tint): a faded badge keeps its own shape.
+    pub tinted: Vec<([f32; 4], String, [f32; 4], ImColor32)>,
     /// Windows drawn without their background image (their children still draw).
     pub no_back: HashSet<usize>,
     /// Nodes drawn whole over the canvas's hole (the frame around it).
@@ -731,6 +733,9 @@ pub fn draw_extra(view: &View, canvas: &Canvas) {
     }
     for (r, img, uv) in &view.images {
         canvas.image(img, *r, *uv, ImColor32::WHITE);
+    }
+    for (r, img, uv, tint) in &view.tinted {
+        canvas.image(img, *r, *uv, *tint);
     }
     for (p, colour) in &view.over_tris {
         let [a, b, c] = p.map(|q| canvas.at(q[0], q[1]));

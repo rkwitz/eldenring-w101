@@ -78,6 +78,8 @@ EXTRA_ART += [f"GUI/Icons/Icon_{s}.dds" for s in ("Balance", "Death", "Fire", "I
 EXTRA_ART += [f"GUI/Icons/Type_{t}.dds" for t in ("AOE", "Heal", "HealOverTime", "DamageOverTime", "Charm", "Ward",
               "Curse", "Jinx", "Global", "Enchantment", "Manipulation", "Steal", "Aura", "Polymorph", "Blade", "Trap",
               "Absorb", "Cloak", "Mutate", "Shadow_Self", "Shadow_Creature", "MaxHealth", "MaxMana")]
+# The Pets page's talent rows (PetTalentControl.gui's background) and Wizard101's talent icon sheet.
+EXTRA_ART += ["GUI/Backgrounds/Background_Pet_Talent.dds", "GUI/Talents/PetTalent_Complete_Color01.dds"]
 # Fonts the DLL draws with that no page names: the card description and card title fonts.
 EXTRA_FONTS = ["SpellDescription", "SpellTitle_sm"]
 FONT_FILE = re.compile(r"([A-Za-z0-9_]+)\.xml$")
@@ -347,7 +349,9 @@ def main():
     strings = Strings(wads)
     conv = Converter(wads, strings)
     pages = {}
-    for page in PAGES:
+    # --pages=A,B converts only those GUI/<page>.gui files (e.g. PetGeneticsControl for the pet talents).
+    only = [a.split("=", 1)[1].split(",") for a in sys.argv if a.startswith("--pages=")]
+    for page in (only[0] if only else PAGES):
         data = wads.read(f"GUI/{page}.gui")
         if data is None:
             print(f"{page}.gui not found")

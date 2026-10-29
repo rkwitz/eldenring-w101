@@ -992,6 +992,7 @@ impl Book {
             }
         }
         wanted.extend(view.images.iter().map(|i| i.1.clone()));
+        wanted.extend(view.tinted.iter().map(|i| i.1.clone()));
         wanted.extend(view.node_art.values().cloned());
         wanted.extend(view.backs.iter().map(|i| i.1.clone()));
         wanted.extend(view.frames.iter().flat_map(|f| f.1.iter().flatten().cloned()));
@@ -1311,6 +1312,7 @@ impl Book {
         if open {
             self.opened_at = Instant::now();
             self.state.page = 0;
+            self.state.pet = 0; // the Pets page opens on the equipped spirit ash
             self.sheet_time = None;
         } else {
             self.holding = true;

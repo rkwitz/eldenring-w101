@@ -17,15 +17,24 @@ pub enum Title {
 }
 
 /// (model, name, rank, school ("" = none shown), title, the creature's height in metres when the game's hit capsule
-/// can't be read).
-pub const CREATURES: [(u32, &str, u32, &str, Title, f32); 7] = [
-    (4180, "Lost Soul", 1, "Death", Title::Normal, 2.3),
-    (3500, "Skeletal Pirate", 1, "Death", Title::Normal, 2.3),
-    (3450, "Dark Sprite", 1, "Life", Title::Elite, 1.9),
-    (4960, "Rattlebones", 3, "Death", Title::Boss, 3.6),
-    (3300, "Lady Blackhope", 3, "Life", Title::Boss, 2.8),
-    (4340, "Fear of Fire", 3, "Fire", Title::Boss, 3.2),
-    (2120, "Seraph", 2, "Life", Title::Normal, 2.8),
+/// can't be read, the plate's lift in metres when the capsule is the wrong measure of what is seen).
+///
+/// The capsule (NpcParam hitHeight, read live as CSChrPhysicsModule hit_height) fits the Lost Soul (3.0) and the
+/// Skeletal Pirate (1.9): capsule + GAP puts the plate about 0.35 m over what is seen (tools/er_chr_height.py: the
+/// pirate's idle head bone 1.91 m, mesh top 2.16; the Lost Soul's hood 2.98, mesh top 3.19). It does not fit the
+/// other two, so they use their seen height + 0.35 instead:
+/// - Dark Sprite (c3450 Winged Misbegotten): capsule 2.0-2.2, but it crouches: idle head bone 1.03 m, highest bone
+///   (wing tip L_Wing04) 1.37 -> seen top 1.45, plate 1.8.
+/// - Rattlebones (c4960 giant skeleton torso): capsule 1.0 (the hit box is the crawling body), but the torso rears
+///   up: head bone 4.61 m, eyelids 5.33 in the model's pose -> skull top about 5.6, plate 5.95.
+pub const CREATURES: [(u32, &str, u32, &str, Title, f32, Option<f32>); 7] = [
+    (4180, "Lost Soul", 1, "Death", Title::Normal, 3.0, None),
+    (3500, "Skeletal Pirate", 1, "Death", Title::Normal, 1.9, None),
+    (3450, "Dark Sprite", 1, "Life", Title::Elite, 2.2, Some(1.8)),
+    (4960, "Rattlebones", 3, "Death", Title::Boss, 1.0, Some(5.95)),
+    (3300, "Lady Blackhope", 3, "Life", Title::Boss, 2.8, None),
+    (4340, "Fear of Fire", 3, "Fire", Title::Boss, 3.2, None),
+    (2120, "Seraph", 2, "Life", Title::Normal, 2.8, None),
 ];
 
 /// Plates show this far away (metres), fading over the last part.
@@ -53,8 +62,8 @@ pub struct Plate {
 pub fn plates(camera: &Camera, enemies: &[(u32, [f32; 3], f32)], screen: [f32; 2]) -> Vec<Plate> {
     let mut out: Vec<(f32, Plate)> = Vec::new();
     for &(model, p, height) in enemies {
-        let Some(&(_, name, rank, school, title, tall)) = CREATURES.iter().find(|c| c.0 == model) else { continue };
-        let lift = if height > 0.0 { height } else { tall } + GAP;
+        let Some(&(_, name, rank, school, title, tall, seen)) = CREATURES.iter().find(|c| c.0 == model) else { continue };
+        let lift = seen.unwrap_or(if height > 0.0 { height } else { tall } + GAP);
         let d = ((p[0] - camera.player[0]).powi(2) + (p[1] - camera.player[1]).powi(2)
             + (p[2] - camera.player[2]).powi(2)).sqrt();
         if d > RANGE {

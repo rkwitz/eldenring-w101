@@ -229,6 +229,7 @@ impl State {
     pub fn reset(&mut self) {
         self.page = 0;
         self.sub = 0;
+        self.pet = 0; // the Pets page opens on the equipped spirit ash
         self.filter_node = None;
     }
 
@@ -564,11 +565,17 @@ const CHARACTER_SUBPAGES: [&str; 9] = [
     "ActivitiesPageBG", "NewPvPBG", "SecondarySchoolsPageBG",
 ];
 
-/// The badge rows' seal (centre x and y from the row's top left, half width and height of the medal inside the
-/// spikes) and bar (x from, y from the row's top, x to, y to the row's top), measured in
-/// Background_Character_Right_Badges (256 x 512 drawn at 390,0 - 720,600: 1.289 x 1.172).
-const BADGE_SEAL: [f32; 4] = [0.5, 30.5, 20.0, 20.0];
+/// Background_Character_Right_Badges (256 x 512 drawn at 390,0 - 720,600: 1.289 x 1.172 per art pixel) has, per
+/// row, a darker badge-shaped outline (a ribbon trapezoid over a spiky seal: Art_Badge01's own silhouette) and a bar
+/// beside it. Measured in the art for row 0 (row top 143): the outline's ribbon top runs x 28-70, y 123, its seal
+/// tip ends at y 168 and the next row's ribbon starts at y 169, i.e. page x 426.1-480.2, y 144.2-198.3: a 54 x 54
+/// square (the 64 x 64 medal art) centred 1 px right of the row's left edge. Stored as (x from the row's left,
+/// y from its top, x to, y to).
+const BADGE_MEDAL: [f32; 4] = [-25.9, 1.2, 28.2, 55.3];
+/// The bar's outline in the art (y 130-157, x to 449 page): x from, y from the row's top, x to, y to.
 const BADGE_BAR: [f32; 4] = [474.0, 9.5, 675.0, 41.0];
+/// The text area inside the row's Button_Item frame (256 x 32): inside its gold line, x 11-243, y 5-24.
+const BADGE_TEXT: [f32; 4] = [11.0 / 256.0, 5.0 / 32.0, 243.0 / 256.0, 24.0 / 32.0];
 
 fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.subs = 2;
@@ -746,23 +753,23 @@ fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 v.greyed.insert(*row);
             }
             let fade = |c: ImColor32| if state == Some(true) { c } else { ImColor32::from_rgba(c.r, c.g, c.b, 140) };
-            // Background_Character_Right_Badges has, per row, a spiky round seal on the left and a bar beside it
-            // (measured in the art: seal centred on the row's left edge, 30 below its top, 20 across inside the
-            // spikes; bar from x 474 to 675, 9 to 41 below the row's top). The row's own button art (Button_Item)
-            // lies on the bar, the badge's medal (Art_Badge01-06) in the seal, the status and name on the bar.
+            // The row's own button art (Button_Item) lies on the background's bar, the badge's medal
+            // (Art_Badge01-06) exactly over the background's badge outline, the status and name inside the
+            // frame's gold line (one small line over one larger, both shrunk to fit its width).
             let bar = [BADGE_BAR[0], r[1] + BADGE_BAR[1], BADGE_BAR[2], r[1] + BADGE_BAR[3]];
             v.rect.insert(*row, bar);
-            let (cx, cy) = (r[0] + BADGE_SEAL[0], r[1] + BADGE_SEAL[1]);
-            let (hw, hh) = (BADGE_SEAL[2], BADGE_SEAL[3]);
-            v.images.push(([cx - hw, cy - hh, cx + hw, cy + hh], badge_art(a).into(), [0.0, 0.0, 1.0, 1.0]));
-            if state != Some(true) {
-                // Not earned: the medal faded, as Wizard101 shows badges still to earn.
-                v.over_fills.push(([cx - hw, cy - hh, cx + hw, cy + hh], ImColor32::from_rgba(200, 170, 130, 130)));
-            }
-            v.add([bar[0] + 6.0, bar[1] + 1.0, bar[2] - 6.0, bar[1] + 12.0], status.to_string(),
-                  TextStyle::new("WizardFancy", 0.28, fade(LIGHT_YELLOW)).centred());
-            v.add([bar[0] + 6.0, bar[1] + 11.0, bar[2] - 6.0, bar[3] - 1.0], name.to_string(),
-                  TextStyle::new("WizardFancy", 0.4, fade(YELLOW)).centred());
+            let medal = [r[0] + BADGE_MEDAL[0], r[1] + BADGE_MEDAL[1], r[0] + BADGE_MEDAL[2], r[1] + BADGE_MEDAL[3]];
+            // Not earned: the medal faded, as Wizard101 shows badges still to earn (tinted, so it keeps its shape).
+            let tint = if state == Some(true) { ImColor32::WHITE } else { ImColor32::from_rgba(200, 185, 160, 120) };
+            v.tinted.push((medal, badge_art(a).into(), [0.0, 0.0, 1.0, 1.0], tint));
+            let (bw, bh) = (bar[2] - bar[0], bar[3] - bar[1]);
+            let inner = [bar[0] + BADGE_TEXT[0] * bw, bar[1] + BADGE_TEXT[1] * bh,
+                         bar[0] + BADGE_TEXT[2] * bw, bar[1] + BADGE_TEXT[3] * bh];
+            let split = inner[1] + (inner[3] - inner[1]) * 0.4;
+            v.add([inner[0] + 2.0, inner[1] + 0.5, inner[2] - 2.0, split], status.to_string(),
+                  TextStyle::new("WizardFancy", 0.0, fade(LIGHT_YELLOW)).centred());
+            v.add([inner[0] + 2.0, split, inner[2] - 2.0, inner[3] - 0.5], name.to_string(),
+                  TextStyle::new("WizardFancy", 0.0, fade(YELLOW)).centred());
             v.tip(r, vec![name.to_string(), about.to_string(), status.to_string()]);
         }
     }
@@ -871,7 +878,7 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         })
         .map(|(id, n)| (names.item(*id), *n, is_equipped(sheet, *id), *id))
         .collect();
-    // What is worn or held comes first (with Wizard101's fist beside it), then the rest by name.
+    // What is worn or held comes first (with Wizard101's closed hand beside it), then the rest by name.
     items.sort_by(|a, b| (!a.2, &a.0, a.3).cmp(&(!b.2, &b.0, b.3)));
     v.set(l.find("inventorySpace"), centre(&items.len().to_string()));
     let page = paging(l, v, st, items.len(), rows.len(), ("PageNumber", "leftscroll", "rightscroll"));
@@ -894,12 +901,11 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                     v.add([r[2] - 50.0, r[1], r[2] - 16.0, r[3]], format!("x{count}"),
                           TextStyle::new("WizardFancy", 0.42, LIGHT_YELLOW).right());
                 }
-                // Beside each item that can be equipped, the hand its equip button shows: the open hand on what is
-                // equipped (a double click takes it off), the fist on the rest (a double click equips it).
+                // Wizard101's mark beside an item that is worn or held: the closed hand (the fist, the row's own
+                // "fist" window); nothing beside the rest.
                 v.show(fist, false);
-                if let (Some(f), Some(_)) = (fist, equip_slot(sheet, d.items, name, *id)) {
-                    let art = if *is_equipped { UNEQUIP_ART } else { EQUIP_ART };
-                    v.images.push((l.nodes[f].rect, art.into(), [0.0, 0.0, 0.5, 0.5]));
+                if let (Some(f), true) = (fist, *is_equipped) {
+                    v.images.push((l.nodes[f].rect, EQUIP_ART.into(), [0.0, 0.0, 0.5, 0.5]));
                 }
                 if shown == Some(*id) {
                     v.checked.insert(*row);
@@ -954,14 +960,11 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
 // ---------------------------------------------------------------------------------------------------------------
 // Pets: PetStatsSpellbookPage.gui. Wizard101's pets are closest to Torrent and the spirit ashes.
 
-/// Wizard101's thin gold message-box frame (Art_Message_Box02), for boxed list entries, and the parchment inside.
-fn box_frame() -> [Option<String>; 9] {
-    ["TL", "T", "TR", "L", "R", "BL", "B", "BR"].map(|p| Some(format!("GUI/Art/Art_Message_Box02_{p}.png")))
-        .into_iter().chain([None]).collect::<Vec<_>>().try_into().unwrap_or_default()
-}
 /// The pet portrait's frame (spritePortraitBack, 159 square in Wizard101) on the left page.
 const PET_PORTRAIT: [f32; 4] = [127.0, 56.0, 317.0, 246.0];
-const TALENT_BOX: ImColor32 = ImColor32::from_rgb(206, 182, 136);
+/// PetTalentControl.gui's row background and Wizard101's talent icon sheet (8 x 8 cells of 64 px).
+const TALENT_ROW: &str = "GUI/Backgrounds/Background_Pet_Talent.png";
+const TALENT_ICONS: &str = "GUI/Talents/PetTalent_Complete_Color01.png";
 
 fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.subs = 1;
@@ -988,7 +991,10 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             .collect();
         ashes.sort();
         ashes.dedup_by(|a, b| a.0 == b.0);
-        pets.extend(ashes);
+        // The equipped spirit ash (in the quick items) first, so the page opens on it; then Torrent, then the rest.
+        let (worn, rest): (Vec<_>, Vec<_>) = ashes.into_iter().partition(|a| sheet.quick_items.contains(&a.3));
+        pets.splice(0..0, worn);
+        pets.extend(rest);
     }
     if pets.is_empty() {
         v.show(l.find("wndContent"), false);
@@ -1042,7 +1048,6 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     let label = TextStyle::new("WizardFancy", 0.5, BLACK);
     let value = TextStyle::new("WizardFancy", 0.5, BLACK).right();
     let heading = TextStyle::new("WizardFancy", 0.5, BLACK).centred();
-    let entry = TextStyle::new("WizardFancy", 0.4, BLACK);
     let prose = TextStyle::new("WizardNormal", 0.42, BLACK).wrapped();
     let rule = ImColor32::from_rgba(90, 60, 30, 110);
     v.set(l.find("txtTitle"), centre(if level.is_some() { "Spirit Ashes" } else { "Spectral Steed" }));
@@ -1058,22 +1063,36 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         icon(v, d.items, *id, [window[0] + 8.0, window[1] + 8.0, window[2] - 8.0, window[3] - 8.0]);
     }
 
-    // The talents column (ctrlGenetics' place, from under the portrait): each talent in its own box, as Wizard101
-    // lists a pet's talents.
+    // The talents, laid out as Wizard101's PetGeneticsControl.gui (321 x 379, ctrlGenetics at 76,206) lists them:
+    // the "Talents n/n" tab (btnTalents: Button_Item's red frame, yellow WizardFancy 0.45 label and count), then
+    // one PetTalentControl.gui row per talent (293 x 35 on Background_Pet_Talent, rows 35 apart from y 24): the
+    // name centred in yellow WizardFancy 0.4 (txtName 5,9 - 249,26) and the talent's icon on the right (sprtIcon
+    // 258,-1 - 293,34), one 64 px cell of GUI/Talents/PetTalent_Complete_Color01 (8 x 8), the cell each talent's
+    // TalentData template names. The control sits under the (larger) portrait here instead of at y 206.
     let column = l.find("ctrlGenetics").map(|i| l.nodes[i].rect).unwrap_or([76.0, 206.0, 369.0, 580.0]);
-    let talents: Vec<&str> = if level.is_some() {
-        vec!["Fights at your side", "Upgrade with Glovewort", "Recalled when you rest", "One summon at a time"]
+    let (ox, oy) = (column[0], PET_PORTRAIT[3] + 7.0);
+    // (talent, icon cell): Wizard101's cells: 0 health, 1 mana, 2 pips, 3 accuracy, 4 damage, 5 resist, 6 pet
+    // experience and stats, 7 spell cards (May Cast), 8 pierce, 9 combat damage, 10 combat blades, 12 beguile,
+    // 13 pacify (dove), 19 stun, 22 fishing, 23 energy, 25 gardening, 26 archmastery.
+    let talents: Vec<(&str, usize)> = if level.is_some() {
+        vec![("Fights at your side", 9), ("Upgrade with Glovewort", 6), ("Recalled when you rest", 13),
+             ("One summon at a time", 7)]
     } else {
-        vec!["Double jump", "Rides spiritsprings", "Outdoors only", "Heals on Rowa Raisins"]
+        vec![("Double jump", 19), ("Rides spiritsprings", 26), ("Outdoors only", 25), ("Heals on Rowa Raisins", 0)]
     };
-    let mut y = PET_PORTRAIT[3] + 8.0;
-    v.add([column[0], y, column[2], y + 24.0], "Talents", heading.clone());
-    y += 28.0;
-    for t in &talents {
-        let b = [column[0] + 16.0, y, column[2] - 16.0, y + 30.0];
-        v.fills.push(([b[0] + 3.0, b[1] + 3.0, b[2] - 3.0, b[3] - 3.0], TALENT_BOX));
-        v.frames.push((b, box_frame()));
-        v.add([b[0] + 8.0, b[1], b[2] - 8.0, b[3]], *t, entry.clone().centred());
+    let tab = [ox, oy - 3.0, ox + 149.0, oy + 28.0];
+    v.backs.push((tab, "GUI/Shopping/Button_Item.png".into(), [0.0, 0.0, 1.0, 0.125]));
+    let gold = TextStyle::new("WizardFancy", 0.45, YELLOW);
+    v.add([ox + 7.0, oy + 2.0, ox + 79.0, oy + 21.0], "Talents", gold.clone());
+    v.add([ox + 85.0, oy + 2.0, ox + 140.0, oy + 21.0], format!("{0}/{0}", talents.len()), gold.right());
+    let mut y = oy + 24.0;
+    for (t, cell) in &talents {
+        let row = [ox, y, ox + 293.0, y + 35.0];
+        v.backs.push((row, TALENT_ROW.into(), [0.0, 0.0, 1.0, 1.0]));
+        v.add([ox + 5.0, y + 9.0, ox + 249.0, y + 26.0], *t, TextStyle::new("WizardFancy", 0.4, YELLOW).centred());
+        let (cx, cy) = ((cell % 8) as f32 / 8.0, (cell / 8) as f32 / 8.0);
+        v.images.push(([ox + 258.0, y - 1.0, ox + 293.0, y + 34.0], TALENT_ICONS.into(),
+                       [cx, cy, cx + 0.125, cy + 0.125]));
         y += 35.0;
     }
     y += 10.0;

@@ -95,7 +95,7 @@ impl Game {
             items,
             key_items: vec![(goods(130), 1), (goods(8000), 1), (goods(8500), 1), (goods(9500), 1), (goods(9300), 1),
                             (goods(9340), 1)],
-            quick_items: [goods(1007), 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            quick_items: [goods(1007), goods(240000 + 3), 0, 0, 0, 0, 0, 0, 0, 0],
         })
     }
 }
