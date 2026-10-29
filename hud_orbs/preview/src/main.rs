@@ -33,6 +33,8 @@ mod model;
 mod markers;
 #[path = "../../src/nameplates.rs"]
 mod nameplates;
+#[path = "../../src/loadscreen.rs"]
+mod loadscreen;
 mod input;
 mod game;
 
@@ -229,7 +231,18 @@ fn main() {
         ("9_settings", pages::Tab::Settings, 0, [0.0, 0.0], ""),
         ("11_markers", pages::Tab::Character, 0, [0.0, 0.0], "markers"),
         ("10_dialogue", pages::Tab::Character, 0, [0.0, 0.0], "talk:Ceren Nightchant"),
+        // The loading screen, then Wizard101's page turn that many seconds in.
+        ("12_loadscreen", pages::Tab::Character, 0, [0.0, 0.0], "load:"),
+        ("12b_flip_0.35", pages::Tab::Character, 0, [0.0, 0.0], "load:0.35"),
+        ("12c_flip_0.55", pages::Tab::Character, 0, [0.0, 0.0], "load:0.55"),
+        ("12d_flip_0.70", pages::Tab::Character, 0, [0.0, 0.0], "load:0.70"),
+        ("12e_flip_0.85", pages::Tab::Character, 0, [0.0, 0.0], "load:0.85"),
+        ("12f_flip_0.95", pages::Tab::Character, 0, [0.0, 0.0], "load:0.95"),
     ];
+    let mut load_screen = loadscreen::LoadScreen::default();
+    book.textures.want([loadscreen::IMAGE.to_string()]);
+    let settings_image = settings::load_settings(Path::new("/nonexistent")).loadscreen_image;
+    load_screen.load(folder.parent().unwrap_or(&folder), &settings_image, &folder.join("book").join("page_flip.tsv"), &mut render);
     for (name, tab, sub, mouse, show) in shots {
         if only.is_some_and(|o| !name.contains(o)) {
             continue;
@@ -244,6 +257,10 @@ fn main() {
         }
         if show == "cookbooks" {
             book.preview_cookbooks();
+        }
+        let load = show.strip_prefix("load:");
+        if load.is_some() {
+            book.preview_closed();
         }
         if let Some(pet) = show.strip_prefix("pet:") {
             book.preview_pet(pet.parse().unwrap());
@@ -273,6 +290,10 @@ fn main() {
             book.frame(ui, &mut cx);
             book.draw_markers(ui, &cx);
             book.draw_nameplates(ui, &cx);
+            if let Some(t) = load {
+                load_screen.preview_at(1.0, t.parse().ok());
+                load_screen.draw(ui, &book.textures, true, true);
+            }
             if frame == 1 {
                 book.preview_wait_models();
             }

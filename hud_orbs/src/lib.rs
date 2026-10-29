@@ -224,7 +224,8 @@ impl ImguiRenderLoop for Orbs {
         }
         self.book.load(&self.folder.join("w101_orbs").join("book"), render);
         self.book.textures.want([loadscreen::IMAGE.to_string()]);
-        self.loadscreen.load(&self.folder, &self.settings.loadscreen_image, render);
+        let flip = self.folder.join("w101_orbs").join("book").join("page_flip.tsv");
+        self.loadscreen.load(&self.folder, &self.settings.loadscreen_image, &flip, render);
         self.book.load_art(render);
         for line in input::install() {
             tracing::info!("input hook: {line}");

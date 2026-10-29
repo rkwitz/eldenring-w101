@@ -654,12 +654,24 @@ struct Cache {
 
 /// Reads er_idle_pose.py's table: per bone, the move from the skeleton's reference pose ("R" rows) to the idle
 /// animation's first frame ("A" rows), as a world transform (p * M + t), and the animated R_Weapon itself under
-/// the name "@R_Weapon".
+/// the name "@R_Weapon"; and how each weapon model sits in the hand ("H" rows: c0000.flver's dummy poly on
+/// R_Weapon that the weapon's WepAbsorpPosParam names) under "@hold/<model>", as rows [forward, upward, position].
 fn load_idle(path: &std::path::Path) -> Option<HashMap<String, (M3, [f32; 3])>> {
     let text = std::fs::read_to_string(path).ok()?;
     let mut rows: [HashMap<String, (M3, [f32; 3])>; 2] = [HashMap::new(), HashMap::new()];
+    let mut holds: HashMap<String, (M3, [f32; 3])> = HashMap::new();
+    let vec3 = |t: &str| -> Option<[f32; 3]> {
+        let v: Vec<f32> = t.split(' ').filter_map(|v| v.parse().ok()).collect();
+        (v.len() == 3).then(|| [v[0], v[1], v[2]])
+    };
     for line in text.lines() {
         let f: Vec<&str> = line.split('\t').collect();
+        if f.first() == Some(&"H") && f.len() >= 6 {
+            if let (Some(fwd), Some(up), Some(pos)) = (vec3(f[3]), vec3(f[4]), vec3(f[5])) {
+                holds.insert(format!("@hold/{}", f[1]), ([fwd, up, pos], [0.0; 3]));
+            }
+            continue;
+        }
         let which = match f.first() {
             Some(&"R") => 0,
             Some(&"A") => 1,
@@ -685,7 +697,8 @@ fn load_idle(path: &std::path::Path) -> Option<HashMap<String, (M3, [f32; 3])>> 
     if let Some(w) = animated.get("R_Weapon") {
         out.insert("@R_Weapon".into(), *w);
     }
-    tracing::info!("model: idle pose with {} bones", out.len());
+    tracing::info!("model: idle pose with {} bones, hand holds for {} weapon models", out.len(), holds.len());
+    out.extend(holds);
     (!out.is_empty()).then_some(out)
 }
 
@@ -895,13 +908,13 @@ fn inverse(m: &M3) -> M3 {
 const IDENTITY: M3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
 impl Pose {
-    fn new(body: Option<&Flver>, idle: Option<&HashMap<String, (M3, [f32; 3])>>) -> Pose {
+    fn new(body: Option<&Flver>, idle: Option<&HashMap<String, (M3, [f32; 3])>>, weapon: Option<u32>) -> Pose {
         let Some(f) = body else {
             return Pose { names: HashMap::new(), bind: vec![], delta: vec![], grip: [-0.25, 0.95, -0.15], weapon: None };
         };
         let bind = bind_pose(&f.bones);
         if let Some(idle) = idle {
-            return Pose::from_idle(f, bind, idle);
+            return Pose::from_idle(f, bind, idle, weapon);
         }
         let mut delta: Vec<Option<(M3, [f32; 3])>> = vec![None; f.bones.len()];
         fn get(i: usize, f: &Flver, bind: &[(M3, [f32; 3])], delta: &mut Vec<Option<(M3, [f32; 3])>>, depth: usize)
@@ -936,7 +949,8 @@ impl Pose {
 
     /// The pose of Elden Ring's idle animation: each body bone moves from its bind transform to the animation's
     /// (vertex -> bone space -> posed world); bones the animation doesn't know follow their nearest known ancestor.
-    fn from_idle(f: &Flver, bind: Vec<(M3, [f32; 3])>, idle: &HashMap<String, (M3, [f32; 3])>) -> Pose {
+    fn from_idle(f: &Flver, bind: Vec<(M3, [f32; 3])>, idle: &HashMap<String, (M3, [f32; 3])>, model: Option<u32>)
+                 -> Pose {
         let own: Vec<Option<(M3, [f32; 3])>> = f.bones.iter().map(|b| idle.get(&b.name).copied()).collect();
         let delta: Vec<(M3, [f32; 3])> = (0..f.bones.len())
             .map(|i| {
@@ -954,44 +968,19 @@ impl Pose {
             })
             .collect();
         let names: HashMap<String, usize> = f.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
-        let mut delta = delta;
-        let mut weapon = idle.get("@R_Weapon").copied();
-        // A natural wand hold, as Wizard101's wizards stand: the right elbow bent so the hand comes forward, in
-        // front of the body (and of any cloak), the weapon pointing forward, out and down from it (HOLD_TIP).
-        // Elden Ring's idle lets a weapon hang straight down beside the leg, where cloaks and robes hide it.
-        if let (Some(&forearm), Some(&hand)) = (names.get("R_Forearm"), names.get("R_Hand")) {
-            let posed = |i: usize, d: &[(M3, [f32; 3])]| add(apply(bind[i].1, &d[i].0), d[i].1);
-            let (elbow, wrist) = (posed(forearm, &delta), posed(hand, &delta));
-            let along = norm(sub(wrist, elbow));
-            let target = norm([along[0] * 0.5 - 0.05, -HOLD_FOREARM[0], -HOLD_FOREARM[1]]);
-            let q = rot_axis(cross(along, target), dot(along, target).clamp(-1.0, 1.0).acos());
-            let moved = |p: [f32; 3]| add(apply(sub(p, elbow), &q), elbow);
-            for i in 0..f.bones.len() {
-                let mut j = i as i32;
-                let mut under = false;
-                for _ in 0..64 {
-                    if j < 0 || j as usize >= f.bones.len() {
-                        break;
-                    }
-                    if j as usize == forearm {
-                        under = true;
-                        break;
-                    }
-                    j = f.bones[j as usize].parent;
-                }
-                if under {
-                    let (r, t) = delta[i];
-                    // (p*r + t - e)*q + e
-                    delta[i] = (mul(&r, &q), moved(t));
-                }
-            }
-            let grip = weapon.map_or_else(|| add(posed(hand, &delta), scale(apply(bind[hand].0[0], &delta[hand].0), 0.09)),
-                                          |w| moved(w.1));
-            let tip = norm(HOLD_TIP);
-            let y = scale(tip, -1.0);
-            let x = norm(cross(y, [0.0, 0.0, 1.0]));
-            weapon = Some(([x, y, cross(x, y)], grip));
-        }
+        // The weapon sits where Elden Ring puts it: its model's own origin and axes in the R_Weapon bone (the
+        // palm's weapon joint) of the idle animation, so the closed hand holds it as in the game. The body's own
+        // R_Weapon bone (bind, then the idle's move) keeps it in the same space as the posed body; the animation's
+        // R_Weapon is the fallback.
+        // The weapon sits where Elden Ring attaches it: on the dummy poly of the weapon's WepAbsorpPosParam
+        // (right_0, most often dummy 20), a frame on the R_Weapon bone, which then moves with the idle animation's
+        // R_Weapon. The model's origin is its grip, its +Y along the dummy's upward and +Z against its forward.
+        let weapon = idle.get("R_Weapon").map(|&(r, t)| {
+            let [fwd, up, pos] = model.and_then(|m| idle.get(&format!("@hold/{m}"))).map_or(HOLD_DUMMY, |h| h.0);
+            let (f, u) = (norm(fwd), norm(up));
+            let d: M3 = [norm(cross(f, u)), u, scale(f, -1.0)];
+            (mul(&d, &r), add(apply(pos, &r), t))
+        }).or_else(|| idle.get("@R_Weapon").copied());
         let grip = weapon.map_or([-0.25, 0.95, -0.15], |w| w.1);
         Pose { names, bind, delta, grip, weapon }
     }
@@ -1218,7 +1207,7 @@ fn batches(cache: &mut Cache, look: &Look) -> (Vec<Batch>, Option<Head>) {
         }
     }
     let body = parts.first().filter(|(s, _, _)| s.starts_with("fc_")).and_then(|(_, p, _)| p.flvers.first());
-    let pose = Pose::new(body, cache.idle.as_ref());
+    let pose = Pose::new(body, cache.idle.as_ref(), look.weapon);
     let head = pose.head();
     let mut out = Vec::new();
     for (stem, part, weapon) in &parts {
@@ -1229,18 +1218,8 @@ fn batches(cache: &mut Cache, look: &Look) -> (Vec<Batch>, Option<Head>) {
         for f in flvers {
             let map = pose.map(f);
             let cloth = pose.drape(f, &map);
-            // Held weapons are shrunk to a wand's size (at most WEAPON_LENGTH from end to end), like W101's.
-            // Some models (staffs) are centred on their origin rather than gripped there: they slide down so the
-            // hand holds them near the butt, as Elden Ring's idle does, with at most GRIP_END of them behind it.
-            let (fit, slide) = if *weapon {
-                let (lo, hi) = f.meshes.iter().flat_map(|m| m.pos.iter()).fold((0.0f32, 0.0f32), |(lo, hi), p| {
-                    (lo.min(p[1]), hi.max(p[1]))
-                });
-                let length = (hi - lo).max(1e-3);
-                ((WEAPON_LENGTH / length).min(1.0), (hi - GRIP_END * length).max(0.0))
-            } else {
-                (1.0, 0.0)
-            };
+            // Held weapons keep Elden Ring's size and grip: the model's origin is the grip, which the R_Weapon bone
+            // puts in the closed hand (shrinking or sliding the model would take it out of the hand).
             for m in &f.meshes {
                 if m.tris.is_empty() || m.group.is_some_and(|g| g < 128 && look.hide & (1u128 << g) != 0) {
                     continue;
@@ -1257,11 +1236,10 @@ fn batches(cache: &mut Cache, look: &Look) -> (Vec<Batch>, Option<Head>) {
                 let mut nrm = Vec::with_capacity(m.pos.len());
                 for i in 0..m.pos.len() {
                     let (p, n) = if let (true, Some((r, t))) = (*weapon, pose.weapon) {
-                        // The hold's frame: the model's -Y (its tip) along HOLD_TIP.
-                        let p = [m.pos[i][0], m.pos[i][1] - slide, m.pos[i][2]];
-                        (add(apply(scale(p, fit), &r), t), apply(m.nrm[i], &r))
+                        // The R_Weapon bone's frame (row vectors: p * M + t).
+                        (add(apply(m.pos[i], &r), t), apply(m.nrm[i], &r))
                     } else if *weapon {
-                        weapon_vertex(scale(m.pos[i], fit), m.nrm[i], pose.grip)
+                        weapon_vertex(m.pos[i], m.nrm[i], pose.grip)
                     } else {
                         pose.vertex(m.pos[i], m.nrm[i], m.bones.get(i), m.weights.get(i), &map, &cloth)
                     };
@@ -1290,11 +1268,9 @@ fn batches(cache: &mut Cache, look: &Look) -> (Vec<Batch>, Option<Head>) {
 const DRAPE_SIDE: f32 = 0.75;
 const DRAPE_BACK: f32 = 0.5;
 
-/// Where the held weapon's tip points (the character faces -Z, his right is -X): forward, out to his right and a
-/// little down, a relaxed wand hold that shows it in front of the body from the front and while turning.
-const HOLD_TIP: [f32; 3] = [-0.5, -0.5, -0.7];
-/// The right forearm's direction in the hold: (down, forward) parts; the elbow stays at the side.
-const HOLD_FOREARM: [f32; 2] = [0.55, 0.8];
+/// c0000.flver dummy 20 (on R_Weapon), where 350 of 397 weapon models sit in the right hand: forward, upward,
+/// position in the bind pose (for an idle table without "H" rows, or a model it lacks).
+const HOLD_DUMMY: [[f32; 3]; 3] = [[0.10538, -0.10541, -0.00243], [0.00049, -0.0012, 0.07333], [-0.58827, 0.95634, 0.02283]];
 
 /// The posed head: its joint and the way the face looks.
 #[derive(Clone, Copy, Debug)]
@@ -1302,12 +1278,6 @@ struct Head {
     at: [f32; 3],
     facing: [f32; 3],
 }
-
-/// Longest held weapon, metres (a W101 wand is about half the wizard's height).
-const WEAPON_LENGTH: f32 = 0.75;
-
-/// Share of a held weapon's length behind the hand at most (a sword's pommel, a staff's butt).
-const GRIP_END: f32 = 0.2;
 
 /// A weapon vertex: the model hangs from the grip (its origin), blade (-Y) down and a little forward and out.
 fn weapon_vertex(p: [f32; 3], n: [f32; 3], grip: [f32; 3]) -> ([f32; 3], [f32; 3]) {
@@ -1565,7 +1535,7 @@ fn draw(cache: &mut Cache, r: &Request) -> Frame {
 pub fn dump(folder: PathBuf, stem: &str) {
     let mut cache = Cache { folder, files: HashMap::new(), posed: None, idle: None };
     let body = cache.part("fc_m_0000");
-    let pose = Pose::new(body.as_ref().and_then(|b| b.flvers.first()), None);
+    let pose = Pose::new(body.as_ref().and_then(|b| b.flvers.first()), None, None);
     let Some(part) = cache.part(stem) else { println!("no {stem}"); return };
     let mut keys: Vec<_> = part.textures.iter().map(|(k, t)| format!("{k} {}x{}", t.w, t.h)).collect();
     keys.sort();

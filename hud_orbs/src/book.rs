@@ -126,6 +126,11 @@ pub struct Book {
     /// Where the player was when the map opened, and whether a loading screen or a long jump happened since.
     map_from: Option<([f32; 3], i32, i32)>,
     travelled: bool,
+    /// When Elden Ring's map started to close (a book tab clicked, or its HUD back): from then until the book is
+    /// back, the page to come is drawn over the world as it was before the map opened, so nothing flashes.
+    map_leaving: Option<Instant>,
+    /// When the book reopened after the map: for a moment it stays up even if the game isn't quite back yet.
+    map_back: Option<Instant>,
     folder: PathBuf,
     prefs: Option<Layout>,
     layouts: HashMap<&'static str, Layout>,
@@ -180,6 +185,9 @@ pub struct Book {
     world_ready: bool,
     map_shot: bool,
 }
+
+/// How long the book stays up after the map round trip while the game is not yet back to normal play.
+const MAP_BACK_GRACE: f32 = 1.5;
 
 /// The copy of the screen from before Elden Ring's map opened, drawn behind the book while the map is on its page.
 const WORLD_PICTURE: &str = "@screen/world";
@@ -247,6 +255,8 @@ impl Book {
             map: MapState::Idle,
             map_from: None,
             travelled: false,
+            map_leaving: None,
+            map_back: None,
             folder: PathBuf::new(),
             prefs: None,
             layouts: HashMap::new(),
@@ -373,7 +383,8 @@ impl Book {
                     self.world_ready = true;
                 }
             }
-            MapState::Open => {
+            // Once the map is closing, the last copy of it stays (the closing map is not copied).
+            MapState::Open if self.map_leaving.is_none() && self.after_map.is_none() => {
                 if let Some(id) = render.capture_screen(1) {
                     self.textures.set(pages::MAP_PICTURE, id, [1.0, 1.0]);
                     self.map_shot = true;
@@ -637,12 +648,14 @@ impl Book {
         }
         if !self.open {
             self.dragging = false;
-            if self.map == MapState::Open && cx.game.is_some() && self.after_map.is_some() {
-                // A book tab was clicked on the map page: that page straight away, over the world as it was before
-                // the map opened, while Elden Ring closes its map behind it.
+            let map_shown = self.map == MapState::Open && cx.game.is_some() && cx.faded < 0.5 && !self.travelled;
+            if map_shown && (self.after_map.is_some() || self.map_leaving.is_some()) {
+                // A book tab was clicked on the map page, or the map is closing: the page to come straight away,
+                // over the world as it was before the map opened, while Elden Ring closes its map behind it (the
+                // book is never off the screen, so the game doesn't flash through).
                 self.refresh(cx);
                 self.draw(ui, cx, &pointer, dt, false);
-            } else if self.map == MapState::Open && cx.game.is_some() && cx.faded < 0.5 {
+            } else if map_shown {
                 // Elden Ring's map is open: the book around it. A click on another book tab closes the map and
                 // shows that tab when the map has gone.
                 self.refresh(cx);
@@ -672,6 +685,13 @@ impl Book {
             return;
         }
         if !cx.gameplay {
+            if self.map_back.is_some_and(|t| t.elapsed().as_secs_f32() < MAP_BACK_GRACE) && cx.faded < 0.5 {
+                // Just back from the map and the game not quite settled (a frame of HUD change or fade): the book
+                // stays, without input, rather than closing and flashing the game.
+                self.refresh(cx);
+                self.draw(ui, cx, &pointer, dt, false);
+                return;
+            }
             self.set_open(false);
             return;
         }
@@ -1322,6 +1342,8 @@ impl Book {
     fn open_map_now(&mut self, position: Option<([f32; 3], i32, i32)>) {
         self.set_open(false);
         self.map = MapState::Opening(Instant::now());
+        self.map_leaving = None;
+        self.map_back = None;
         self.map_from = position;
         self.travelled = false;
         input::set_gameplay(false);
@@ -1361,12 +1383,25 @@ impl Book {
             MapState::Open if cx.gameplay => {
                 input::end_map_press();
                 self.map = MapState::Idle;
+                let closing = self.map_leaving.take().map_or(0.0, |t| t.elapsed().as_secs_f32() * 1000.0);
                 if self.travelled {
                     tracing::info!("spellbook: travelled from the map; the book stays closed");
                     self.after_map = None;
                 } else {
+                    tracing::info!("spellbook: Elden Ring's map closed ({closing:.0} ms after it began closing); \
+                                    book back on {:?}", self.after_map.unwrap_or(Tab::Map));
                     self.set_open(true);
+                    // Straight back at full strength: it was on the screen all along (no fade-in from nothing).
+                    self.opened_at = Instant::now() - Duration::from_secs(1);
+                    self.map_back = Some(Instant::now());
                     self.tab = self.after_map.take().unwrap_or(Tab::Map);
+                }
+            }
+            MapState::Open => {
+                if self.map_leaving.is_none() && (self.after_map.is_some() || cx.hud || cx.faded >= 0.5) {
+                    tracing::info!("spellbook: Elden Ring's map closing (hud {}, faded {:.2}, tab clicked {})",
+                                   cx.hud, cx.faded, self.after_map.is_some());
+                    self.map_leaving = Some(Instant::now());
                 }
             }
             _ => {}
