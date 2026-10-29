@@ -582,28 +582,64 @@ BOOK_WARPS = (  # (event id, event flag the HUD's map page sets, (area, block, r
 )
 
 
+# Wizard101's teleport "poof" before a book warp (Ryan, 2026-10-29: the sparkles where the player is, and they
+# disappear, before the teleport). Wizard101 plays _Shared-WorldData.wad Character/FX_Disappear.nif on a character
+# that teleports away: blue-white and gold star sparkles rising off the body for 0.37 s, two tubes of orange/blue
+# light bands sweeping up it, and a light smoke puff at 0.27-0.37 s, gone by about 1.5 s. The HUD overlay draws that
+# effect itself from Wizard101's textures (hud_orbs/src/teleport.rs) when POOF_FLAG comes on; in the world:
+POOF_FLAG = 1042362912  # on at the start of the poof; the HUD draws Wizard101's effect on the player and clears it
+POOF_SFX = 523412  # Unseen Form's casting burst (SpEffectVfxParam 1467000/1467001 init/finish SFX): a glow point
+#   (s10020), a flipbook of scattered sparkles (s31421), wisps (s34020) and a puff (s21021): ER's closest one-shot to
+#   Wizard101's sparkle-and-smoke poof, and made for the player's body (dummy POOF_DUMMY)
+POOF_DUMMY = 220  # c0000's body dummy poly, where Unseen Form plays it
+POOF_HIDE_SPEFFECT = 1467000  # Unseen Form itself (camouflage, 30 s): the player fades out at the poof; cleared
+#   again when the event starts after the warp's map load. None = no fading.
+POOF_HIDE_AT = 0.35  # seconds into the poof: Wizard101's smoke-out (0.27-0.37 s), when the character is gone
+POOF_SECONDS = 1.2  # seconds of poof (player frozen in place, screen clear) before the load screen and fade
+
+
 def book_warps(d, warps=BOOK_WARPS):
     """common.emevd (always loaded): one event per map-page button of the HUD's spellbook (pages.rs WARP_*). Each
-    waits for its flag (3[0], condition group 1), turns it off, turns LOAD_SCREEN_FLAG on for the HUD's load screen,
-    fades to black (2004[77]) and after LOAD_SCREEN_LEAD s warps the player with 2003[14] Warp Player (a map load,
-    which also sets a rider down on foot); after MOUNTED_WAIT s it lifts the fade (in case no warp happened) and
-    restarts. Started from the top of event 0; rerunning replaces them."""
+    clears the poof's fading SpEffect (POOF_HIDE_SPEFFECT, after the map load of its warp), waits for its flag (3[0],
+    condition group 1), turns it off, freezes the player where he stands without fading (2004[77] to 0 with the
+    freeze on), turns POOF_FLAG on for the HUD's Wizard101 poof, plays POOF_SFX on him (2006[03] Spawn Oneshot SFX,
+    character), fades him out at POOF_HIDE_AT s, and at POOF_SECONDS turns LOAD_SCREEN_FLAG on for the HUD's load
+    screen, fades to black (2004[77]) and after LOAD_SCREEN_LEAD s warps him with 2003[14] Warp Player (a map load,
+    which also sets a rider down on foot); after MOUNTED_WAIT s it lifts the fade (in case no warp happened), clears
+    the SpEffect and restarts. Started from the top of event 0; rerunning replaces them."""
     e = Emevd(d)
     events = events_of(e)
+    hide = POOF_HIDE_SPEFFECT
     for event_id, flag, where, entity, unk in warps:
         _start_once(events, event_id)
-        events.append({"id": event_id, "rest": 0, "pars": [], "ins": [
+        ins = []
+        if hide is not None:
+            ins += [_i(1001, 0, "<f", 1.0),  # the player is there after a map load
+                    _i(2004, 21, "<Ii", 10000, hide)]  # Clear SpEffect: visible again after the poof's warp
+        ins += [
             _i(3, 0, "<bBBxI", 1, 1, 0, flag),  # IF event flag on (group 1)
             _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
             _i(2003, 66, "<BxxxIBxxx", 0, flag, 0),  # the button's flag off
+            _i(2004, 77, "<ffBxxxf", 0.0, 0.0, 1, 0.0),  # no fade, player frozen
+            _i(2003, 66, "<BxxxIBxxx", 0, POOF_FLAG, 1),  # the HUD's Wizard101 poof (the HUD clears it)
+            _i(2006, 3, "<iIii", 2, 10000, POOF_DUMMY, POOF_SFX),  # Spawn Oneshot SFX on the player
+            _i(1001, 0, "<f", POOF_HIDE_AT),
+        ]
+        if hide is not None:
+            ins.append(_i(2004, 8, "<Ii", 10000, hide))  # Set SpEffect: he fades out
+        ins += [
+            _i(1001, 0, "<f", POOF_SECONDS - POOF_HIDE_AT),
             _i(2003, 66, "<BxxxIBxxx", 0, LOAD_SCREEN_FLAG, 1),  # load screen flag on (the HUD clears it)
             _i(2004, 77, "<ffBxxxf", 1.0, FADE, 1, 0.0),  # fade to black, player frozen
             _i(1001, 0, "<f", LOAD_SCREEN_LEAD),
             _i(2003, 14, "<BBBBIi", *where, entity, unk),  # Warp Player
             _i(1001, 0, "<f", MOUNTED_WAIT),
             _i(2004, 77, "<ffBxxxf", 0.0, 0.0, 0, 0.0),  # lift the fade and the freeze
-            _i(1000, 4, "<Bxxx", 1),  # restart
-        ]})
+        ]
+        if hide is not None:
+            ins.append(_i(2004, 21, "<Ii", 10000, hide))
+        ins.append(_i(1000, 4, "<Bxxx", 1))  # restart
+        events.append({"id": event_id, "rest": 0, "pars": [], "ins": ins})
     return build(e, events)
 
 

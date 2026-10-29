@@ -19,6 +19,7 @@ mod loadscreen;
 mod markers;
 mod nameplates;
 mod steam;
+mod teleport;
 mod model;
 mod names;
 mod pages;
@@ -119,6 +120,8 @@ struct Orbs {
     focused: bool,
     /// The event flag group check is logged once, when the game is up.
     flag_check_logged: bool,
+    /// Wizard101's teleport poof before warps (teleport.rs).
+    teleport: teleport::Teleport,
 }
 
 /// Frame timing written to w101_orbs.log every few seconds, to see what the overlay costs the game.
@@ -179,6 +182,7 @@ impl Orbs {
             last_probe_log: Instant::now(),
             focused: true,
             flag_check_logged: false,
+            teleport: teleport::Teleport::default(),
         }
     }
 
@@ -244,6 +248,10 @@ impl ImguiRenderLoop for Orbs {
         }
         self.book.load_art(render);
         self.book.capture(render, self.settings.bookmap);
+        let game = self.game.as_ref().and_then(|g| g.as_ref());
+        let plain = game.is_some() && !self.book.open && !self.loadscreen.holding() && game::hud_shown()
+            && game::faded() < 0.05;
+        self.teleport.capture(render, &mut self.book.textures, plain, game.and_then(|g| g.camera()));
         // Elden Ring hides and confines the cursor; the open book needs it.
         ctx.io_mut().mouse_draw_cursor = false; // the book draws its own
         if self.book.open {
@@ -279,6 +287,7 @@ impl ImguiRenderLoop for Orbs {
         // loading screen is turned off).
         let door = game.is_some() && game::event_flag(loadscreen::DOOR_FLAG) == Some(true);
         let loading = self.loadscreen.game_loading_started(game::loading_screens());
+        let loading = self.teleport.frame(ui, &mut self.book.textures, game, loading, door, stats.map(|s| s.hp));
         if !self.loadscreen.holding() && (door || loading) {
             if self.settings.loadscreen {
                 self.loadscreen.show(if door { "door warp flag" } else { "Elden Ring loading screen" });

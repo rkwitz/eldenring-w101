@@ -68,9 +68,12 @@ pub struct D3D12RenderEngine {
     frame_index: usize,
 
     // w101_orbs: the screen copies (RenderContext::capture_screen) and which are wanted this frame.
-    captures: [Option<Capture>; 2],
-    capture_wanted: [bool; 2],
+    captures: [Option<Capture>; CAPTURE_SLOTS],
+    capture_wanted: [bool; CAPTURE_SLOTS],
 }
+
+/// w101_orbs: how many screen copies there are (0, 1: the spellbook's world and map; 2: the teleport poof's world).
+const CAPTURE_SLOTS: usize = 3;
 
 /// w101_orbs: a texture that holds a copy of the back buffer (its size and format).
 struct Capture {
@@ -166,8 +169,8 @@ impl D3D12RenderEngine {
             fence,
             frame_contexts,
             frame_index: 0,
-            captures: [None, None],
-            capture_wanted: [false; 2],
+            captures: [None, None, None],
+            capture_wanted: [false; CAPTURE_SLOTS],
         })
     }
 }
@@ -323,7 +326,7 @@ impl D3D12RenderEngine {
             return Vec::new();
         }
         let mut out = Vec::new();
-        for slot in 0..2 {
+        for slot in 0..CAPTURE_SLOTS {
             if !wanted[slot] {
                 continue;
             }

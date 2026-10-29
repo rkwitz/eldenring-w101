@@ -169,7 +169,7 @@ pub trait RenderContext {
     ) -> Result<(), Error>;
 
     /// w101_orbs: asks for a copy of the frame the game drew (the back buffer before the imgui overlay) in texture
-    /// `slot` (0 or 1), made when this frame renders, before the overlay is drawn over it, so drawing the returned
+    /// `slot` (0 to 2), made when this frame renders, before the overlay is drawn over it, so drawing the returned
     /// texture this frame shows this frame's picture. The texture samples opaque. `None` until the renderer knows
     /// the back buffer (the first request), or where unsupported (only DX12 does it).
     fn capture_screen(&mut self, _slot: usize) -> Option<TextureId> {
