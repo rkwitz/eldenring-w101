@@ -79,6 +79,10 @@ const RANK_SCALE: f32 = 0.34;
 const SPIN: f32 = 1.0;
 /// How quickly the Backpack picture zooms to a category (per second).
 const ZOOM_RATE: f32 = 6.0;
+/// Settings' Quit / Exit Game: seconds to click again to confirm, and seconds at the title screen before closing.
+const QUIT_CONFIRM: f32 = 4.0;
+const QUIT_SETTLE: f32 = 3.0;
+
 /// How long a page note (pages::State::note) shows.
 const NOTE_TIME: Duration = Duration::from_secs(4);
 /// How often the quest flags are read.
@@ -177,6 +181,13 @@ pub struct Book {
     /// A warp button (pages::WARP_*) clicked while Elden Ring's map was open: its event flag is set once the map
     /// has closed (the warp event freezes the player and plays the poof in the world, so the map must be gone).
     warp_after_map: Option<u32>,
+    /// The book was opened on the World Map page: Elden Ring's map opens by itself once the button or key that
+    /// opened the book is let go (Ryan, 2026-10-30: no "press A" step).
+    map_on_open: bool,
+    /// Settings' Quit / Exit Game clicked once (to the desktop, when): the next click confirms.
+    quit_asked: Option<(bool, Instant)>,
+    /// Exit Game confirmed: since when, and since when no player character has been loaded.
+    quitting: Option<(Instant, Option<Instant>)>,
     face_logged: bool,
     flasks_logged: bool,
     /// Per pages::ACHIEVEMENTS entry, read with the sheet.
@@ -294,6 +305,9 @@ impl Book {
             zoom: None,
             after_map: None,
             warp_after_map: None,
+            map_on_open: false,
+            quit_asked: None,
+            quitting: None,
             face_logged: false,
             flasks_logged: false,
             achieved: Vec::new(),
@@ -531,6 +545,12 @@ impl Book {
         self.state.cookbooks = true;
     }
 
+    /// Shows tab `tab` of the Settings page (the preview renderer).
+    #[allow(dead_code)]
+    pub fn preview_settings(&mut self, tab: usize) {
+        self.state.page = tab;
+    }
+
     /// Shows pet `pet` (the preview renderer).
     #[allow(dead_code)]
     pub fn preview_pet(&mut self, pet: usize) {
@@ -644,6 +664,7 @@ impl Book {
         input::set_gameplay(cx.gameplay && !self.open && self.dialogue.is_none());
         // Before taking the presses, so that the press that closed ER's map doesn't close the reopened book.
         self.follow_map(cx);
+        self.quit_follow(cx);
         let pressed = input::take_pressed();
         let pointer = self.pointer(ui);
         if cx.game.is_some() {
@@ -709,6 +730,7 @@ impl Book {
             let key_b = ui.is_key_pressed_no_repeat(Key::B);
             if cx.gameplay && self.map == MapState::Idle && (pressed & input::BACK != 0 || key_b) {
                 self.set_open(true);
+                self.map_on_open = self.tab == Tab::Map;
             }
             input::set_book_open(self.blocking());
             return;
@@ -734,6 +756,19 @@ impl Book {
             self.set_open(false);
             return;
         }
+        // Opened on the World Map page: open Elden Ring's map as soon as View / B is let go (pressing it again
+        // while still held would reach the game as a second press and close the map again).
+        if self.map_on_open {
+            if self.tab != Tab::Map {
+                self.map_on_open = false;
+            } else if input::held().0 & input::BACK == 0 && !ui.is_key_down(Key::B)
+                && self.opened_at.elapsed().as_secs_f32() > 0.05 {
+                self.map_on_open = false;
+                tracing::info!("spellbook: opened on the World Map page; opening Elden Ring's map");
+                self.open_map(cx);
+                return;
+            }
+        }
         // Book tabs: LT / RT, D-pad up / down, Up / Down.
         let last = TABS.len() - 2; // Settings; Close is only for the mouse
         let current = tab_index(self.tab);
@@ -752,6 +787,20 @@ impl Book {
             }
             match self.tab {
                 Tab::Pets => self.state.step_pet(step),
+                Tab::Settings => {
+                    // Down the rows, then on to the next tab's (and back).
+                    let tabs = crate::options::TABS.len();
+                    let rows = |t: usize| crate::options::TABS[t % tabs].2.len().max(1);
+                    let (mut page, mut sub) = (self.state.page % tabs, self.state.sub as i32 + step);
+                    if sub < 0 {
+                        page = (page + tabs - 1) % tabs;
+                        sub = rows(page) as i32 - 1;
+                    } else if sub as usize >= rows(page) {
+                        page = (page + 1) % tabs;
+                        sub = 0;
+                    }
+                    (self.state.page, self.state.sub) = (page, sub as usize);
+                }
                 _ => self.state.step_sub(step),
             }
         }
@@ -792,6 +841,10 @@ impl Book {
         }
         // The page's own things (backpack items, spell cards, deck slots).
         let hit = self.state.hits.iter().rev().find(|(r, _)| layout::inside(mouse, *r)).map(|h| h.1);
+        if let Some(pages::Hit::Setting(row, step)) = hit {
+            self.change_setting(row, step, cx);
+            return;
+        }
         if let Some(hit) = hit {
             let double = self.last_hit.is_some_and(|(h, t)| h == hit && t.elapsed() < Duration::from_millis(450));
             self.last_hit = Some((hit, Instant::now()));
@@ -818,6 +871,7 @@ impl Book {
             Action::Close => self.set_open(false),
             Action::Tab(tab) => self.select(tab, false),
             Action::Setting(row, step) => self.change_setting(row, step, cx),
+            Action::Quit(desktop) => self.quit(desktop),
             Action::Warp(flag) => {
                 tracing::info!("map page: warp flag {flag}");
                 game::set_event_flag(flag, true);
@@ -884,6 +938,7 @@ impl Book {
                 self.state.sub = i;
                 self.state.page = 0;
             }
+            Hit::Setting(..) => {} // handled before (book::frame)
         }
     }
 
@@ -964,10 +1019,7 @@ impl Book {
         let tab = if map_view { Tab::Map } else { self.tab };
         let page_name = TABS[tab_index(tab)].2;
         let mut view = View::default();
-        let mut settings = settings_rows(cx.settings);
-        if tab != Tab::Settings {
-            settings.clear();
-        }
+        let settings = if tab == Tab::Settings { settings_rows(self.state.page, cx) } else { Vec::new() };
         let none = Names::default();
         let data = Data {
             sheet: self.sheet.as_ref(),
@@ -976,7 +1028,7 @@ impl Book {
             items: &self.items,
             quests: &self.active,
             settings,
-            map_opening: matches!(self.map, MapState::Opening(_)),
+            map_opening: matches!(self.map, MapState::Opening(_)) || self.map_on_open,
             map_open: map_view,
             map_picture: (map_view && self.world_ready && self.map_shot).then(|| {
                 let [w, h] = ui.io().display_size;
@@ -1314,21 +1366,67 @@ impl Book {
                     [r[0] + 24.0, r[3] - 26.0, r[2] - 24.0, r[3] - 6.0], &TextStyle::new("WizardNormal", 0.36, GOLD), false);
     }
 
+    /// Changes row `row` of the Settings page's current tab by `step` (options.rs), with a note on the page.
     fn change_setting(&mut self, row: usize, step: i32, cx: &mut Context) {
-        let s = &mut *cx.settings;
-        let step = step as f32;
-        match row {
-            0 => s.scale = ((s.scale + 0.05 * step) * 100.0).round().clamp(50.0, 200.0) / 100.0,
-            1 => s.left = (s.left + 5.0 * step).clamp(-200.0, 600.0),
-            2 => s.bottom = (s.bottom + 5.0 * step).clamp(-200.0, 600.0),
-            3 => s.level = !s.level,
-            4 => s.loadscreen = !s.loadscreen,
-            _ => return,
-        }
+        let tab = self.state.page % crate::options::TABS.len();
+        let Some(r) = crate::options::TABS[tab].2.get(row) else { return };
         self.state.sub = row;
-        match crate::save_settings(cx.settings_path, s) {
-            Ok(()) => tracing::info!("settings saved: {:?}", settings_rows(s)),
-            Err(e) => tracing::warn!("settings not saved: {e}"),
+        let note = match crate::options::change(r, step, cx.game, cx.settings, cx.settings_path) {
+            Ok(done) => {
+                tracing::info!("settings: {done}");
+                done
+            }
+            Err(why) => {
+                tracing::warn!("settings: {} not changed: {why}", r.label);
+                why
+            }
+        };
+        self.state.note = Some((note, Instant::now()));
+    }
+
+    /// Settings' Quit (to Elden Ring's title screen) and Exit Game (then to the desktop): a second click within
+    /// QUIT_CONFIRM seconds confirms. Elden Ring's own quit-out saves first; the window is closed only once the
+    /// title screen is up (quit_follow).
+    fn quit(&mut self, desktop: bool) {
+        let what = if desktop { "Exit Game" } else { "Quit" };
+        if self.quit_asked.is_none_or(|(d, t)| d != desktop || t.elapsed().as_secs_f32() > QUIT_CONFIRM) {
+            self.quit_asked = Some((desktop, Instant::now()));
+            let to = if desktop { "save and close Elden Ring" } else { "save and go back to the title screen" };
+            self.state.note = Some((format!("Click {what} again to {to}"), Instant::now()));
+            return;
+        }
+        self.quit_asked = None;
+        if game::quit_to_title() {
+            tracing::info!("settings: {what}: Elden Ring's quit-out requested (to the desktop: {desktop})");
+            self.quitting = desktop.then(|| (Instant::now(), None));
+            self.set_open(false);
+        } else {
+            tracing::warn!("settings: {what}: Elden Ring's quit-out couldn't be reached");
+            self.state.note = Some(("Elden Ring's quit can't be reached; use its system menu".into(), Instant::now()));
+        }
+    }
+
+    /// Exit Game: once Elden Ring has saved and gone back to its title screen (no player character for
+    /// QUIT_SETTLE seconds), its window is asked to close (WM_CLOSE, Elden Ring's own exit).
+    fn quit_follow(&mut self, cx: &Context) {
+        let Some((since, gone)) = self.quitting else { return };
+        if since.elapsed().as_secs_f32() > 90.0 {
+            tracing::warn!("settings: Exit Game: the title screen didn't come; not closing");
+            self.quitting = None;
+            return;
+        }
+        let in_world = cx.game.is_some_and(|g| g.player_address().is_some());
+        match (in_world, gone) {
+            (true, _) => self.quitting = Some((since, None)),
+            (false, None) => self.quitting = Some((since, Some(Instant::now()))),
+            (false, Some(t)) if t.elapsed().as_secs_f32() > QUIT_SETTLE && since.elapsed().as_secs_f32() > 3.0 => {
+                tracing::info!("settings: Exit Game: at the title screen; closing Elden Ring's window");
+                self.quitting = None;
+                if !game::close_window() {
+                    tracing::warn!("settings: Exit Game: Elden Ring's window couldn't be closed");
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1344,6 +1442,7 @@ impl Book {
             self.state.pet = 0; // the Pets page opens on the equipped spirit ash
             self.sheet_time = None;
         } else {
+            self.map_on_open = false;
             self.holding = true;
             self.closed_at = Some(Instant::now());
             self.dragging = false;
@@ -1488,14 +1587,15 @@ fn hair_model(face: &[u8]) -> Option<u32> {
     (v < 1000).then_some(v)
 }
 
-/// The settings page's rows: (label, value).
-pub fn settings_rows(s: &crate::Settings) -> Vec<(String, String)> {
-    let on = |b: bool| if b { "On" } else { "Off" }.to_string();
-    vec![
-        ("Globe Size".into(), format!("{:.2}", s.scale)),
-        ("Globes Right".into(), format!("{:.0}", s.left)),
-        ("Globes Up".into(), format!("{:.0}", s.bottom)),
-        ("Level Number".into(), on(s.level)),
-        ("Loading Screens".into(), on(s.loadscreen)),
-    ]
+/// The Settings page's rows on tab `tab` (options::TABS): label, value, tip (what it is, when it applies).
+pub fn settings_rows(tab: usize, cx: &Context) -> Vec<pages::SettingRow> {
+    let graphics = crate::options::graphics();
+    crate::options::TABS[tab % crate::options::TABS.len()].2.iter().map(|row| {
+        let value = crate::options::value(row, cx.game, cx.settings, graphics.as_ref()).unwrap_or_else(|| "-".into());
+        let mut tip = vec![row.label.to_string(), row.when.text().to_string()];
+        if row.w101 != "-" {
+            tip.push(format!("Wizard101: {}", row.w101));
+        }
+        (row.label.to_string(), value, tip)
+    }).collect()
 }

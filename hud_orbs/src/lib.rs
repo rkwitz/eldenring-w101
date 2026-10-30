@@ -27,6 +27,7 @@ mod probe;
 mod live_preview;
 mod quests;
 mod settings;
+mod options;
 mod sheet;
 
 use std::path::{Path, PathBuf};
@@ -314,7 +315,9 @@ impl ImguiRenderLoop for Orbs {
         self.book.frame(ui, &mut cx);
         if !self.loadscreen.holding() {
             self.book.draw_markers(ui, &cx);
-            self.book.draw_nameplates(ui, &cx);
+            if cx.settings.nameplates {
+                self.book.draw_nameplates(ui, &cx);
+            }
         }
         // Polled every frame: the screen goes up on the first frame the door flag is on, or Elden Ring starts a
         // loading screen of its own. The flag is cleared when the screen starts to fade (or right away when the

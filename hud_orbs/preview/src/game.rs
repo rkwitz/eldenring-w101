@@ -99,3 +99,37 @@ impl Game {
         })
     }
 }
+
+/// Elden Ring's options as the preview pretends they are (GameSettings bytes).
+static OPTIONS: std::sync::Mutex<[u8; 0x30]> = std::sync::Mutex::new([
+    5, 5, 5, 0, 7, 8, 8, 1, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1,
+    0, 1, 0, 0, 5, 5, 5, 0, 10, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1]);
+
+impl Game {
+    pub fn option(&self, offset: usize) -> Option<u8> {
+        OPTIONS.lock().unwrap().get(offset).copied()
+    }
+    pub fn set_option(&self, offset: usize, value: u8) -> bool {
+        OPTIONS.lock().unwrap().get_mut(offset).map(|v| *v = value).is_some()
+    }
+    pub fn player_address(&self) -> Option<usize> {
+        Some(1)
+    }
+}
+
+/// Ryan's GraphicsConfig.xml (2026-10-30) as CSWindowScreenConfig's fields.
+static GRAPHICS: std::sync::Mutex<[u32; 25]> = std::sync::Mutex::new([
+    2560, 1440, 2560, 1440, 2560, 1440, 2, 0, 1, 5, 3, 3, 4, 2, 2, 1, 3, 3, 3, 2, 2, 1, 0, 2, 2]);
+
+pub fn graphics() -> Option<[u32; 25]> {
+    Some(*GRAPHICS.lock().unwrap())
+}
+pub fn set_graphics(index: usize, value: u32) -> bool {
+    GRAPHICS.lock().unwrap().get_mut(index).map(|v| *v = value).is_some()
+}
+pub fn quit_to_title() -> bool {
+    false
+}
+pub fn close_window() -> bool {
+    false
+}

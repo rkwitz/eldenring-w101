@@ -15,6 +15,8 @@ pub struct Settings {
     /// The map page draws Elden Ring's map on the page from a copy of the screen, over the world as it was when
     /// the map opened (0: the page is cut out to show the map, and the rest of the screen is covered).
     pub bookmap: bool,
+    /// Wizard101 nameplates over enemies and NPCs.
+    pub nameplates: bool,
     /// Logs how the mirror's character preview scene works ("probe:" lines, probe.rs); off unless set to 1.
     pub scene_probe: bool,
     /// With the probe: after the first menu that stayed open over 5 s closes, MenuOffscrRendParam row 0's camera
@@ -27,7 +29,7 @@ pub struct Settings {
 /// shows the raw numbers and logs every candidate stat value once a second) and level (0 hides the level number beside the experience bar).
 pub fn load_settings(path: &Path) -> Settings {
     let mut settings = Settings { left: 0.0, bottom: 0.0, scale: 1.0, debug: false, level: true, loadscreen: true,
-                                  loadscreen_image: LOADSCREEN_IMAGE.into(), bookmap: true,
+                                  loadscreen_image: LOADSCREEN_IMAGE.into(), bookmap: true, nameplates: true,
                                   scene_probe: false, scene_probe_nudge: false };
     for line in std::fs::read_to_string(path).unwrap_or_default().lines() {
         let Some((key, value)) = line.split_once('=') else { continue };
@@ -41,6 +43,7 @@ pub fn load_settings(path: &Path) -> Settings {
             "loadscreen" => settings.loadscreen = value != "0",
             "loadscreen_image" if !value.is_empty() => settings.loadscreen_image = value.to_string(),
             "bookmap" => settings.bookmap = value != "0",
+            "nameplates" => settings.nameplates = value != "0",
             "scene_probe" => settings.scene_probe = value == "1",
             "scene_probe_nudge" => settings.scene_probe_nudge = value == "1",
             _ => {}
@@ -62,17 +65,25 @@ pub fn save_settings(path: &Path, s: &Settings) -> std::io::Result<()> {
          # loadscreen: 0 turns off the Wizard101 loading screen (over Elden Ring's loading screens and door warps)\n\
          # loadscreen_image: the loading screen's picture (PNG or JPEG), relative to this folder or absolute\n\
          # bookmap: 0 shows Elden Ring's map through a window in the map page instead of on it\n\
+         # nameplates: 0 hides the Wizard101 nameplates over enemies and NPCs\n\
          # debug: 1 logs the raw values once a second\n\
          # scene_probe: 1 logs how the mirror's preview scene works (test builds); scene_probe_nudge: 1 also moves its camera\n\
          left = {}\nbottom = {}\nscale = {}\nlevel = {}\nloadscreen = {}\nloadscreen_image = {}\nbookmap = {}\n\
-         debug = {}\n",
+         nameplates = {}\ndebug = {}\n",
         s.left, s.bottom, s.scale, s.level as u8, s.loadscreen as u8, s.loadscreen_image, s.bookmap as u8,
-        s.debug as u8
+        s.nameplates as u8, s.debug as u8
     ) + &if s.scene_probe || s.scene_probe_nudge {
         format!("scene_probe = {}\nscene_probe_nudge = {}\n", s.scene_probe as u8, s.scene_probe_nudge as u8)
     } else {
         String::new()
     };
-    std::fs::write(path, text)
+    // Keys this file doesn't know (another part of the mod's, e.g. live_preview) are kept as they were.
+    const KNOWN: [&str; 11] = ["left", "bottom", "scale", "level", "loadscreen", "loadscreen_image", "bookmap",
+                               "nameplates", "debug", "scene_probe", "scene_probe_nudge"];
+    let kept: String = std::fs::read_to_string(path).unwrap_or_default().lines()
+        .filter(|l| l.split_once('=').is_some_and(|(k, _)| !KNOWN.contains(&k.trim())) && !l.trim_start().starts_with('#'))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(path, text + &kept)
 }
 

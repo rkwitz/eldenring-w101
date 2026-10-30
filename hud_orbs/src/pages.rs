@@ -120,6 +120,8 @@ pub enum Hit {
     Forget(usize),
     /// A category tab the page draws itself (the crafting page's reagent tabs): choose sub-page n.
     Sub(usize),
+    /// A settings row's arrow drawn by the page (rows 6 and 7): row, step.
+    Setting(usize, i32),
 }
 
 pub enum Action {
@@ -129,6 +131,8 @@ pub enum Action {
     Tab(Tab),
     /// Settings row, step (-1 or +1).
     Setting(usize, i32),
+    /// Settings: Quit (to Elden Ring's title screen; true: then to the desktop).
+    Quit(bool),
     /// The equip button: equip the item (inventory ID), or take it off if it is equipped.
     Equip(u32),
     /// A warp button on the map page: the event flag that asks the mod's common.emevd event to warp the player.
@@ -149,8 +153,8 @@ pub struct Data<'a> {
     pub items: &'a ItemData,
     /// The quests in progress (from the quest event flags).
     pub quests: &'a [Active],
-    /// (label, value) per settings row.
-    pub settings: Vec<(String, String)>,
+    /// The Settings page's rows on its current tab.
+    pub settings: Vec<SettingRow>,
     pub map_opening: bool,
     /// Elden Ring's map is open behind the book (the page is a window onto it).
     pub map_open: bool,
@@ -480,6 +484,12 @@ pub fn click(tab: Tab, l: &Layout, id: usize, st: &mut State) -> Action {
         }
         (Tab::Settings, "OkButton") => return Action::Close,
         (Tab::Settings, "HelpButton") => return Action::Tab(Tab::Help),
+        (Tab::Settings, "QuitButton") => return Action::Quit(false),
+        (Tab::Settings, "IdleButton") => return Action::Quit(true),
+        (Tab::Settings, _) if crate::options::TABS.iter().any(|t| t.0 == name) => {
+            st.page = crate::options::TABS.iter().position(|t| t.0 == name).unwrap_or(0);
+            st.sub = 0;
+        }
         (Tab::Settings, "OptionButtonLeft" | "OptionButtonRight") => {
             let row_window = l.nodes[id].parent.and_then(|p| l.nodes[p].parent);
             let row = row_window.and_then(|w| SETTINGS_ROWS.iter().position(|r| *r == l.nodes[w].name));
@@ -1515,38 +1525,19 @@ pub fn map_rect(aspect: f32) -> [f32; 4] {
     [cx - w / 2.0, cy - ht / 2.0, cx + w / 2.0, cy + ht / 2.0]
 }
 
-/// The part of the map screen shown on the page (uv): all of it, edge to edge (Ryan, 2026-10-30: zoomed all the
-/// way out the map's edges must show; scaled down, not cropped), above Elden Ring's button hints along the bottom.
-const MAP_UV_X: [f32; 2] = [0.0, 1.0];
-const MAP_UV_BOTTOM: f32 = 0.875;
-/// Elden Ring's button hints ("View map" over "A: Place beacon  B: Close  X: Marker  Y: Sites of grace ..."): just
-/// their text, cut from the bottom of the map screen and drawn in a strip inside the frame under the map. Measured
-/// on Ryan's 2560x1440 capture (w101_reference/er_map_hint_bar.png, the screen's full width at 0.421 scale, its
-/// bottom 74 px): "View map" rows 32-43, the hints 49-67, left-aligned from x 48 to about 775 of 1078; with a few
-/// pixels' margin that is x 0.03-0.75, y 0.922-0.995 of the screen.
-const HINTS_UV: [f32; 4] = [0.03, 0.922, 0.75, 0.995];
-const HINTS_H: f32 = 40.0;
-
-/// The copied map screen on the page: (map rect, its uv, hints rect, their uv, the room the map is letterboxed in)
-/// inside MAP_HOLE's margin, both in their own shape on a screen of `aspect` (width / height): the map scaled down
-/// to fit the room above the hints and centred in it, never cropped or squeezed.
-pub fn map_picture_rect(aspect: f32) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
+/// The copied map screen on the page: (map rect, the frame around it) for a screen of `aspect` (width / height).
+/// One picture of the whole screen, edge to edge, Elden Ring's own button hints along its bottom included (Ryan,
+/// 2026-10-30: no black bands, no separate shrunk hint row). It fills the map area's full width; the map area's
+/// height shrinks to the screen's shape (16:9 at 2560x1440: 672 x 378 of the 672 x 452 area), centred, so nothing
+/// is cropped or squeezed. A screen taller than the area (narrower than about 3:2) fills its height instead.
+pub fn map_picture_rect(aspect: f32) -> ([f32; 4], [f32; 4]) {
     let h = MAP_HOLE;
     let area = [h[0] + 8.0, h[1] + 8.0, h[2] - 8.0, h[3] - 8.0];
-    let cx = (area[0] + area[2]) / 2.0;
-    let hints_bottom = area[3] - 2.0;
-    // In the band's own shape: as wide as the page allows, never squeezed.
-    let band = (HINTS_UV[2] - HINTS_UV[0]) * aspect / (HINTS_UV[3] - HINTS_UV[1]);
-    let hints_w = (band * HINTS_H).min(area[2] - area[0] - 8.0);
-    let hints_h = hints_w / band;
-    let hints = [cx - hints_w / 2.0, hints_bottom - hints_h, cx + hints_w / 2.0, hints_bottom];
-    let room = [area[0], area[1], area[2], hints[1] - 6.0];
-    let (room_w, room_h) = (room[2] - room[0], room[3] - room[1]);
-    let shape = (MAP_UV_X[1] - MAP_UV_X[0]) * aspect / MAP_UV_BOTTOM;
-    let (map_w, map_h) = if room_w / room_h > shape { (room_h * shape, room_h) } else { (room_w, room_w / shape) };
-    let cy = (room[1] + room[3]) / 2.0;
-    let map = [cx - map_w / 2.0, cy - map_h / 2.0, cx + map_w / 2.0, cy + map_h / 2.0];
-    (map, [MAP_UV_X[0], 0.0, MAP_UV_X[1], MAP_UV_BOTTOM], hints, HINTS_UV, room)
+    let (room_w, room_h) = (area[2] - area[0], area[3] - area[1]);
+    let (w, ht) = if room_w / room_h > aspect { (room_h * aspect, room_h) } else { (room_w, room_w / aspect) };
+    let (cx, cy) = ((area[0] + area[2]) / 2.0, (area[1] + area[3]) / 2.0);
+    let map = [cx - w / 2.0, cy - ht / 2.0, cx + w / 2.0, cy + ht / 2.0];
+    (map, [map[0] - 6.0, map[1] - 6.0, map[2] + 6.0, map[3] + 6.0])
 }
 
 fn map(l: &Layout, d: &Data, v: &mut View) {
@@ -1565,15 +1556,10 @@ fn map(l: &Layout, d: &Data, v: &mut View) {
         // of that shape onto the map behind the book.
         match d.map_picture {
             Some(aspect) => {
-                // The whole map screen scaled down into the page's map area (letterboxed: dark bands where the
-                // shapes differ), the hints under it.
-                let (r, uv, hints, hints_uv, room) = map_picture_rect(aspect);
-                let area = [room[0].min(hints[0]) - 6.0, room[1] - 6.0, room[2].max(hints[2]) + 6.0, hints[3] + 6.0];
-                v.fills.push((area, ImColor32::from_rgb(74, 46, 24)));
-                v.fills.push((room, ImColor32::from_rgb(16, 12, 8)));
-                v.images.push((r, MAP_PICTURE.into(), uv));
-                v.fills.push(([hints[0] - 4.0, hints[1] - 2.0, hints[2] + 4.0, hints[3] + 2.0], ImColor32::from_rgb(16, 12, 8)));
-                v.images.push((hints, MAP_PICTURE.into(), hints_uv));
+                // The whole map screen, hints and all, as one picture filling the (shrunk) map area.
+                let (r, frame) = map_picture_rect(aspect);
+                v.fills.push((frame, ImColor32::from_rgb(74, 46, 24)));
+                v.images.push((r, MAP_PICTURE.into(), [0.0, 0.0, 1.0, 1.0]));
                 v.picture = Some(r);
             }
             None => v.hole = Some(map_rect(16.0 / 9.0)),
@@ -1588,7 +1574,7 @@ fn map(l: &Layout, d: &Data, v: &mut View) {
         v.add([150.0, 250.0, 650.0, 420.0],
               "Elden Ring's map opens inside the book as soon as you turn to this page, with its markers, grace \
                travel and zoom. Close it as usual and the book comes back; travel to a grace and the book closes.\n\n\
-               Press A, Enter or the magnifier below to open the map again.",
+               If it didn't open, press A, Enter or the magnifier below to try again.",
               body);
     }
 }
@@ -1938,29 +1924,79 @@ fn help(l: &Layout, st: &mut State, v: &mut View) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Settings: Settings.gui's Graphics page, its five option rows used for the HUD's settings (w101_orbs.ini).
+// Settings: Settings.gui, Wizard101's Settings window: its ten tab buttons each show a page of up to seven option
+// rows (options::TABS: Elden Ring's options and graphics settings, and the HUD's own). Rows 1-5 are Settings.gui's
+// Graphics rows; rows 6 and 7 (Wizard101's other pages have seven, at the same 48-pixel pitch) are drawn in their
+// art. Quit returns to Elden Ring's title screen, Idle (relabelled Exit Game) quits to the desktop.
 
 pub const SETTINGS_ROWS: [&str; 5] =
     ["OptionResolution", "OptionFullscreen", "OptionUISize", "OptionTextureDetail", "OptionHardwareCursor"];
+/// Rows 6 and 7: their tops (page pixels), below OptionHardwareCursor (315) at Wizard101's 48-pixel row pitch.
+const EXTRA_ROWS: [f32; 2] = [363.0, 411.0];
+pub const SETTINGS_PAGE_ROWS: usize = 7;
+
+/// One settings row as the page shows it: label, value, and the lines of its tip.
+pub type SettingRow = (String, String, Vec<String>);
 
 fn settings(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
-    st.subs = SETTINGS_ROWS.len();
+    let tab = st.page % crate::options::TABS.len();
+    let (_, title, rows) = crate::options::TABS[tab];
+    st.subs = rows.len().max(1);
     for t in ["AudioOptionsText", "RealmsText", "GameplayOptionsText", "PrivacyOptionsText", "AdvVideoOptionsText"] {
         v.show(l.find(t), false);
     }
-    v.set(l.find("VideoOptionsText"), centre("Settings"));
+    v.set(l.find("VideoOptionsText"), centre(title));
     v.show(l.find("VideoOptions"), true);
-    grey(l, v, &["AdvVideoButton", "AudioButton", "GameplayButton", "AdvGameplayButton", "PrivacyButton",
-                 "RealmsButton", "CreditsButton", "MoreGameplayButton", "AnotherGameplayButton", "QuitButton",
-                 "IdleButton"]);
-    if let Some(b) = l.find("VideoButton") {
-        v.checked.insert(b);
+    for (i, (button, title, _)) in crate::options::TABS.iter().enumerate() {
+        if let Some(b) = l.find(button) {
+            if i == tab {
+                v.checked.insert(b);
+            }
+            v.tip(l.nodes[b].rect, vec![(*title).into()]);
+        }
     }
-    for (i, row) in SETTINGS_ROWS.iter().enumerate() {
-        let Some(r) = l.find(row) else { continue };
-        let (label, value) = d.settings.get(i).cloned().unwrap_or_default();
-        let text = if i == st.sub % SETTINGS_ROWS.len() { format!("> {label}") } else { label };
-        v.set(l.find_under(r, "OptionText"), text);
-        v.set(l.find_under(r, "OptionValue"), centre(&value));
+    v.set(l.find("QuitButton"), centre("Quit"));
+    v.set(l.find("IdleButton"), centre("Exit Game"));
+    if let Some(b) = l.find("QuitButton") {
+        v.tip(l.nodes[b].rect, vec!["Quit".into(), "Back to Elden Ring's title screen (the game saves first)".into()]);
+    }
+    if let Some(b) = l.find("IdleButton") {
+        v.tip(l.nodes[b].rect, vec!["Exit Game".into(),
+            "Back to the title screen (the game saves), then Elden Ring closes".into()]);
+    }
+    let selected = st.sub % st.subs;
+    let label_style = TextStyle::new("WizardFancy", 0.6857, BLACK);
+    let value_style = TextStyle::new("WizardFancy", 0.6, ImColor32::from_rgb(0xCC, 0xCC, 0x00)).centred();
+    for i in 0..SETTINGS_PAGE_ROWS {
+        let shown = i < rows.len();
+        let (label, value, tip) = d.settings.get(i).cloned().unwrap_or_default();
+        let label = if shown && i == selected { format!("> {label}") } else { label };
+        if let Some(name) = SETTINGS_ROWS.get(i) {
+            let Some(r) = l.find(name) else { continue };
+            v.show(Some(r), shown);
+            if !shown {
+                continue;
+            }
+            v.set(l.find_under(r, "OptionText"), label);
+            v.set(l.find_under(r, "OptionValue"), centre(&value));
+            v.tip(l.nodes[r].rect, tip);
+            continue;
+        }
+        if !shown {
+            continue;
+        }
+        // Rows 6 and 7 in Settings.gui's row art (OptionHardwareCursor's, moved down).
+        let y = EXTRA_ROWS[i - SETTINGS_ROWS.len()];
+        let left = [436.0, y + 6.0, 478.0, y + 48.0];
+        let right = [638.0, y + 6.0, 680.0, y + 48.0];
+        let value_box = [462.0, y + 16.0, 654.0, y + 38.0];
+        v.images.push((value_box, "GUI/Buttons/Button_Red01.png".into(), [0.0, 0.0, 1.0, 0.25]));
+        v.images.push((left, "GUI/Buttons/Button_Arrow01.png".into(), [0.0, 0.0, 0.25, 0.5]));
+        v.images.push((right, "GUI/Buttons/Button_Arrow01.png".into(), [0.0, 0.5, 0.25, 1.0]));
+        v.add([136.0, y + 12.0, 386.0, y + 42.0], label, label_style.clone());
+        v.add(value_box, value, value_style.clone());
+        v.tip([100.0, y, 680.0, y + 54.0], tip);
+        st.hits.push((left, Hit::Setting(i, -1)));
+        st.hits.push((right, Hit::Setting(i, 1)));
     }
 }

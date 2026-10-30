@@ -690,6 +690,82 @@ fn rip_target(sections: &[(usize, usize)], pattern: &str) -> Option<usize> {
     None
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// The spellbook's Settings page (options.rs): Elden Ring's own options, graphics settings and quit.
+
+/// GameDataMan -> GameSettings (Elden Ring's options: camera, sound, display; saved with the game's user data).
+const GAME_SETTINGS: usize = 0x58;
+
+impl Game {
+    fn game_settings(&self) -> Option<usize> {
+        let gdm = read::<usize>(self.game_data_man)?;
+        read::<usize>(gdm + GAME_SETTINGS).filter(|p| *p != 0)
+    }
+
+    /// One byte of Elden Ring's GameSettings (options.rs has the offsets).
+    pub fn option(&self, offset: usize) -> Option<u8> {
+        read::<u8>(self.game_settings()? + offset)
+    }
+
+    /// Writes one byte of GameSettings: the same value Elden Ring's own options menu writes. The game saves it
+    /// with its user data on its next save.
+    pub fn set_option(&self, offset: usize, value: u8) -> bool {
+        let Some(at) = self.game_settings().map(|g| g + offset) else { return false };
+        if read::<u8>(at).is_none() {
+            return false;
+        }
+        unsafe { (at as *mut u8).write_volatile(value) };
+        true
+    }
+}
+
+/// CSWindow's persistent screen config (what Elden Ring writes to GraphicsConfig.xml), as its 25 u32 fields.
+fn window_config() -> Option<usize> {
+    use eldenring::cs::CSWindowImp;
+    let window = from_singleton::static_of::<CSWindowImp>()?;
+    let window = read::<usize>(window.as_ptr() as usize).filter(|p| *p != 0)?;
+    Some(window + std::mem::offset_of!(CSWindowImp, persistent_window_config))
+}
+
+/// The graphics settings Elden Ring will save (CSWindowScreenConfig's fields in order), or None.
+pub fn graphics() -> Option<[u32; 25]> {
+    read::<[u32; 25]>(window_config()?)
+}
+
+/// Sets one field of the persistent screen config (applied by Elden Ring when it next starts, or saved by it).
+pub fn set_graphics(index: usize, value: u32) -> bool {
+    let Some(at) = window_config().map(|c| c + index * 4).filter(|_| index < 25) else { return false };
+    if read::<u32>(at).is_none() {
+        return false;
+    }
+    unsafe { (at as *mut u32).write_volatile(value) };
+    true
+}
+
+/// Quit to the title screen the way Elden Ring's system menu does (it saves first): the menu data's quit-out
+/// byte, [[CSMenuMan] + 0x8] + 0x5D (the chain the Elden Ring practice tool's "quitout" uses).
+pub fn quit_to_title() -> bool {
+    let Some(menu) = from_singleton::static_of::<eldenring::cs::CSMenuManImp>() else { return false };
+    let Some(menu) = read::<usize>(menu.as_ptr() as usize).filter(|p| *p != 0) else { return false };
+    let Some(data) = read::<usize>(menu + 0x8).filter(|p| *p != 0) else { return false };
+    let at = data + 0x5D;
+    if read::<u8>(at).is_none() {
+        return false;
+    }
+    unsafe { (at as *mut u8).write_volatile(1) };
+    true
+}
+
+/// Asks Elden Ring's window to close (WM_CLOSE: the game's own exit, as Alt+F4). Used from the title screen only.
+pub fn close_window() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+    let Some(window) = from_singleton::static_of::<eldenring::cs::CSWindowImp>() else { return false };
+    let Some(window) = read::<usize>(window.as_ptr() as usize).filter(|p| *p != 0) else { return false };
+    let Some(hwnd) = read::<isize>(window + std::mem::offset_of!(eldenring::cs::CSWindowImp, window_handle))
+        .filter(|h| *h != 0) else { return false };
+    unsafe { PostMessageW(hwnd as _, WM_CLOSE, 0, 0) != 0 }
+}
+
 // The hand-written offsets above must agree with the eldenring crate's struct layouts.
 const _: () = {
     use eldenring::cs::{CSChrDataModule, ChrInsDistanceEntry, PlayerGameData, WorldChrMan};
@@ -704,4 +780,37 @@ const _: () = {
     assert!(offset_of!(PlayerGameData, equipment) == EQUIP_GAME_DATA);
     assert!(offset_of!(PlayerGameData, current_fp) == 0x1C);
     assert!(offset_of!(PlayerGameData, current_stamina) == 0x2C);
+    {
+        use eldenring::cs::{CSWindowScreenConfig, GameDataMan, GameSettings};
+        use crate::options::opt;
+        assert!(offset_of!(GameDataMan, game_settings) == GAME_SETTINGS);
+        assert!(size_of::<CSWindowScreenConfig>() == 25 * 4);
+        assert!(offset_of!(CSWindowScreenConfig, grass_quality) == 24 * 4);
+        assert!(offset_of!(GameSettings, camera_speed) == opt::CAMERA_SPEED);
+        assert!(offset_of!(GameSettings, controller_rumble_strength) == opt::RUMBLE);
+        assert!(offset_of!(GameSettings, brightness) == opt::BRIGHTNESS);
+        assert!(offset_of!(GameSettings, music_volume) == opt::MUSIC);
+        assert!(offset_of!(GameSettings, sfx_volume) == opt::SFX);
+        assert!(offset_of!(GameSettings, voice_volume) == opt::VOICE);
+        assert!(offset_of!(GameSettings, display_blood) == opt::BLOOD);
+        assert!(offset_of!(GameSettings, show_subtitles) == opt::SUBTITLES);
+        assert!(offset_of!(GameSettings, hud_type) == opt::HUD);
+        assert!(offset_of!(GameSettings, reverse_camera_xaxis) == opt::INVERT_X);
+        assert!(offset_of!(GameSettings, reverse_camera_yaxis) == opt::INVERT_Y);
+        assert!(offset_of!(GameSettings, auto_lock_on) == opt::AUTO_LOCK);
+        assert!(offset_of!(GameSettings, camera_auto_wall_recovery) == opt::WALL_RECOVERY);
+        assert!(offset_of!(GameSettings, reset_camera_yaxis) == opt::RESET_Y);
+        assert!(offset_of!(GameSettings, cinematic_effects) == opt::CINEMATIC);
+        assert!(offset_of!(GameSettings, manual_attack_aiming) == opt::MANUAL_AIM);
+        assert!(offset_of!(GameSettings, auto_target) == opt::AUTO_TARGET);
+        assert!(offset_of!(GameSettings, start_offline) == opt::START_OFFLINE);
+        assert!(offset_of!(GameSettings, hdr_brightness) == opt::HDR_BRIGHTNESS);
+        assert!(offset_of!(GameSettings, hdr_max_brightness) == opt::HDR_PEAK);
+        assert!(offset_of!(GameSettings, hdr_contrast) == opt::HDR_CONTRAST);
+        assert!(offset_of!(GameSettings, master_volume) == opt::MASTER);
+        assert!(offset_of!(GameSettings, mark_new_items) == opt::MARK_NEW);
+        assert!(offset_of!(GameSettings, show_recent_items) == opt::RECENT_ITEMS);
+        assert!(offset_of!(GameSettings, show_tutorials) == opt::TUTORIALS);
+        assert!(offset_of!(GameSettings, camera_auto_rotation) == opt::AUTO_ROTATION);
+    }
 };

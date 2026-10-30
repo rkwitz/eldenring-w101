@@ -17,6 +17,8 @@ mod layout;
 mod names;
 #[path = "../../src/pages.rs"]
 mod pages;
+#[path = "../../src/options.rs"]
+mod options;
 #[path = "../../src/settings.rs"]
 mod settings;
 #[path = "../../src/sheet.rs"]
@@ -242,6 +244,16 @@ fn main() {
         ("7b_crafting_cookbook", pages::Tab::Crafting, 0, [0.0, 0.0], "cookbooks"),
         ("8_help", pages::Tab::Help, 1, [0.0, 0.0], ""),
         ("9_settings", pages::Tab::Settings, 0, [0.0, 0.0], ""),
+        ("9a_settings_advvideo", pages::Tab::Settings, 0, [0.0, 0.0], "settings:1"),
+        ("9b_settings_audio", pages::Tab::Settings, 0, [0.0, 0.0], "settings:2"),
+        ("9c_settings_gameplay1", pages::Tab::Settings, 0, [0.0, 0.0], "settings:3"),
+        ("9d_settings_camera", pages::Tab::Settings, 0, [0.0, 0.0], "settings:4"),
+        ("9e_settings_gameplay3", pages::Tab::Settings, 0, [0.0, 0.0], "settings:5"),
+        ("9f_settings_hud", pages::Tab::Settings, 0, [0.0, 0.0], "settings:6"),
+        ("9g_settings_display", pages::Tab::Settings, 0, [0.0, 0.0], "settings:7"),
+        ("9h_settings_morevideo", pages::Tab::Settings, 0, [0.0, 0.0], "settings:8"),
+        ("9i_settings_testing", pages::Tab::Settings, 0, [0.0, 0.0], "settings:9"),
+        ("9j_settings_tip", pages::Tab::Settings, 0, [0.70, 0.58], ""),
         ("11_markers", pages::Tab::Character, 0, [0.0, 0.0], "markers"),
         ("10_dialogue", pages::Tab::Character, 0, [0.0, 0.0], "talk:Ceren Nightchant"),
         // The loading screen, then Wizard101's page turn that many seconds in.
@@ -283,6 +295,9 @@ fn main() {
         let load = show.strip_prefix("load:");
         if load.is_some() || show.starts_with("poof") {
             book.preview_closed();
+        }
+        if let Some(tab) = show.strip_prefix("settings:") {
+            book.preview_settings(tab.parse().unwrap());
         }
         if let Some(pet) = show.strip_prefix("pet:") {
             book.preview_pet(pet.parse().unwrap());
