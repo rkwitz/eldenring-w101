@@ -25,6 +25,9 @@
 //! - EROverlay's public 1.16 draw-queue / UI-composite byte patterns, and RTTI classes whose names suggest a menu
 //!   model, face or offscreen scene, with their vtable RVAs (background thread, once; plain names first);
 //! - MenuOffscrRendParam rows (camera look-at point, distance, rotation, FOV, Gparam).
+//!
+//! The D3D12 creation hooks are also installed for the live preview (ini `live_preview = 1`, live_preview.rs),
+//! which takes the mirror scene's final picture from `note`; the rest of the probe stays off then.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -47,7 +50,7 @@ macro_rules! plog {
 }
 
 /// eldenring.exe's base and image size.
-fn image() -> (usize, usize) {
+pub(crate) fn image() -> (usize, usize) {
     static IMAGE: OnceLock<(usize, usize)> = OnceLock::new();
     *IMAGE.get_or_init(|| unsafe {
         let base = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null()) as usize;
@@ -57,12 +60,12 @@ fn image() -> (usize, usize) {
     })
 }
 
-fn in_image(address: usize) -> bool {
+pub(crate) fn in_image(address: usize) -> bool {
     let (base, size) = image();
     address >= base && address < base + size
 }
 
-fn rva(address: usize) -> usize {
+pub(crate) fn rva(address: usize) -> usize {
     address.wrapping_sub(image().0)
 }
 
@@ -178,12 +181,12 @@ fn arm_rtv(seconds: f32) {
 }
 
 /// IUnknown::AddRef / Release on a raw COM pointer; Release returns the count left.
-unsafe fn com_add_ref(p: usize) -> u32 {
+pub(crate) unsafe fn com_add_ref(p: usize) -> u32 {
     let vtable = *(p as *const *const usize);
     let f: unsafe extern "system" fn(usize) -> u32 = std::mem::transmute(*vtable.add(1));
     f(p)
 }
-unsafe fn com_release(p: usize) -> u32 {
+pub(crate) unsafe fn com_release(p: usize) -> u32 {
     let vtable = *(p as *const *const usize);
     let f: unsafe extern "system" fn(usize) -> u32 = std::mem::transmute(*vtable.add(2));
     f(p)
@@ -227,6 +230,8 @@ unsafe fn note(kind: &'static str, desc: usize, ppv: usize) {
         callers: callers(),
         at: since_start(),
     };
+    // The live preview (live_preview.rs) keeps the mirror scene's final picture.
+    crate::live_preview::on_created(rec.width, rec.height, rec.format, flags, rec.resource);
     if (rec.width, rec.height) == PREVIEW_SIZE && flags & 0x1 != 0 && rec.resource != 0 && GAMEPLAY.load(Ordering::Relaxed) {
         let mut preview = PREVIEW.lock().unwrap_or_else(|e| e.into_inner());
         if preview.len() < 512 {
@@ -465,7 +470,7 @@ const CLASS_WORDS: &[&str] = &[
 ];
 
 /// Sections of the image: (start, size, executable).
-fn sections() -> Vec<(usize, usize, bool)> {
+pub(crate) fn sections() -> Vec<(usize, usize, bool)> {
     let base = image().0;
     unsafe {
         let pe = base + *((base + 0x3C) as *const u32) as usize;
@@ -483,11 +488,11 @@ fn sections() -> Vec<(usize, usize, bool)> {
     }
 }
 
-fn parse_pattern(p: &str) -> Vec<Option<u8>> {
+pub(crate) fn parse_pattern(p: &str) -> Vec<Option<u8>> {
     p.split_whitespace().map(|t| if t == "??" { None } else { u8::from_str_radix(t, 16).ok() }).collect()
 }
 
-fn scan_all(regions: &[(usize, usize)], pattern: &[Option<u8>]) -> Vec<usize> {
+pub(crate) fn scan_all(regions: &[(usize, usize)], pattern: &[Option<u8>]) -> Vec<usize> {
     let first = pattern[0].unwrap_or(0);
     let mut hits = Vec::new();
     for &(start, size) in regions {
@@ -1419,7 +1424,8 @@ impl Probe {
             }
             let changes: Vec<String> = old.chunks_exact(4).zip(new.chunks_exact(4)).enumerate()
                 .filter(|(_, (a, b))| a != b)
-                .map(|(i, (a, b))| format!("{:+#x}: {:.3}->{:.3}", i as isize * 4 - 0x20,
+                .map(|(i, (a, b))| format!("{}{:#x}: {:.3}->{:.3}", if i * 4 < 0x20 { "-" } else { "+" },
+                                           (i as isize * 4 - 0x20).unsigned_abs(),
                                            f32::from_le_bytes(a.try_into().unwrap()), f32::from_le_bytes(b.try_into().unwrap())))
                 .collect();
             if self.hit_lines < 600 {

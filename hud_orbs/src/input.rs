@@ -111,6 +111,14 @@ pub fn set_gameplay(gameplay: bool) {
     GAMEPLAY.store(gameplay, Ordering::SeqCst);
 }
 
+/// live_preview.rs: while the book shows Elden Ring's mirror scene, the controller's right stick still reaches the
+/// game (its CharaMake menu turns the model with it); every other input stays with the book.
+static PASS_RIGHT_STICK: AtomicBool = AtomicBool::new(false);
+
+pub fn pass_right_stick(on: bool) {
+    PASS_RIGHT_STICK.store(on, Ordering::SeqCst);
+}
+
 /// Forgets every half-finished input after the game window lost or regained focus (alt-tab): buttons whose release
 /// went to another window would otherwise stay held (no click is ever seen again: the book looked frozen), raw input
 /// packet handles get reused, and DirectInput devices can be made anew at old addresses.
@@ -364,7 +372,11 @@ unsafe fn filter_pad(user: u32, result: u32, state: *mut XInputState) {
     RIGHT_X.store(pad.right_x, Ordering::SeqCst);
     PAD_SEEN.store(now_ms(), Ordering::SeqCst);
     if BOOK_OPEN.load(Ordering::SeqCst) {
+        let (right_x, right_y) = (pad.right_x, pad.right_y);
         *pad = Gamepad::default();
+        if PASS_RIGHT_STICK.load(Ordering::SeqCst) {
+            (pad.right_x, pad.right_y) = (right_x, right_y);
+        }
         return;
     }
     if GAMEPLAY.load(Ordering::SeqCst) {

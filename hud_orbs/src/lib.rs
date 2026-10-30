@@ -24,6 +24,7 @@ mod model;
 mod names;
 mod pages;
 mod probe;
+mod live_preview;
 mod quests;
 mod settings;
 mod sheet;
@@ -125,6 +126,8 @@ struct Orbs {
     teleport: teleport::Teleport,
     /// The opt-in scene probe (ini scene_probe = 1).
     probe: Option<probe::Probe>,
+    /// The opt-in live mirror picture in the book (ini live_preview = 1, live_preview.rs).
+    live: Option<live_preview::LivePreview>,
 }
 
 /// Frame timing written to w101_orbs.log every few seconds, to see what the overlay costs the game.
@@ -170,16 +173,20 @@ impl Orbs {
         let folder = dll_folder();
         start_log(&folder.join("w101_orbs.log"));
         let settings = load_settings(&folder.join("w101_orbs.ini"));
-        let probe = settings.scene_probe.then(|| {
+        let live = live_preview::LivePreview::new(&folder.join("w101_orbs.ini"));
+        if settings.scene_probe {
             tracing::info!("probe: scene probe on (nudge {})", settings.scene_probe_nudge);
+        }
+        if settings.scene_probe || live.is_some() {
             for line in probe::install_d3d_hooks() {
                 tracing::info!("probe: {line}");
             }
-            probe::Probe::new()
-        });
+        }
+        let probe = settings.scene_probe.then(probe::Probe::new);
         Orbs {
             settings,
             probe,
+            live,
             folder,
             art: None,
             font: None,
@@ -265,6 +272,9 @@ impl ImguiRenderLoop for Orbs {
         let plain = game.is_some() && !self.book.open && !self.loadscreen.holding() && game::hud_shown()
             && game::faded() < 0.05;
         self.teleport.capture(render, &mut self.book.textures, plain, game.and_then(|g| g.camera()));
+        if let Some(live) = &mut self.live {
+            live.before_render(render, &mut self.book.textures);
+        }
         if let Some(probe) = &mut self.probe {
             probe.render_frame(render, &self.folder);
         }
@@ -278,6 +288,14 @@ impl ImguiRenderLoop for Orbs {
     fn render(&mut self, ui: &mut imgui::Ui) {
         let begin = Instant::now();
         let stats = self.draw(ui);
+        // The live preview may keep the book up over Elden Ring's mirror menu (its HUD hidden).
+        let live_hold = match &mut self.live {
+            Some(live) => {
+                live.frame(ui, &self.book.textures);
+                live.holds_book()
+            }
+            None => false,
+        };
         let game = self.game.as_ref().and_then(|g| g.as_ref());
         let hud = game::hud_shown();
         let faded = game::faded();
@@ -286,7 +304,7 @@ impl ImguiRenderLoop for Orbs {
         let mut cx = book::Context {
             game,
             stats,
-            gameplay: game.is_some() && hud && faded <= 0.3 && stats.is_some(),
+            gameplay: game.is_some() && faded <= 0.3 && ((hud && stats.is_some()) || live_hold),
             hud,
             faded,
             position,

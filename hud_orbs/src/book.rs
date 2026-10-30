@@ -491,6 +491,9 @@ impl Book {
             };
             let r = page.nodes[*node].rect;
             let size = [((r[2] - r[0]) * s).round().max(8.0) as u32, ((r[3] - r[1]) * s).round().max(8.0) as u32];
+            if slot == 0 {
+                crate::live_preview::note_box(size);
+            }
             renderer.request(slot, Request { look: look.clone(), framing, yaw, size, fast: fast && slot == 0, view });
         }
     }

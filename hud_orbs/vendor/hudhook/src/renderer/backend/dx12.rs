@@ -75,7 +75,13 @@ pub struct D3D12RenderEngine {
     // w101_orbs: RenderContext::request_readback's pending request (resource, state) and finished copy.
     readback_request: Option<(usize, u32)>,
     readback_done: Option<crate::Readback>,
+    // w101_orbs: RenderContext::copy_texture's textures and this frame's requests (resource, state, region).
+    live: [Option<Capture>; LIVE_SLOTS],
+    live_wanted: [Option<(usize, u32, [u32; 4])>; LIVE_SLOTS],
 }
+
+/// w101_orbs: how many game-texture copies (RenderContext::copy_texture) there are.
+const LIVE_SLOTS: usize = 2;
 
 /// w101_orbs: how many screen copies there are (0, 1: the spellbook's world and map; 2: the teleport poof's world).
 const CAPTURE_SLOTS: usize = 3;
@@ -179,6 +185,8 @@ impl D3D12RenderEngine {
             capture_wanted: [false; CAPTURE_SLOTS],
             readback_request: None,
             readback_done: None,
+            live: [None, None],
+            live_wanted: [None; LIVE_SLOTS],
         })
     }
 }
@@ -221,6 +229,17 @@ impl RenderContext for D3D12RenderEngine {
     fn take_readback(&mut self) -> Option<crate::Readback> {
         self.readback_done.take()
     }
+
+    // w101_orbs
+    fn copy_texture(&mut self, slot: usize, resource: usize, state: u32, region: [u32; 4]) -> Option<TextureId> {
+        let wanted = self.live_wanted.get_mut(slot)?;
+        if resource == 0 || region[2] <= region[0] || region[3] <= region[1] {
+            return None;
+        }
+        *wanted = Some((resource, state, region));
+        let (w, h) = ((region[2] - region[0]) as u64, region[3] - region[1]);
+        self.live[slot].as_ref().filter(|c| c.width == w && c.height == h).map(|c| c.id)
+    }
 }
 
 impl RenderEngine for D3D12RenderEngine {
@@ -248,6 +267,9 @@ impl RenderEngine for D3D12RenderEngine {
                 },
                 None => None,
             };
+
+            // w101_orbs: copies of game textures (RenderContext::copy_texture), before the overlay is drawn.
+            self.record_live_copies();
 
             self.device.CreateRenderTargetView(
                 &render_target,
@@ -443,6 +465,85 @@ impl D3D12RenderEngine {
         barrier.into_iter().for_each(util::drop_barrier);
         back.into_iter().for_each(util::drop_barrier);
         Ok((resource, buffer, footprint, rows))
+    }
+
+    /// w101_orbs: records this frame's RenderContext::copy_texture requests on the command list: each source
+    /// region into its slot's texture (made, or made again, at the region's size and the source's format; a
+    /// texture made this frame is filled from the next request on, as the caller has no id for it yet).
+    unsafe fn record_live_copies(&mut self) {
+        for slot in 0..LIVE_SLOTS {
+            let Some((resource, state, region)) = self.live_wanted[slot].take() else { continue };
+            let raw = resource as *mut c_void;
+            let Some(source) = ID3D12Resource::from_raw_borrowed(&raw) else { continue };
+            let source = source.clone();
+            let desc = source.GetDesc();
+            if desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
+                || desc.SampleDesc.Count != 1
+                || region[2] as u64 > desc.Width
+                || region[3] > desc.Height
+            {
+                continue;
+            }
+            let Some(view_format) = Self::rtv_format_for_swap_chain(desc.Format) else { continue };
+            let (w, h) = ((region[2] - region[0]) as u64, region[3] - region[1]);
+            let fits = self.live[slot]
+                .as_ref()
+                .is_some_and(|c| c.width == w && c.height == h && c.format == desc.Format);
+            if !fits {
+                match self.texture_heap.create_capture_texture(w, h, desc.Format, view_format) {
+                    Ok(id) => self.live[slot] = Some(Capture { id, width: w, height: h, format: desc.Format }),
+                    Err(e) => {
+                        error!("game texture copy {slot}: {e:?}");
+                        self.live[slot] = None;
+                    },
+                }
+                continue;
+            }
+            let Some(c) = &self.live[slot] else { continue };
+            let texture = self.texture_heap.textures[c.id.id()].resource.clone();
+            let before = D3D12_RESOURCE_STATES(state as i32);
+            let to_copy = [
+                util::create_barrier(&source, before, D3D12_RESOURCE_STATE_COPY_SOURCE),
+                util::create_barrier(
+                    &texture,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                ),
+            ];
+            self.command_list.ResourceBarrier(&to_copy);
+            let dst = D3D12_TEXTURE_COPY_LOCATION {
+                pResource: ManuallyDrop::new(Some(texture.clone())),
+                Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+            };
+            let src = D3D12_TEXTURE_COPY_LOCATION {
+                pResource: ManuallyDrop::new(Some(source.clone())),
+                Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+            };
+            let area = D3D12_BOX {
+                left: region[0],
+                top: region[1],
+                front: 0,
+                right: region[2],
+                bottom: region[3],
+                back: 1,
+            };
+            self.command_list.CopyTextureRegion(&dst, 0, 0, 0, &src, Some(&area));
+            let back = [
+                util::create_barrier(&source, D3D12_RESOURCE_STATE_COPY_SOURCE, before),
+                util::create_barrier(
+                    &texture,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                ),
+            ];
+            self.command_list.ResourceBarrier(&back);
+            let _ = ManuallyDrop::into_inner(dst.pResource);
+            let _ = ManuallyDrop::into_inner(src.pResource);
+            to_copy.into_iter().for_each(util::drop_barrier);
+            back.into_iter().for_each(util::drop_barrier);
+        }
     }
 
     /// w101_orbs: the capture textures to copy the back buffer into this frame, each made (again) to the back

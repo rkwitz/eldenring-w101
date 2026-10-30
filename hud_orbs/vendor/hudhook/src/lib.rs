@@ -188,6 +188,16 @@ pub trait RenderContext {
     fn take_readback(&mut self) -> Option<Readback> {
         None
     }
+
+    /// w101_orbs: asks for a GPU copy of `region` (left, top, right, bottom, in pixels) of subresource 0 of a
+    /// game 2D texture (`resource`, a raw `ID3D12Resource*` the caller holds a reference to, assumed to be in
+    /// D3D12 state `state`; moved to COPY_SOURCE and back around the copy) into texture `slot` (0 or 1). Made
+    /// when this frame renders, on the game's queue, before the overlay is drawn, so drawing the returned
+    /// texture this frame shows this frame's copy. The texture samples opaque. `None` until the texture exists
+    /// (the first request, or a new region size, makes it) or where unsupported (only DX12 does it).
+    fn copy_texture(&mut self, _slot: usize, _resource: usize, _state: u32, _region: [u32; 4]) -> Option<TextureId> {
+        None
+    }
 }
 
 /// w101_orbs: switching the DX12 renderer's blending for what follows in a draw list: add [`blend_callback`]

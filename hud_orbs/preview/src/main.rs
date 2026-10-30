@@ -39,6 +39,7 @@ mod loadscreen;
 mod teleport;
 mod input;
 mod game;
+mod live_preview;
 
 pub(crate) use settings::{save_settings, Settings};
 
