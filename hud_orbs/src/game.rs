@@ -73,6 +73,26 @@ impl Game {
         [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6).then_some(([x, y, z], block, origin))
     }
 
+    /// The main player's ChrIns (scene probe).
+    pub fn player_address(&self) -> Option<usize> {
+        self.player()
+    }
+
+    /// Every loaded character (ChrIns, model), read now (scene probe).
+    pub fn loaded_characters(&self) -> Vec<(usize, u32)> {
+        self.characters()
+    }
+
+    /// A character's physics position (the camera's space), or None.
+    pub fn chr_physics(chr: usize) -> Option<[f32; 3]> {
+        use eldenring::cs::{CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
+        use std::mem::offset_of;
+        let modules = read::<usize>(chr + offset_of!(ChrIns, modules))?;
+        let physics = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics))?;
+        let [x, y, z, _] = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position))?;
+        [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6).then_some([x, y, z])
+    }
+
     fn player(&self) -> Option<usize> {
         read::<usize>(self.world_chr_man).and_then(|wcm| read::<usize>(wcm + PLAYER))
     }
@@ -535,6 +555,13 @@ pub fn hud_shown() -> bool {
         == Some(DEFAULT)
 }
 
+/// CSFeMan's raw HUD state (3 = default, the HUD is up), for the scene probe.
+pub fn hud_state() -> Option<u8> {
+    let fe_man = from_singleton::static_of::<eldenring::cs::CSFeManImp>()?;
+    read::<usize>(fe_man.as_ptr() as usize)
+        .and_then(|fe| read::<u8>(fe + std::mem::offset_of!(eldenring::cs::CSFeManImp, hud_state)))
+}
+
 /// How far the game has faded the screen out (0 = clear, 1 = covered), the most opaque of its fade plates. Loading
 /// screens and cutscene transitions fade out first, so the globes go with them.
 pub fn faded() -> f32 {
@@ -556,7 +583,7 @@ fn plausible(s: &Stats) -> bool {
 }
 
 /// `len` bytes at `address`, or None if any of them can't be read.
-fn read_bytes(address: usize, len: usize) -> Option<Vec<u8>> {
+pub(crate) fn read_bytes(address: usize, len: usize) -> Option<Vec<u8>> {
     if address < 0x10000 {
         return None;
     }
@@ -571,7 +598,7 @@ fn read_bytes(address: usize, len: usize) -> Option<Vec<u8>> {
 /// Reads a value without crashing on a stale pointer: ReadProcessMemory on our own process fails cleanly when the
 /// memory isn't readable. (VirtualQuery did the same job but walks the page tables of the whole region, which in
 /// Elden Ring's multi-gigabyte heaps took several milliseconds per call and dropped the game to a few fps.)
-fn read<T: Copy>(address: usize) -> Option<T> {
+pub(crate) fn read<T: Copy>(address: usize) -> Option<T> {
     if address < 0x10000 {
         return None;
     }
@@ -584,7 +611,7 @@ fn read<T: Copy>(address: usize) -> Option<T> {
 }
 
 /// (start, length) of each executable section of the module at `base`.
-fn code_sections(base: usize) -> Vec<(usize, usize)> {
+pub(crate) fn code_sections(base: usize) -> Vec<(usize, usize)> {
     unsafe {
         let pe = base + *((base + 0x3C) as *const u32) as usize;
         let count = *((pe + 6) as *const u16) as usize;
@@ -603,7 +630,7 @@ fn code_sections(base: usize) -> Vec<(usize, usize)> {
 }
 
 /// The readable parts of [start, start + size), split where the memory protection changes.
-fn readable_regions(start: usize, size: usize) -> Vec<(usize, usize)> {
+pub(crate) fn readable_regions(start: usize, size: usize) -> Vec<(usize, usize)> {
     let mut regions = Vec::new();
     let mut at = start;
     while at < start + size {

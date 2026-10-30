@@ -23,6 +23,7 @@ mod teleport;
 mod model;
 mod names;
 mod pages;
+mod probe;
 mod quests;
 mod settings;
 mod sheet;
@@ -122,6 +123,8 @@ struct Orbs {
     flag_check_logged: bool,
     /// Wizard101's teleport poof before warps (teleport.rs).
     teleport: teleport::Teleport,
+    /// The opt-in scene probe (ini scene_probe = 1).
+    probe: Option<probe::Probe>,
 }
 
 /// Frame timing written to w101_orbs.log every few seconds, to see what the overlay costs the game.
@@ -166,8 +169,17 @@ impl Orbs {
     fn new() -> Self {
         let folder = dll_folder();
         start_log(&folder.join("w101_orbs.log"));
+        let settings = load_settings(&folder.join("w101_orbs.ini"));
+        let probe = settings.scene_probe.then(|| {
+            tracing::info!("probe: scene probe on (nudge {})", settings.scene_probe_nudge);
+            for line in probe::install_d3d_hooks() {
+                tracing::info!("probe: {line}");
+            }
+            probe::Probe::new()
+        });
         Orbs {
-            settings: load_settings(&folder.join("w101_orbs.ini")),
+            settings,
+            probe,
             folder,
             art: None,
             font: None,
@@ -305,6 +317,9 @@ impl ImguiRenderLoop for Orbs {
         // in its default state then).
         let busy = game.is_none() || faded > 0.3 || stats.is_none() || !hud;
         self.loadscreen.draw(ui, &self.book.textures, busy, stats.is_some());
+        if let Some(probe) = &mut self.probe {
+            probe.tick(self.game.as_ref().and_then(|g| g.as_ref()), self.settings.scene_probe_nudge);
+        }
         self.perf.frame(begin.elapsed().as_secs_f32());
     }
 
