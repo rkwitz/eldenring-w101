@@ -35,6 +35,8 @@ mod markers;
 mod nameplates;
 #[path = "../../src/loadscreen.rs"]
 mod loadscreen;
+#[path = "../../src/teleport.rs"]
+mod teleport;
 mod input;
 mod game;
 
@@ -127,7 +129,16 @@ fn rasterize(draw_data: &imgui::DrawData, textures: &[RgbaImage], font: &RgbaIma
     for list in draw_data.draw_lists() {
         let vtx = list.vtx_buffer();
         let idx = list.idx_buffer();
+        let mut additive = false;
         for cmd in list.commands() {
+            if let DrawCmd::RawCallback { raw_cmd, .. } = cmd {
+                match unsafe { (*raw_cmd).UserCallbackData } as usize {
+                    hudhook::BLEND_ADDITIVE => additive = true,
+                    hudhook::BLEND_NORMAL => additive = false,
+                    _ => {}
+                }
+                continue;
+            }
             let DrawCmd::Elements { count, cmd_params: DrawCmdParams { clip_rect, texture_id, vtx_offset, idx_offset } } =
                 cmd
             else {
@@ -172,7 +183,8 @@ fn rasterize(draw_data: &imgui::DrawData, textures: &[RgbaImage], font: &RgbaIma
                         let dst = canvas.get_pixel_mut(x as u32, y as u32);
                         for i in 0..3 {
                             let s = t[i] * col[i];
-                            dst.0[i] = (s * a + dst.0[i] as f32 * (1.0 - a)).round().clamp(0.0, 255.0) as u8;
+                            let keep = if additive { 1.0 } else { 1.0 - a };
+                            dst.0[i] = (s * a + dst.0[i] as f32 * keep).round().clamp(0.0, 255.0) as u8;
                         }
                         dst.0[3] = 255;
                     }
@@ -239,6 +251,15 @@ fn main() {
         ("12e_flip_0.85", pages::Tab::Character, 0, [0.0, 0.0], "load:0.85"),
         ("12f_flip_0.95", pages::Tab::Character, 0, [0.0, 0.0], "load:0.95"),
     ];
+    // Wizard101's teleport poof (teleport.rs) at these times, on feet at the origin (compare with
+    // tools/w101_poof_reference.py's frames of the .nif itself).
+    let poof_times = ["0.05", "0.12", "0.20", "0.30", "0.40", "0.55", "0.75", "1.00", "1.40"];
+    let mut shots = shots;
+    let names: Vec<String> = poof_times.iter().map(|t| format!("13_poof_{t}")).collect();
+    let shows: Vec<String> = poof_times.iter().map(|t| format!("poof:{t}")).collect();
+    for (n, sh) in names.iter().zip(&shows) {
+        shots.push((Box::leak(n.clone().into_boxed_str()), pages::Tab::Character, 0, [0.0, 0.0], Box::leak(sh.clone().into_boxed_str())));
+    }
     let mut load_screen = loadscreen::LoadScreen::default();
     book.textures.want([loadscreen::IMAGE.to_string()]);
     let settings_image = settings::load_settings(Path::new("/nonexistent")).loadscreen_image;
@@ -259,7 +280,7 @@ fn main() {
             book.preview_cookbooks();
         }
         let load = show.strip_prefix("load:");
-        if load.is_some() {
+        if load.is_some() || show.starts_with("poof") {
             book.preview_closed();
         }
         if let Some(pet) = show.strip_prefix("pet:") {
@@ -288,8 +309,26 @@ fn main() {
                 settings_path: Path::new("/tmp/book_preview_settings.ini"),
             };
             book.frame(ui, &mut cx);
-            book.draw_markers(ui, &cx);
-            book.draw_nameplates(ui, &cx);
+            if !show.starts_with("poof") {
+                book.draw_markers(ui, &cx);
+                book.draw_nameplates(ui, &cx);
+            }
+            if let Some(t) = show.strip_prefix("poof:").and_then(|t| t.parse::<f32>().ok()) {
+                // The camera of tools/w101_poof_reference.py: at (0, 1.55, -3.4)
+                // looking at (0, 0.95, 0), 48 degrees.
+                let (pos, look) = ([0.0f32, 1.55, -3.4], [0.0f32, 0.95, 0.0]);
+                let f = [look[0] - pos[0], look[1] - pos[1], look[2] - pos[2]];
+                let l = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt();
+                let f = [f[0] / l, f[1] / l, f[2] / l];
+                let r = [f[2], 0.0, -f[0]];
+                let rl = (r[0] * r[0] + r[2] * r[2]).sqrt();
+                let r = [r[0] / rl, 0.0, r[2] / rl];
+                let u = [f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]];
+                let camera = markers::Camera { matrix: [[r[0], r[1], r[2], 0.0], [u[0], u[1], u[2], 0.0], [f[0], f[1], f[2], 0.0],
+                                                        [pos[0], pos[1], pos[2], 1.0]], fov: 48f32.to_radians(), player: [0.0; 3] };
+                let tsv = folder.join("book").join("art").join("teleport").join("fx_disappear.tsv");
+                teleport::preview(ui, &mut book.textures, Some(&tsv), &camera, [0.0; 3], t);
+            }
             if let Some(t) = load {
                 load_screen.preview_at(1.0, t.parse().ok());
                 load_screen.draw(ui, &book.textures, true, true);

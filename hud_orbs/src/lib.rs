@@ -239,6 +239,7 @@ impl ImguiRenderLoop for Orbs {
             Err(e) => tracing::warn!("WizardFancy font not loaded, using imgui's default font: {e}"),
         }
         self.book.load(&self.folder.join("w101_orbs").join("book"), render);
+        self.teleport.load(&self.folder.join("w101_orbs").join("book").join("art"));
         self.book.textures.want([loadscreen::IMAGE.to_string()]);
         let flip = self.folder.join("w101_orbs").join("book").join("page_flip.tsv");
         self.loadscreen.load(&self.folder, &self.settings.loadscreen_image, &flip, render);
@@ -264,6 +265,9 @@ impl ImguiRenderLoop for Orbs {
         let plain = game.is_some() && !self.book.open && !self.loadscreen.holding() && game::hud_shown()
             && game::faded() < 0.05;
         self.teleport.capture(render, &mut self.book.textures, plain, game.and_then(|g| g.camera()));
+        if let Some(probe) = &mut self.probe {
+            probe.render_frame(render, &self.folder);
+        }
         // Elden Ring hides and confines the cursor; the open book needs it.
         ctx.io_mut().mouse_draw_cursor = false; // the book draws its own
         if self.book.open {

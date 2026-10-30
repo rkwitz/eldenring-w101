@@ -175,6 +175,50 @@ pub trait RenderContext {
     fn capture_screen(&mut self, _slot: usize) -> Option<TextureId> {
         None
     }
+
+    /// w101_orbs: asks for a CPU copy of subresource 0 of a game 2D texture (`resource`, a raw
+    /// `ID3D12Resource*` the caller holds a reference to), assumed to be in D3D12 state `state` (it is
+    /// moved to COPY_SOURCE and back around the copy). Made on this frame's render, on the game's queue;
+    /// the renderer waits for it once. One request at a time; false where unsupported or while busy.
+    fn request_readback(&mut self, _resource: usize, _state: u32) -> bool {
+        false
+    }
+
+    /// w101_orbs: the finished copy of the last [`RenderContext::request_readback`], once.
+    fn take_readback(&mut self) -> Option<Readback> {
+        None
+    }
+}
+
+/// w101_orbs: switching the DX12 renderer's blending for what follows in a draw list: add [`blend_callback`]
+/// with `ImDrawList_AddCallback` and user data [`BLEND_ADDITIVE`] (colour x alpha added to the screen: glows
+/// and sparks, as Gamebryo's ONE/ONE effects) or [`BLEND_NORMAL`] (back to alpha blending). The renderer
+/// recognises the user data (function addresses aren't unique enough to tell callbacks apart).
+pub unsafe extern "C" fn blend_callback(
+    _list: *const imgui::sys::ImDrawList,
+    _cmd: *const imgui::sys::ImDrawCmd,
+) {
+}
+
+/// w101_orbs: see [`blend_callback`].
+pub const BLEND_ADDITIVE: usize = 0x5710_1AD0;
+/// w101_orbs: see [`blend_callback`].
+pub const BLEND_NORMAL: usize = 0x5710_1A10;
+
+/// w101_orbs: a CPU copy of a texture: `pitch` bytes per row (256-aligned), `height` rows.
+pub struct Readback {
+    /// The texture copied (as requested).
+    pub resource: usize,
+    /// Its width in pixels.
+    pub width: u32,
+    /// Its height in pixels (rows in `data`).
+    pub height: u32,
+    /// Its DXGI format.
+    pub format: u32,
+    /// Bytes per row in `data`.
+    pub pitch: u32,
+    /// The rows.
+    pub data: Vec<u8>,
 }
 
 /// Represents a control flow decision before the `wnd_proc` is executed.

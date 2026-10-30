@@ -592,8 +592,12 @@ POOF_SFX = 523412  # Unseen Form's casting burst (SpEffectVfxParam 1467000/14670
 #   (s10020), a flipbook of scattered sparkles (s31421), wisps (s34020) and a puff (s21021): ER's closest one-shot to
 #   Wizard101's sparkle-and-smoke poof, and made for the player's body (dummy POOF_DUMMY)
 POOF_DUMMY = 220  # c0000's body dummy poly, where Unseen Form plays it
-POOF_HIDE_SPEFFECT = 1467000  # Unseen Form itself (camouflage, 30 s): the player fades out at the poof; cleared
-#   again when the event starts after the warp's map load. None = no fading.
+POOF_HIDE_SPEFFECT = 9910  # the player vanishes at the poof: vanilla SpEffect 9910 (only vfxId 20700000, endless,
+#   no stats or icon; m20_01 event 20010761 hides a character with it) = SpEffectVfxParam camouflage with
+#   camouflageMinAlpha 0 at any distance, also hiding the character's own effects and foot effects. Round 12 used
+#   Unseen Form (1467000), whose camouflageMinAlpha 50 leaves the player half visible to himself ("they just stand
+#   there") and whose end plays its burst again on arrival. Cleared again when the event restarts (after the warp's
+#   map load, a reload or the warp failing). None = no hiding.
 POOF_HIDE_AT = 0.35  # seconds into the poof: Wizard101's smoke-out (0.27-0.37 s), when the character is gone
 POOF_SECONDS = 1.2  # seconds of poof (player frozen in place, screen clear) before the load screen and fade
 
@@ -615,7 +619,8 @@ def book_warps(d, warps=BOOK_WARPS):
         ins = []
         if hide is not None:
             ins += [_i(1001, 0, "<f", 1.0),  # the player is there after a map load
-                    _i(2004, 21, "<Ii", 10000, hide)]  # Clear SpEffect: visible again after the poof's warp
+                    _i(2004, 21, "<Ii", 10000, hide),  # Clear SpEffect: visible again after the poof's warp
+                    _i(2004, 21, "<Ii", 10000, 1467000)]  # and round 12's Unseen Form, if a save still has it
         ins += [
             _i(3, 0, "<bBBxI", 1, 1, 0, flag),  # IF event flag on (group 1)
             _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1

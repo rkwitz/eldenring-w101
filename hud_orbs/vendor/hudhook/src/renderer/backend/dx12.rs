@@ -59,6 +59,8 @@ pub struct D3D12RenderEngine {
 
     root_signature: ID3D12RootSignature,
     pipeline_state: ID3D12PipelineState,
+    // w101_orbs: the same with additive blending (crate::blend_additive).
+    additive_state: ID3D12PipelineState,
 
     projection_buffer: [[f32; 4]; 4],
     node_mask: u32,
@@ -70,6 +72,9 @@ pub struct D3D12RenderEngine {
     // w101_orbs: the screen copies (RenderContext::capture_screen) and which are wanted this frame.
     captures: [Option<Capture>; CAPTURE_SLOTS],
     capture_wanted: [bool; CAPTURE_SLOTS],
+    // w101_orbs: RenderContext::request_readback's pending request (resource, state) and finished copy.
+    readback_request: Option<(usize, u32)>,
+    readback_done: Option<crate::Readback>,
 }
 
 /// w101_orbs: how many screen copies there are (0, 1: the spellbook's world and map; 2: the teleport poof's world).
@@ -145,7 +150,7 @@ impl D3D12RenderEngine {
         let (rtv_heap, texture_heap) = unsafe { create_heaps(&device, node_mask) }?;
         let rtv_heap_start = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
 
-        let (root_signature, pipeline_state) =
+        let (root_signature, pipeline_state, additive_state) =
             unsafe { create_shader_program(&device, rtv_format, node_mask) }?;
 
         let fence = Fence::new(&device)?;
@@ -164,6 +169,7 @@ impl D3D12RenderEngine {
             texture_heap,
             root_signature,
             pipeline_state,
+            additive_state,
             projection_buffer: Default::default(),
             node_mask,
             fence,
@@ -171,6 +177,8 @@ impl D3D12RenderEngine {
             frame_index: 0,
             captures: [None, None, None],
             capture_wanted: [false; CAPTURE_SLOTS],
+            readback_request: None,
+            readback_done: None,
         })
     }
 }
@@ -200,6 +208,19 @@ impl RenderContext for D3D12RenderEngine {
         *wanted = true;
         self.captures[slot].as_ref().map(|c| c.id)
     }
+
+    // w101_orbs
+    fn request_readback(&mut self, resource: usize, state: u32) -> bool {
+        if self.readback_request.is_some() || resource == 0 {
+            return false;
+        }
+        self.readback_request = Some((resource, state));
+        true
+    }
+
+    fn take_readback(&mut self) -> Option<crate::Readback> {
+        self.readback_done.take()
+    }
 }
 
 impl RenderEngine for D3D12RenderEngine {
@@ -215,6 +236,18 @@ impl RenderEngine for D3D12RenderEngine {
 
             fc.command_allocator.Reset()?;
             self.command_list.Reset(&fc.command_allocator, None)?;
+
+            // w101_orbs: a requested copy of a game texture, recorded first (the game's frame is done with it).
+            let readback = match self.readback_request.take() {
+                Some((resource, state)) => match self.record_readback(resource, state) {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        error!("readback of {resource:#x}: {e:?}");
+                        None
+                    },
+                },
+                None => None,
+            };
 
             self.device.CreateRenderTargetView(
                 &render_target,
@@ -280,6 +313,26 @@ impl RenderEngine for D3D12RenderEngine {
             self.command_queue.Signal(self.fence.fence(), new_fence_value)?;
             self.frame_contexts[self.frame_index].fence_value = new_fence_value;
 
+            // w101_orbs: wait for the requested copy (once) and keep its bytes.
+            if let Some((resource, buffer, footprint, rows)) = readback {
+                self.fence.wait_for_value(new_fence_value)?;
+                let mut mapped = ptr::null_mut();
+                if buffer.Map(0, None, Some(&mut mapped)).is_ok() && !mapped.is_null() {
+                    let pitch = footprint.Footprint.RowPitch;
+                    let size = pitch as usize * rows as usize;
+                    let data = slice::from_raw_parts(mapped as *const u8, size).to_vec();
+                    buffer.Unmap(0, None);
+                    self.readback_done = Some(crate::Readback {
+                        resource,
+                        width: footprint.Footprint.Width,
+                        height: rows,
+                        format: footprint.Footprint.Format.0 as u32,
+                        pitch,
+                        data,
+                    });
+                }
+            }
+
             self.frame_index = (self.frame_index + 1) % self.frame_contexts.len();
 
             present_to_rtv_barriers.into_iter().for_each(util::drop_barrier);
@@ -313,6 +366,85 @@ impl Drop for D3D12RenderEngine {
 }
 
 impl D3D12RenderEngine {
+    /// w101_orbs: records a copy of `resource`'s subresource 0 (assumed in `state`) into a new readback
+    /// buffer on the command list; returns what is needed to read it once the list has run.
+    unsafe fn record_readback(
+        &mut self,
+        resource: usize,
+        state: u32,
+    ) -> Result<(usize, ID3D12Resource, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, u32)> {
+        let raw = resource as *mut c_void;
+        let Some(source) = ID3D12Resource::from_raw_borrowed(&raw) else {
+            return Err(Error::from_hresult(HRESULT(-1)));
+        };
+        let source = source.clone();
+        let desc = source.GetDesc();
+        if desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count != 1 {
+            return Err(Error::from_hresult(HRESULT(-2)));
+        }
+        let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+        let mut rows = 0u32;
+        let mut total = 0u64;
+        self.device.GetCopyableFootprints(
+            &desc,
+            0,
+            1,
+            0,
+            Some(&mut footprint),
+            Some(&mut rows),
+            None,
+            Some(&mut total),
+        );
+        let buffer: ID3D12Resource = util::try_out_ptr(|v| {
+            self.device.CreateCommittedResource(
+                &D3D12_HEAP_PROPERTIES {
+                    Type: D3D12_HEAP_TYPE_READBACK,
+                    CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+                    MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+                    CreationNodeMask: self.node_mask,
+                    VisibleNodeMask: self.node_mask,
+                },
+                D3D12_HEAP_FLAG_NONE,
+                &D3D12_RESOURCE_DESC {
+                    Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+                    Alignment: 0,
+                    Width: total,
+                    Height: 1,
+                    DepthOrArraySize: 1,
+                    MipLevels: 1,
+                    Format: DXGI_FORMAT_UNKNOWN,
+                    SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                    Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                    Flags: D3D12_RESOURCE_FLAG_NONE,
+                },
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                None,
+                v,
+            )
+        })?;
+        let before = D3D12_RESOURCE_STATES(state as i32);
+        let barrier = [util::create_barrier(&source, before, D3D12_RESOURCE_STATE_COPY_SOURCE)];
+        self.command_list.ResourceBarrier(&barrier);
+        let dst = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(buffer.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { PlacedFootprint: footprint },
+        };
+        let src = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(source.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+        };
+        self.command_list.CopyTextureRegion(&dst, 0, 0, 0, &src, None);
+        let back = [util::create_barrier(&source, D3D12_RESOURCE_STATE_COPY_SOURCE, before)];
+        self.command_list.ResourceBarrier(&back);
+        let _ = ManuallyDrop::into_inner(dst.pResource);
+        let _ = ManuallyDrop::into_inner(src.pResource);
+        barrier.into_iter().for_each(util::drop_barrier);
+        back.into_iter().for_each(util::drop_barrier);
+        Ok((resource, buffer, footprint, rows))
+    }
+
     /// w101_orbs: the capture textures to copy the back buffer into this frame, each made (again) to the back
     /// buffer's size and format when that changes. Clears the requests.
     unsafe fn prepare_captures(&mut self, render_target: &ID3D12Resource) -> Vec<ID3D12Resource> {
@@ -432,7 +564,14 @@ impl D3D12RenderEngine {
                         // whatsoever. What am I doing wrong?
                         self.setup_render_state(draw_data);
                     },
-                    DrawCmd::RawCallback { callback, raw_cmd } => callback(cl.raw(), raw_cmd),
+                    DrawCmd::RawCallback { callback, raw_cmd } => {
+                        // w101_orbs: blending switches (crate::blend_callback).
+                        match (*raw_cmd).UserCallbackData as usize {
+                            crate::BLEND_ADDITIVE => self.command_list.SetPipelineState(&self.additive_state),
+                            crate::BLEND_NORMAL => self.command_list.SetPipelineState(&self.pipeline_state),
+                            _ => callback(cl.raw(), raw_cmd),
+                        }
+                    },
                 }
             }
             idx_offset += cl.idx_buffer().len();
@@ -514,7 +653,7 @@ unsafe fn create_shader_program(
     device: &ID3D12Device,
     rtv_format: DXGI_FORMAT,
     node_mask: u32,
-) -> Result<(ID3D12RootSignature, ID3D12PipelineState)> {
+) -> Result<(ID3D12RootSignature, ID3D12PipelineState, ID3D12PipelineState)> {
     let parameters = [
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
@@ -765,9 +904,16 @@ unsafe fn create_shader_program(
     };
 
     let pipeline_state = unsafe { device.CreateGraphicsPipelineState(&pso_desc)? };
+    // w101_orbs: the additive twin (src x alpha + dst).
+    let mut additive_desc = pso_desc.clone();
+    additive_desc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_ONE;
+    additive_desc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ZERO;
+    additive_desc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ONE;
+    let additive_state = unsafe { device.CreateGraphicsPipelineState(&additive_desc)? };
+    let _ = ManuallyDrop::into_inner(additive_desc.pRootSignature);
     let _ = ManuallyDrop::into_inner(pso_desc.pRootSignature);
 
-    Ok((root_signature, pipeline_state))
+    Ok((root_signature, pipeline_state, additive_state))
 }
 
 struct Buffer<T: Sized> {

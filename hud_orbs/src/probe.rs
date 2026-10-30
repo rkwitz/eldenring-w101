@@ -2,22 +2,28 @@
 //! (Clouded Mirror Stand / CharaMake) preview scene works, for a second character view in the spellbook.
 //!
 //! Everything is read-only and every read goes through `game::read` (ReadProcessMemory on our own process, which
-//! fails cleanly on a bad pointer), except the opt-in nudge (`scene_probe_nudge = 1`): after the first menu that
-//! stayed open for more than five seconds without a loading fade or the player moving closes, MenuOffscrRendParam row 0's camera distance is raised by 50%, so
-//! the next mirror visit shows whether that param drives the preview camera.
+//! fails cleanly on a bad pointer), except the opt-in nudge (`scene_probe_nudge = 1`): when a menu that built the
+//! mirror's 784x784 preview scene closes, MenuOffscrRendParam row 0's camera distance is raised by 50%, so the next
+//! mirror visit shows whether that param drives the preview camera (the first visit stays un-nudged).
 //!
 //! What it logs:
 //! - menu state: CSFeMan's HUD state changes (a menu opening or closing) and, on each edge, which pointer slots
-//!   of the menu, camera, face and graphics singletons changed (with the RTTI class names of what they point to);
-//! - cameras: CSCamera's four perspective cameras and FieldArea's GameRend cameras, once a second while a menu is
-//!   up: position, FOV, distance to the player and how far off the player the camera looks;
-//! - characters: ChrIns added or removed while the menu is up, and whether the main player changed or moved;
+//!   of the menu, camera, face and graphics singletons changed (with the RTTI class names of what they point to),
+//!   and CSMenuMan's job lists (+0x8e0/+0x9f0/+0xae0) searched for ChrMake / FaceGen / Preview objects;
+//! - cameras: CSCamera's four perspective cameras and FieldArea's GameRend cameras (FieldArea found by pattern),
+//!   once a second while a menu is up: position, FOV, distance to the player and how far off the player it looks;
+//! - characters: ChrIns (RTTI-checked) added or removed while the menu is up, and whether the player moved;
 //! - render targets: every 2D render-target / depth texture the game creates through ID3D12Device (committed and
-//!   placed resources, all versions), with size, format, flags and the game's return addresses (as RVAs). Those made
-//!   before gameplay are summarised; later ones are logged one by one (the mirror's would show up when it opens);
-//!   RTVs made while a menu is opening are logged too;
+//!   placed resources, all versions), with size, format, flags and up to 16 of the game's return addresses (RVAs,
+//!   from a 48-frame walk). Those made before gameplay are summarised; later ones are logged in groups four times a
+//!   second. RTVs of hooked resources are logged once each while a menu opens or new 784x784 targets come;
+//! - the mirror's 784x784 targets: each AddRef'd; two seconds after the last one is made, the colour ones are read
+//!   back one per frame and written to orbs\probe_dumps\ as PNGs (at most 64 a session; float formats tone-mapped),
+//!   and ten seconds after the menu closes our references are released and the counts left logged;
+//! - a one-off scan of private read-write memory for row 0's camera block or its distance near its min/max (the
+//!   preview camera's live copy), whose hits are re-read and their changed floats logged once a second;
 //! - EROverlay's public 1.16 draw-queue / UI-composite byte patterns, and RTTI classes whose names suggest a menu
-//!   model, face or offscreen scene, with their vtable RVAs (background thread, once);
+//!   model, face or offscreen scene, with their vtable RVAs (background thread, once; plain names first);
 //! - MenuOffscrRendParam rows (camera look-at point, distance, rotation, FOV, Gparam).
 
 use std::collections::HashMap;
@@ -29,7 +35,7 @@ use std::time::Instant;
 use crate::game::{self, read, read_bytes, Game};
 
 /// Probe lines per game session; past this the probe goes quiet so the log can't grow without bound.
-const LINE_BUDGET: u32 = 6000;
+const LINE_BUDGET: u32 = 14000;
 static LINES: AtomicU32 = AtomicU32::new(0);
 
 macro_rules! plog {
@@ -111,6 +117,7 @@ fn heap_like(v: usize) -> bool {
 // D3D12 resource creation hooks
 // ---------------------------------------------------------------------------------------------------------------
 
+#[derive(Clone)]
 struct Rec {
     kind: &'static str,
     width: u64,
@@ -128,12 +135,33 @@ struct Rec {
 static RECORDS: Mutex<Vec<Rec>> = Mutex::new(Vec::new());
 /// Set once the player is in the world: later render targets are logged as they come.
 static GAMEPLAY: AtomicBool = AtomicBool::new(false);
-/// Set while a menu is opening (the first seconds after the HUD went away): RTV creations are logged then.
-static ARMED: AtomicBool = AtomicBool::new(false);
 /// Render targets logged one by one during gameplay, and RTVs logged in the current menu (both capped: a game that
 /// made them every frame would otherwise flood the log).
 static RT_LOGGED: AtomicU32 = AtomicU32::new(0);
 static RTV_LOGGED: AtomicU32 = AtomicU32::new(0);
+/// RTVs are logged until this time (ms since start): set when a menu opens and on every new 784x784 target, so a
+/// mirror scene built late in its menu (visit 1 was built 12.8 s in) is still covered.
+static ARM_UNTIL_MS: AtomicU32 = AtomicU32::new(0);
+/// The resources whose RTV was logged already (one line per resource).
+static RTV_SEEN: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+/// Render targets made during gameplay, not yet written to the log (Probe::tick groups them).
+static PENDING: Mutex<Vec<Rec>> = Mutex::new(Vec::new());
+/// The mirror's preview scene targets (784x784, ALLOW_RENDER_TARGET), each AddRef'd here so they can be read back
+/// and their lifetime checked.
+static PREVIEW: Mutex<Vec<Preview>> = Mutex::new(Vec::new());
+/// How many 784x784 targets were made so far, and when the last one was (ms since start).
+static PREVIEW_MADE: AtomicU32 = AtomicU32::new(0);
+static PREVIEW_LAST_MS: AtomicU32 = AtomicU32::new(0);
+/// The preview scene's size.
+const PREVIEW_SIZE: (u64, u32) = (784, 784);
+
+struct Preview {
+    resource: usize,
+    format: u32,
+    at: f32,
+    dumped: bool,
+    released: bool,
+}
 static TRAMPOLINES: [AtomicUsize; 8] = [const { AtomicUsize::new(0) }; 8];
 static START: OnceLock<Instant> = OnceLock::new();
 
@@ -141,14 +169,35 @@ fn since_start() -> f32 {
     START.get_or_init(Instant::now).elapsed().as_secs_f32()
 }
 
-/// Return addresses inside eldenring.exe (as RVAs) of the current call, nearest first.
+fn now_ms() -> u32 {
+    (since_start() * 1000.0) as u32
+}
+
+fn arm_rtv(seconds: f32) {
+    ARM_UNTIL_MS.fetch_max(now_ms() + (seconds * 1000.0) as u32, Ordering::Relaxed);
+}
+
+/// IUnknown::AddRef / Release on a raw COM pointer; Release returns the count left.
+unsafe fn com_add_ref(p: usize) -> u32 {
+    let vtable = *(p as *const *const usize);
+    let f: unsafe extern "system" fn(usize) -> u32 = std::mem::transmute(*vtable.add(1));
+    f(p)
+}
+unsafe fn com_release(p: usize) -> u32 {
+    let vtable = *(p as *const *const usize);
+    let f: unsafe extern "system" fn(usize) -> u32 = std::mem::transmute(*vtable.add(2));
+    f(p)
+}
+
+/// Return addresses inside eldenring.exe (as RVAs) of the current call, nearest first: up to 16, from a 48-frame
+/// walk (the first 5 are the shared GX allocator for every render target; the owner is further out).
 fn callers() -> Vec<usize> {
-    let mut frames = [std::ptr::null_mut::<c_void>(); 16];
+    let mut frames = [std::ptr::null_mut::<c_void>(); 48];
     let n = unsafe {
         windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace(
             1, frames.len() as u32, frames.as_mut_ptr(), std::ptr::null_mut())
     } as usize;
-    frames[..n.min(16)].iter().map(|f| *f as usize).filter(|f| in_image(*f)).take(5).map(rva).collect()
+    frames[..n.min(48)].iter().map(|f| *f as usize).filter(|f| in_image(*f)).take(16).map(rva).collect()
 }
 
 fn fmt_callers(c: &[usize]) -> String {
@@ -178,13 +227,25 @@ unsafe fn note(kind: &'static str, desc: usize, ppv: usize) {
         callers: callers(),
         at: since_start(),
     };
-    if GAMEPLAY.load(Ordering::Relaxed) && RT_LOGGED.fetch_add(1, Ordering::Relaxed) < 400 {
-        plog!("rt+ t={:.1}s {} {}x{} arr={} mips={} fmt={} samples={} flags={:#x} res={:#x} callers=[{}]",
-              rec.at, rec.kind, rec.width, rec.height, rec.depth, rec.mips, rec.format, rec.samples, rec.flags,
-              rec.resource, fmt_callers(&rec.callers));
+    if (rec.width, rec.height) == PREVIEW_SIZE && flags & 0x1 != 0 && rec.resource != 0 && GAMEPLAY.load(Ordering::Relaxed) {
+        let mut preview = PREVIEW.lock().unwrap_or_else(|e| e.into_inner());
+        if preview.len() < 512 {
+            com_add_ref(rec.resource);
+            preview.push(Preview { resource: rec.resource, format: rec.format, at: rec.at, dumped: false, released: false });
+        }
+        PREVIEW_MADE.fetch_add(1, Ordering::Relaxed);
+        PREVIEW_LAST_MS.store(now_ms(), Ordering::Relaxed);
+        arm_rtv(10.0);
+    }
+    if GAMEPLAY.load(Ordering::Relaxed) {
+        // Logged in groups by Probe::tick (a per-line cap hid most of the second mirror visit's set).
+        let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+        if pending.len() < 4096 {
+            pending.push(rec.clone());
+        }
     }
     let mut records = RECORDS.lock().unwrap_or_else(|e| e.into_inner());
-    if records.len() < 8192 {
+    if records.len() < 16384 {
         records.push(rec);
     }
 }
@@ -243,13 +304,28 @@ unsafe extern "system" fn placed2(a0: usize, a1: usize, a2: usize, a3: usize, a4
     if r >= 0 { note("placed2", a3, a9) }
     r
 }
-/// CreateRenderTargetView(resource, desc, handle): logged only while a menu is opening.
+/// CreateRenderTargetView(resource, desc, handle): logged while armed (a menu opening, or new 784x784 targets),
+/// once per resource and only for resources made through the hooks (the swap chain's buffers, which the game
+/// re-views almost every frame in menus, are not).
 unsafe extern "system" fn rtv(a0: usize, resource: usize, desc: usize, handle: usize) {
     tramp::<Rtv>(7)(a0, resource, desc, handle);
-    if ARMED.load(Ordering::Relaxed) && RTV_LOGGED.fetch_add(1, Ordering::Relaxed) < 60 {
+    if now_ms() > ARM_UNTIL_MS.load(Ordering::Relaxed) || resource == 0 {
+        return;
+    }
+    let known = RECORDS.lock().unwrap_or_else(|e| e.into_inner()).iter().rev().find(|r| r.resource == resource)
+        .map(|r| format!("{}x{} fmt={} t={:.1}s", r.width, r.height, r.format, r.at));
+    let Some(known) = known else { return };
+    {
+        let mut seen = RTV_SEEN.lock().unwrap_or_else(|e| e.into_inner());
+        if seen.contains(&resource) || seen.len() >= 4096 {
+            return;
+        }
+        seen.push(resource);
+    }
+    if RTV_LOGGED.fetch_add(1, Ordering::Relaxed) < 400 {
         let format = if desc != 0 { read::<u32>(desc).unwrap_or(0) } else { 0 };
-        plog!("rtv t={:.1}s res={resource:#x} fmt={format} handle={handle:#x} callers=[{}]", since_start(),
-              fmt_callers(&callers()));
+        plog!("rtv t={:.1}s res={resource:#x} [{known}] view fmt={format} handle={handle:#x} callers=[{}]",
+              since_start(), fmt_callers(&callers()));
     }
 }
 
@@ -367,6 +443,9 @@ fn known_target(value: usize) -> Option<String> {
 
 /// EROverlay's (soarqin/EROverlay src/util/uiscene_patterns.inc) 1.16 patterns for the GX draw queue and the final
 /// UI composite; only whether and where they still match is logged.
+/// The address of FieldArea's global pointer (found by background_scans), or 0.
+static FIELD_AREA: AtomicUsize = AtomicUsize::new(0);
+
 const PATTERNS: &[(&str, &str)] = &[
     ("QUEUE_CALLBACK", "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 30 8B 5C 24 60 49 8B F1 49 8B E8 4C 8B F2 48 8B F9 83 FB FF 75 1B 8B 41 38 8B D8 81 E3 00 00 80 FF 81 C3 00 00 80 00 33 D8 81 E3 00 00 80 1F 33 D8 41 B9 04 00 00 00 89 5C 24 20 B2 02 45 8D 41 14 E8"),
     ("QUEUE_SORT", "48 63 51 30 44 0F B6 44 24 08 48 C1 E2 04 48 03 51 28 48 8B 49 28 E9"),
@@ -438,6 +517,13 @@ fn background_scans() {
         .flat_map(|s| game::readable_regions(s.0, s.1)).collect();
     let data: Vec<(usize, usize)> = sections.iter().filter(|s| !s.2)
         .flat_map(|s| game::readable_regions(s.0, s.1)).collect();
+    // FieldArea's global (TGA's pattern: mov rdi, [rip+FieldArea]); it is not in the singleton map.
+    let hits = scan_all(&code, &parse_pattern("48 8B 3D ?? ?? ?? ?? 49 8B D8 48 8B F2 4C 8B F1 48 85 FF"));
+    if let [hit] = hits[..] {
+        let global = (hit as isize + 7 + read::<i32>(hit + 3).unwrap_or(0) as isize) as usize;
+        FIELD_AREA.store(global, Ordering::Relaxed);
+    }
+    plog!("sig FieldArea: {} match(es), global {:#x}", hits.len(), FIELD_AREA.load(Ordering::Relaxed));
     for (name, pattern) in PATTERNS {
         let hits = scan_all(&code, &parse_pattern(pattern));
         plog!("sig {name}: {} match(es){}", hits.len(),
@@ -496,12 +582,19 @@ fn background_scans() {
             i += 8;
         }
     }
-    vtables.sort();
+    // Plain class names first (the run-1 cap of 250 was all templates, so CS::ChrMake* never showed), the likely
+    // preview owners at the top.
+    let rank = |n: &str| {
+        let l = n.to_ascii_lowercase();
+        let key = ["chrmake", "charamake", "preview", "offscr", "facegen", "rendertarget", "rendertotexture"];
+        (n.starts_with("?$"), !key.iter().any(|k| l.contains(k)))
+    };
+    vtables.sort_by(|a, b| rank(&a.0).cmp(&rank(&b.0)).then(a.cmp(b)));
     let mut names: Vec<&String> = types.values().collect();
     names.sort();
     plog!("rtti: {total} type names, {} match the scene words, {} vtables ({:.1}s)", types.len(), vtables.len(),
           started.elapsed().as_secs_f32());
-    for (name, vt, offset) in vtables.iter().take(250) {
+    for (name, vt, offset) in vtables.iter().take(700) {
         plog!("class {name} vtable rva {vt:#x}{}", if *offset != 0 { format!(" (base at +{offset:#x})") } else { String::new() });
     }
     let without: Vec<&&String> = names.iter().filter(|n| !vtables.iter().any(|v| &v.0 == **n)).take(120).collect();
@@ -625,7 +718,26 @@ pub struct Probe {
     max_fade: f32,
     /// The player (ChrIns, position) when the menu opened.
     open_player: Option<(usize, [f32; 3])>,
+    /// PREVIEW_MADE when the current menu opened (more since then: this menu built the mirror's scene).
+    preview_made_at_open: u32,
+    /// When the last menu closed (the preview targets are released 10 s later, to see who else holds them).
+    closed_at: Option<Instant>,
+    /// Preview targets written to PNG so far, and the one being read back.
+    dumps: u32,
+    reading: Option<(usize, u32, f32)>,
+    /// The one-off memory scan for the preview camera: started, and its hits (address, last 0x60 bytes there).
+    scan_started: bool,
+    cam_hits: std::sync::Arc<Mutex<Vec<(usize, Vec<u8>)>>>,
+    hit_lines: u32,
 }
+
+/// Preview targets written to PNG per game session, at most.
+const DUMP_CAP: u32 = 64;
+/// D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE: what a finished scene target is assumed to be in while a menu
+/// shows it (the UI samples it).
+const DUMP_STATE: u32 = 0x40 | 0x80;
+/// Formats that can be turned into a PNG, the likely final pictures first.
+const DUMP_FORMATS: &[u32] = &[24, 28, 27, 29, 87, 10, 26, 34, 49];
 
 impl Probe {
     pub fn new() -> Self {
@@ -634,7 +746,8 @@ impl Probe {
             started: false, last_tick: now, last_second: now, hud: None, menu_open: false, menu_since: now,
             sessions: 0, snapshots: Vec::new(), last_baseline: now, chr_baseline: Vec::new(), chr_logged: Vec::new(),
             player_at_open: None, diffs_done: 0, param: None, param_tries: 0, nudged: false, dumped: Vec::new(),
-            cam_line: String::new(), max_fade: 0.0, open_player: None,
+            cam_line: String::new(), max_fade: 0.0, open_player: None, preview_made_at_open: 0, closed_at: None,
+            dumps: 0, reading: None, scan_started: false, cam_hits: Default::default(), hit_lines: 0,
         }
     }
 
@@ -676,7 +789,8 @@ impl Probe {
             self.dumped.clear();
             self.max_fade = 0.0;
             RTV_LOGGED.store(0, Ordering::Relaxed);
-            ARMED.store(true, Ordering::Relaxed);
+            arm_rtv(10.0);
+            self.preview_made_at_open = PREVIEW_MADE.load(Ordering::Relaxed);
             plog!("=== menu #{} OPEN (hud_state {:?}) t={:.1}s", self.sessions, hud, since_start());
             self.player_at_open = player.and_then(|p| Game::chr_physics(p).map(|pos| (p, pos)));
             self.open_player = self.player_at_open;
@@ -692,7 +806,7 @@ impl Probe {
             }
         } else if !open && self.menu_open {
             self.menu_open = false;
-            ARMED.store(false, Ordering::Relaxed);
+            self.closed_at = Some(now);
             let seconds = (now - self.menu_since).as_secs_f32();
             let here = player.and_then(|p| Game::chr_physics(p).map(|q| (p, q)));
             let stayed = matches!((self.open_player, here), (Some((a, pa)), Some((b, pb))) if a == b && dist(pa, pb) < 1.0);
@@ -702,18 +816,25 @@ impl Probe {
             self.diff_singletons("closed");
             self.characters(game, true);
             self.cameras(game, true);
-            if nudge && !self.nudged && seconds > 5.0 && stayed && self.max_fade < 0.9 {
+            let built = PREVIEW_MADE.load(Ordering::Relaxed) - self.preview_made_at_open;
+            plog!("menu #{} made {built} 784x784 preview targets", self.sessions);
+            // Only after a menu that built the mirror's 784x784 scene (the map and other menus don't), so the first
+            // mirror visit is un-nudged and the next one shows the nudge.
+            if nudge && !self.nudged && built > 0 && stayed && self.max_fade < 0.9 {
                 self.nudged = true;
                 self.nudge();
             }
             self.baseline(game);
         }
+        flush_pending();
+        self.preview_lifetime(now);
+        if self.menu_open && !self.scan_started && PREVIEW_MADE.load(Ordering::Relaxed) > self.preview_made_at_open
+            && now_ms().saturating_sub(PREVIEW_LAST_MS.load(Ordering::Relaxed)) > 2000 {
+            self.start_camera_scan();
+        }
         if self.menu_open {
             self.max_fade = self.max_fade.max(game::faded());
             let elapsed = (now - self.menu_since).as_secs_f32();
-            if elapsed > 10.0 {
-                ARMED.store(false, Ordering::Relaxed);
-            }
             if (self.diffs_done == 0 && elapsed >= 1.0) || (self.diffs_done == 1 && elapsed >= 4.0) {
                 self.diffs_done += 1;
                 let why = if self.diffs_done == 1 { "open +1s" } else { "open +4s" };
@@ -726,6 +847,7 @@ impl Probe {
                     self.cameras(game, false);
                     self.characters(game, false);
                 }
+                self.reread_camera_hits();
             }
         } else if (now - self.last_baseline).as_secs_f32() >= 5.0 && !open && game::faded() < 0.05 {
             self.baseline(game);
@@ -789,6 +911,42 @@ impl Probe {
                 self.dumped.push(p);
                 dump_object(p, &name(p), why);
             }
+        }
+        // The job lists that changed during the mirror in run 1: what they hold (and one level into it), looking
+        // for ChrMake / FaceGen / Preview objects.
+        for off in MENU_JOB_LISTS {
+            let Some(slot) = read::<usize>(man + off) else { continue };
+            let mut found = Vec::new();
+            let look = |p: usize, depth: u8, found: &mut Vec<String>| {
+                if !heap_like(p) { return; }
+                if let Some(n) = rtti(p) {
+                    let l = n.to_ascii_lowercase();
+                    if ["chrmake", "charamake", "facegen", "preview", "offscr", "scene"].iter().any(|k| l.contains(k)) {
+                        found.push(format!("{p:#x}({n}) depth {depth}"));
+                    }
+                }
+            };
+            look(slot, 0, &mut found);
+            if heap_like(slot) {
+                if let Some(bytes) = read_bytes(slot, 0x200) {
+                    for c in bytes.chunks_exact(8) {
+                        let q = usize::from_le_bytes(c.try_into().unwrap());
+                        look(q, 1, &mut found);
+                        if heap_like(q) {
+                            if let Some(inner) = read_bytes(q, 0x100) {
+                                for d in inner.chunks_exact(8) {
+                                    look(usize::from_le_bytes(d.try_into().unwrap()), 2, &mut found);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            found.sort();
+            found.dedup();
+            found.truncate(24);
+            plog!("[{why}] menuman+{off:#x} = {slot:#x}({}): {}", if heap_like(slot) { rtti(slot).unwrap_or_default() } else { String::new() },
+                  if found.is_empty() { "nothing named ChrMake/FaceGen/Preview/Offscr/Scene".into() } else { found.join(" ") });
         }
     }
 
@@ -859,7 +1017,10 @@ impl Probe {
                 }
             }
         }
-        if let Some(field) = from_singleton::map().get("FieldArea").and_then(|s| read::<usize>(s.as_ptr() as usize)) {
+        let field = from_singleton::map().get("FieldArea").map(|s| s.as_ptr() as usize)
+            .or(Some(FIELD_AREA.load(Ordering::Relaxed)).filter(|g| *g != 0))
+            .and_then(read::<usize>).filter(|f| heap_like(*f));
+        if let Some(field) = field {
             if let Some(rend) = read::<usize>(field + 0x20).filter(|r| heap_like(*r)) {
                 let free = read::<u8>(rend + 0xC8).unwrap_or(0xFF);
                 parts.push(format!("| GameRend@{rend:#x}({}) free={free}", rtti(rend).unwrap_or_default()));
@@ -943,6 +1104,8 @@ impl Probe {
 
 /// CSMenuManImp.popup_menu (window_job follows it) and CSPopupMenu's current_top_menu_job (private in the crate).
 const POPUP_MENU: usize = 0x80;
+/// CSMenuManImp slots that changed while the mirror was up in run 1.
+const MENU_JOB_LISTS: [usize; 3] = [0x8e0, 0x9f0, 0xae0];
 const TOP_MENU_JOB: usize = 0xB0;
 const _: () = assert!(std::mem::offset_of!(eldenring::cs::CSMenuManImp, popup_menu) == POPUP_MENU);
 
@@ -1011,4 +1174,271 @@ fn dump_object(address: usize, name: &str, why: &str) {
         }
     }
     plog!("[{why}] obj {address:#x} {name}: {}", fields.join(" "));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Run 2 additions: grouped render-target lines, preview target dumps and lifetime, the preview camera scan
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Writes the render targets made since the last call, grouped by kind, size, format, flags and call stack (each
+/// group's resources listed for the 784x784 ones), so a whole scene build fits in a few lines.
+fn flush_pending() {
+    let pending = std::mem::take(&mut *PENDING.lock().unwrap_or_else(|e| e.into_inner()));
+    if pending.is_empty() {
+        return;
+    }
+    let mut groups: Vec<(Rec, u32, Vec<usize>)> = Vec::new();
+    for r in pending {
+        let same = |g: &Rec| g.kind == r.kind && g.width == r.width && g.height == r.height && g.depth == r.depth
+            && g.mips == r.mips && g.format == r.format && g.flags == r.flags && g.callers == r.callers;
+        match groups.iter_mut().find(|g| same(&g.0)) {
+            Some(g) => {
+                g.1 += 1;
+                g.2.push(r.resource);
+            }
+            None => {
+                let res = vec![r.resource];
+                groups.push((r, 1, res));
+            }
+        }
+    }
+    for (r, n, res) in groups {
+        if RT_LOGGED.fetch_add(1, Ordering::Relaxed) >= 3000 {
+            return;
+        }
+        let list = if (r.width, r.height) == PREVIEW_SIZE || n == 1 {
+            res.iter().map(|p| format!("{p:#x}")).collect::<Vec<_>>().join(",")
+        } else {
+            format!("{:#x}..", res[0])
+        };
+        plog!("rt+ t={:.1}s {n}x {} {}x{} arr={} mips={} fmt={} samples={} flags={:#x} res=[{list}] callers=[{}]",
+              r.at, r.kind, r.width, r.height, r.depth, r.mips, r.format, r.samples, r.flags, fmt_callers(&r.callers));
+    }
+}
+
+/// D3D12 float16 -> f32.
+fn half(h: u16) -> f32 {
+    let (s, e, m) = ((h >> 15) as u32, ((h >> 10) & 0x1f) as u32, (h & 0x3ff) as u32);
+    let v = if e == 0 { m as f32 / 1024.0 * 2f32.powi(-14) } else if e == 31 { f32::INFINITY }
+            else { (1.0 + m as f32 / 1024.0) * 2f32.powi(e as i32 - 15) };
+    if s == 1 { -v } else { v }
+}
+
+/// R11G11B10_FLOAT channel (`bits` mantissa bits) -> f32.
+fn small_float(v: u32, bits: u32) -> f32 {
+    let (e, m) = (v >> bits, v & ((1 << bits) - 1));
+    let scale = (1u32 << bits) as f32;
+    if e == 0 { m as f32 / scale * 2f32.powi(-14) } else if e == 31 { 65000.0 }
+    else { (1.0 + m as f32 / scale) * 2f32.powi(e as i32 - 15) }
+}
+
+/// A readback as RGBA8: UNORM formats as they are, float (HDR) ones through x / (1 + x) and a 2.2 gamma so they
+/// can be looked at. None for formats not handled.
+fn to_rgba(rb: &hudhook::Readback) -> Option<Vec<u8>> {
+    let (w, h, pitch) = (rb.width as usize, rb.height as usize, rb.pitch as usize);
+    let tone = |x: f32| ((x.max(0.0) / (1.0 + x.max(0.0))).powf(1.0 / 2.2) * 255.0) as u8;
+    let mut out = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        let row = rb.data.get(y * pitch..)?;
+        for x in 0..w {
+            let px: [u8; 4] = match rb.format {
+                27 | 28 | 29 => { let p = row.get(x * 4..x * 4 + 4)?; [p[0], p[1], p[2], 255] }
+                87 => { let p = row.get(x * 4..x * 4 + 4)?; [p[2], p[1], p[0], 255] }
+                24 => {
+                    let v = u32::from_le_bytes(row.get(x * 4..x * 4 + 4)?.try_into().ok()?);
+                    let c = |s: u32| ((v >> s & 0x3ff) * 255 / 1023) as u8;
+                    [c(0), c(10), c(20), 255]
+                }
+                26 => {
+                    let v = u32::from_le_bytes(row.get(x * 4..x * 4 + 4)?.try_into().ok()?);
+                    [tone(small_float(v & 0x7ff, 6)), tone(small_float(v >> 11 & 0x7ff, 6)), tone(small_float(v >> 22, 5)), 255]
+                }
+                10 => {
+                    let p = row.get(x * 8..x * 8 + 8)?;
+                    let c = |i: usize| tone(half(u16::from_le_bytes([p[i * 2], p[i * 2 + 1]])));
+                    [c(0), c(1), c(2), 255]
+                }
+                34 => {
+                    let p = row.get(x * 4..x * 4 + 4)?;
+                    let c = |i: usize| ((half(u16::from_le_bytes([p[i * 2], p[i * 2 + 1]])) * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0) as u8;
+                    [c(0), c(1), 0, 255]
+                }
+                49 => { let p = row.get(x * 2..x * 2 + 2)?; [p[0], p[1], 0, 255] }
+                _ => return None,
+            };
+            out.extend_from_slice(&px);
+        }
+    }
+    Some(out)
+}
+
+impl Probe {
+    /// Once per frame before rendering (it needs the renderer): reads back the mirror's 784x784 targets, one per
+    /// frame, two seconds after the last one was made while a menu is open, and writes each to
+    /// orbs\probe_dumps\ as a PNG (at most DUMP_CAP per session), so one look shows which is the preview picture.
+    pub fn render_frame(&mut self, render: &mut dyn hudhook::RenderContext, folder: &std::path::Path) {
+        if let Some(rb) = render.take_readback() {
+            let (resource, format, at) = self.reading.take().unwrap_or((rb.resource, rb.format, 0.0));
+            let dir = folder.join("probe_dumps");
+            let name = format!("s{}_t{at:.0}_{resource:x}_fmt{format}.png", self.sessions);
+            match to_rgba(&rb) {
+                Some(rgba) => {
+                    plog!("dump {} ({}x{} fmt {}, made t={at:.1}s)", name, rb.width, rb.height, rb.format);
+                    let (w, h) = (rb.width, rb.height);
+                    std::thread::spawn(move || {
+                        let _ = std::fs::create_dir_all(&dir);
+                        if let Err(e) = image::save_buffer(dir.join(&name), &rgba, w, h, image::ExtendedColorType::Rgba8) {
+                            tracing::warn!("probe: dump {name}: {e}");
+                        }
+                    });
+                }
+                None => plog!("dump of {resource:#x}: format {} not converted", rb.format),
+            }
+            return;
+        }
+        if self.reading.is_some() || !self.menu_open || self.dumps >= DUMP_CAP {
+            if self.reading.as_ref().is_some_and(|r| since_start() - r.2 > 600.0) {
+                self.reading = None;
+            }
+            return;
+        }
+        if PREVIEW_MADE.load(Ordering::Relaxed) <= self.preview_made_at_open
+            || now_ms().saturating_sub(PREVIEW_LAST_MS.load(Ordering::Relaxed)) < 2000 {
+            return;
+        }
+        let mut preview = PREVIEW.lock().unwrap_or_else(|e| e.into_inner());
+        let next = DUMP_FORMATS.iter().find_map(|f| preview.iter().position(|p| !p.dumped && !p.released && p.format == *f));
+        let Some(i) = next else { return };
+        let p = &mut preview[i];
+        if render.request_readback(p.resource, DUMP_STATE) {
+            p.dumped = true;
+            self.dumps += 1;
+            self.reading = Some((p.resource, p.format, p.at));
+        }
+    }
+
+    /// Ten seconds after a menu closes: releases the references taken on the 784x784 targets and logs the count
+    /// left (0: nobody else held it, the game freed it; more: the game keeps the preview scene alive).
+    fn preview_lifetime(&mut self, now: Instant) {
+        if self.menu_open || self.closed_at.is_none_or(|t| (now - t).as_secs_f32() < 10.0) || self.reading.is_some() {
+            return;
+        }
+        self.closed_at = None;
+        let mut preview = PREVIEW.lock().unwrap_or_else(|e| e.into_inner());
+        let mut left = Vec::new();
+        for p in preview.iter_mut().filter(|p| !p.released) {
+            p.released = true;
+            let n = unsafe { com_release(p.resource) };
+            left.push(format!("{:#x}(fmt {}, t={:.0}s)={n}", p.resource, p.format, p.at));
+        }
+        if !left.is_empty() {
+            plog!("preview lifetime, 10 s after menu #{} closed: references left after ours went: {}", self.sessions,
+                  left.join(" "));
+        }
+        preview.retain(|p| !p.released);
+    }
+
+    /// The one-off scan for the preview camera's live state: every private read-write region is searched for row
+    /// 0's 0x28-byte block and for its camDist value with camDistMin or camDistMax within 0x40 bytes (in a
+    /// background thread; the hits are re-read once a second while the menu is up, see reread_camera_hits).
+    fn start_camera_scan(&mut self) {
+        self.scan_started = true;
+        let Some(row) = self.param.as_ref().and_then(|p| p.rows.iter().find(|r| r.0 == 0).map(|r| r.1)) else {
+            plog!("camscan: MenuOffscrRendParam row 0 not known, no scan");
+            return;
+        };
+        let Some(block) = read_bytes(row, 0x28) else { return };
+        let f = |i: usize| f32::from_le_bytes(block[i * 4..i * 4 + 4].try_into().unwrap());
+        let (dist, rot_x, min, max) = (f(3), f(4), f(7), f(8));
+        let hits = self.cam_hits.clone();
+        plog!("camscan: looking for row 0 (@{row:#x}) dist {dist:.3} (min {min:.2} max {max:.2}) rotX {rot_x:.1} deg");
+        std::thread::spawn(move || {
+            use windows_sys::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, MEM_COMMIT, MEM_PRIVATE, PAGE_READWRITE};
+            let started = Instant::now();
+            let (d, lo, hi, rx) = (dist.to_le_bytes(), min.to_le_bytes(), max.to_le_bytes(), rot_x.to_radians().to_le_bytes());
+            let mut found: Vec<(usize, &str)> = Vec::new();
+            let mut at = 0x10000usize;
+            let mut scanned = 0usize;
+            while at < 0x7FFF_FFFF_0000 && found.len() < 200 && started.elapsed().as_secs() < 60 {
+                let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+                if unsafe { VirtualQuery(at as _, &mut info, std::mem::size_of::<MEMORY_BASIC_INFORMATION>()) } == 0 {
+                    break;
+                }
+                let (base, size) = (info.BaseAddress as usize, info.RegionSize);
+                if info.State == MEM_COMMIT && info.Type == MEM_PRIVATE && info.Protect == PAGE_READWRITE
+                    && base != row & !0xFFF && size <= 1 << 30 {
+                    let mut off = 0;
+                    while off < size {
+                        let n = (size - off).min(1 << 20);
+                        if let Some(bytes) = read_bytes(base + off, n) {
+                            scanned += n;
+                            let mut i = 0;
+                            while i + 0x28 <= bytes.len() {
+                                if bytes[i..i + 4] == d {
+                                    let addr = base + off + i;
+                                    if addr != row + 12 {
+                                        let near = |pat: &[u8; 4]| {
+                                            let (a, b) = (i.saturating_sub(0x40), (i + 0x44).min(bytes.len()));
+                                            bytes[a..b].windows(4).any(|w| w == pat)
+                                        };
+                                        if i >= 12 && bytes[i - 12..i + 0x1c] == block[..] {
+                                            found.push((addr - 12, "row0 block copy"));
+                                        } else if near(&lo) || near(&hi) {
+                                            found.push((addr, "dist with min/max near"));
+                                        } else if near(&rx) {
+                                            found.push((addr, "dist with rotX (rad) near"));
+                                        }
+                                    }
+                                }
+                                i += 4;
+                            }
+                        }
+                        off += n;
+                    }
+                }
+                at = base + size.max(0x1000);
+            }
+            plog!("camscan: {} MB scanned in {:.1}s, {} hits", scanned >> 20, started.elapsed().as_secs_f32(), found.len());
+            let mut list = hits.lock().unwrap_or_else(|e| e.into_inner());
+            for (addr, what) in found.iter().take(64) {
+                let bytes = read_bytes(addr.saturating_sub(0x20), 0x60).unwrap_or_default();
+                let floats: Vec<String> = bytes.chunks_exact(4).map(|c| format!("{:.3}", f32::from_le_bytes(c.try_into().unwrap()))).collect();
+                plog!("camscan hit {addr:#x} ({what}) {} -0x20..+0x40: {}", rtti_near(*addr), floats.join(" "));
+                list.push((*addr, bytes));
+            }
+        });
+    }
+
+    /// Re-reads the camera scan's hits and logs the floats that changed (while the menu is up, once a second).
+    fn reread_camera_hits(&mut self) {
+        let mut list = self.cam_hits.lock().unwrap_or_else(|e| e.into_inner());
+        for (addr, old) in list.iter_mut() {
+            let Some(new) = read_bytes(addr.saturating_sub(0x20), 0x60) else { continue };
+            if new == *old || old.len() != new.len() {
+                continue;
+            }
+            let changes: Vec<String> = old.chunks_exact(4).zip(new.chunks_exact(4)).enumerate()
+                .filter(|(_, (a, b))| a != b)
+                .map(|(i, (a, b))| format!("{:+#x}: {:.3}->{:.3}", i as isize * 4 - 0x20,
+                                           f32::from_le_bytes(a.try_into().unwrap()), f32::from_le_bytes(b.try_into().unwrap())))
+                .collect();
+            if self.hit_lines < 600 {
+                self.hit_lines += 1;
+                plog!("camhit {addr:#x} changed: {}", changes.join(" "));
+            }
+            *old = new;
+        }
+    }
+}
+
+/// The RTTI name of the object a scan hit may sit in: the first qword at or below it (64 steps of 8) that is a
+/// named vtable.
+fn rtti_near(addr: usize) -> String {
+    for back in 0..64usize {
+        let at = (addr & !7).saturating_sub(back * 8);
+        if let Some(name) = read::<usize>(at).and_then(vtable_name) {
+            return format!("in {name} @{at:#x} (+{:#x})", addr - at);
+        }
+    }
+    "no object found".into()
 }

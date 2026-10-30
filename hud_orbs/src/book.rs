@@ -174,6 +174,9 @@ pub struct Book {
     zoom: Option<[f32; 2]>,
     /// A book tab clicked while Elden Ring's map was open: shown once the map has closed.
     after_map: Option<Tab>,
+    /// A warp button (pages::WARP_*) clicked while Elden Ring's map was open: its event flag is set once the map
+    /// has closed (the warp event freezes the player and plays the poof in the world, so the map must be gone).
+    warp_after_map: Option<u32>,
     face_logged: bool,
     flasks_logged: bool,
     /// Per pages::ACHIEVEMENTS entry, read with the sheet.
@@ -290,6 +293,7 @@ impl Book {
             was_dragging: false,
             zoom: None,
             after_map: None,
+            warp_after_map: None,
             face_logged: false,
             flasks_logged: false,
             achieved: Vec::new(),
@@ -649,7 +653,14 @@ impl Book {
         if !self.open {
             self.dragging = false;
             let map_shown = self.map == MapState::Open && cx.game.is_some() && cx.faded < 0.5 && !self.travelled;
-            if map_shown && (self.after_map.is_some() || self.map_leaving.is_some()) {
+            if map_shown && self.warp_after_map.is_some() {
+                // Leaving the map for a warp: the world as it was before the map opened stands in front of the
+                // closing map; the book itself is gone (the poof plays in the world next).
+                if let Some((world, _)) = self.textures.get(WORLD_PICTURE) {
+                    let size = ui.io().display_size;
+                    ui.get_foreground_draw_list().add_image(world, [0.0, 0.0], size).build();
+                }
+            } else if map_shown && (self.after_map.is_some() || self.map_leaving.is_some()) {
                 // A book tab was clicked on the map page, or the map is closing: the page to come straight away,
                 // over the world as it was before the map opened, while Elden Ring closes its map behind it (the
                 // book is never off the screen, so the game doesn't flash through).
@@ -659,11 +670,26 @@ impl Book {
                 // Elden Ring's map is open: the book around it. A click on another book tab closes the map and
                 // shows that tab when the map has gone.
                 self.refresh(cx);
-                let (tab_hit, _, _, _) = self.draw(ui, cx, &pointer, dt, true);
-                if pointer.clicked && self.after_map.is_none() {
+                let (tab_hit, page_hit, _, _) = self.draw(ui, cx, &pointer, dt, true);
+                if pointer.clicked && self.after_map.is_none() && self.warp_after_map.is_none() {
                     let prefs = self.prefs.as_ref().expect("checked above");
                     let name = tab_hit.map(|h| prefs.nodes[h].name.clone()).unwrap_or_default();
-                    if let Some((tab, _, _)) = TABS.iter().find(|t| t.1 == name && t.0 != Tab::Map) {
+                    // The page's warp buttons (the arrows: The First Step; the house: Roundtable Hold) stay on the
+                    // page around the map: close the map, then warp (follow_map).
+                    let warp = match (tab_hit, page_hit, self.layouts.get(TABS[tab_index(Tab::Map)].2)) {
+                        (None, Some(hit), Some(page)) => match pages::click(Tab::Map, page, hit, &mut self.state) {
+                            Action::Warp(flag) => Some(flag),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(flag) = warp {
+                        tracing::info!("map page: warp flag {flag} (closing Elden Ring's map first)");
+                        self.warp_after_map = Some(flag);
+                        self.after_map = None;
+                        self.opened_at = Instant::now() - Duration::from_secs(1);
+                        input::press_map();
+                    } else if let Some((tab, _, _)) = TABS.iter().find(|t| t.1 == name && t.0 != Tab::Map) {
                         tracing::info!("spellbook: leaving the map for {tab:?}");
                         self.after_map = Some(*tab);
                         self.tab = *tab;
@@ -1346,6 +1372,7 @@ impl Book {
         self.map = MapState::Opening(Instant::now());
         self.map_leaving = None;
         self.map_back = None;
+        self.warp_after_map = None;
         self.map_from = position;
         self.travelled = false;
         input::set_gameplay(false);
@@ -1379,6 +1406,7 @@ impl Book {
             }
             MapState::Opening(since) if since.elapsed().as_secs_f32() > 4.0 => {
                 self.after_map = None;
+                self.warp_after_map = None;
                 tracing::warn!("spellbook: Elden Ring's map didn't open");
                 self.map = MapState::Idle;
             }
@@ -1386,7 +1414,16 @@ impl Book {
                 input::end_map_press();
                 self.map = MapState::Idle;
                 let closing = self.map_leaving.take().map_or(0.0, |t| t.elapsed().as_secs_f32() * 1000.0);
-                if self.travelled {
+                if let Some(flag) = self.warp_after_map.take() {
+                    // The map's warp button: now that the map is gone, the warp event takes over (book stays shut).
+                    self.after_map = None;
+                    if self.travelled {
+                        tracing::info!("spellbook: travelled from the map; warp flag {flag} dropped");
+                    } else {
+                        tracing::info!("spellbook: Elden Ring's map closed ({closing:.0} ms); warp flag {flag} on");
+                        game::set_event_flag(flag, true);
+                    }
+                } else if self.travelled {
                     tracing::info!("spellbook: travelled from the map; the book stays closed");
                     self.after_map = None;
                 } else {
@@ -1400,9 +1437,10 @@ impl Book {
                 }
             }
             MapState::Open => {
-                if self.map_leaving.is_none() && (self.after_map.is_some() || cx.hud || cx.faded >= 0.5) {
-                    tracing::info!("spellbook: Elden Ring's map closing (hud {}, faded {:.2}, tab clicked {})",
-                                   cx.hud, cx.faded, self.after_map.is_some());
+                if self.map_leaving.is_none()
+                    && (self.after_map.is_some() || self.warp_after_map.is_some() || cx.hud || cx.faded >= 0.5) {
+                    tracing::info!("spellbook: Elden Ring's map closing (hud {}, faded {:.2}, tab clicked {}, warp {:?})",
+                                   cx.hud, cx.faded, self.after_map.is_some(), self.warp_after_map);
                     self.map_leaving = Some(Instant::now());
                 }
             }

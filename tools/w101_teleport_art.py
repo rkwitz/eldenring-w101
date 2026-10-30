@@ -11,11 +11,15 @@ character just vanishes inside it. Its textures are NiPixelData files under Text
   FX_LeaveToob_01        64x256 DXT1, horizontal bands of orange and blue light over black (the two tubes)
   FX_SmokeChimney        32x32 DXT5, a soft grey puff (FX_Smoke)
 
-The sparks and tubes are drawn additively in Wizard101 (black = nothing); the overlay draws with alpha blending, so
-their PNGs get alpha = brightest channel and the colour divided by it. The smoke keeps its own alpha, stretched to
-full range and its colour made a light grey (the effect's colour keys make it faint again).
+The sparks and tubes are drawn additively in Wizard101 (black = nothing); the overlay draws them additively too
+(colour x alpha added), so their PNGs get alpha = brightest channel and the colour divided by it. The smoke is
+alpha-blended in Wizard101 and keeps its own colour and alpha.
 
-Usage: python w101_teleport_art.py <Wizard101 Data\\GameData, or a folder holding the Textures\\*.nif> <out folder>
+It also writes fx_disappear.tsv from Character/FX_Disappear.nif: the body-shaped emitter mesh ("Editable Mesh", in
+the effect's units with its node offset: "v x y z" vertices and "t a b c" triangles), which the twinkles and smoke
+are born on, and the path of the "FX SparkEmit" node ("p percent x y z"), which the rising stars are born along.
+
+Usage: python w101_teleport_art.py <Wizard101 Data\\GameData, or a folder holding Textures\\*.nif and Character\\FX_Disappear.nif> <out folder>
   out folder = w101_orbs\\book\\art\\teleport next to the DLL. Wizard101 data: never commit the PNGs.
 
 Needs pyffi (pip install pyffi) and Pillow.
@@ -86,14 +90,35 @@ def additive_to_alpha(image):
     return out
 
 
-def stretch_alpha(image):
-    """The smoke: its alpha stretched to full range, its colour a light grey (the texture is a dark sepia that
-    Wizard101 lights; unlit here it read as brown)."""
-    pixels = list(image.getdata())
-    top = max(a for *_, a in pixels) or 255
-    out = Image.new("RGBA", image.size)
-    out.putdata([(225, 225, 220, a * 255 // top) for *_, a in pixels])
-    return out
+EFFECT = "Character/FX_Disappear.nif"
+
+
+def effect_shape(data):
+    """fx_disappear.tsv's text from FX_Disappear.nif: the emitter mesh's triangles and the spark path."""
+    nif = NifFormat.Data()
+    stream = BytesIO(data)
+    nif.inspect(stream)
+    nif.read(stream)
+    lines = ["# FX_Disappear.nif: body emitter mesh (units, z up) and the FX SparkEmit path (percent, x, y, z)"]
+    for block in nif.roots[0].tree():
+        if isinstance(block, NifFormat.NiTriStrips) and block.name == b"Editable Mesh" and not any(l.startswith("v ") for l in lines):
+            t = block.translation
+            lines += [f"v {v.x + t.x:.2f} {v.y + t.y:.2f} {v.z + t.z:.2f}" for v in block.data.vertices]
+            for strip in block.data.points:
+                for k in range(len(strip) - 2):
+                    a, b, c = strip[k], strip[k + 1], strip[k + 2]
+                    if len({a, b, c}) == 3:
+                        lines.append(f"t {a} {b} {c}")
+        if isinstance(block, NifFormat.NiNode) and block.name == b"FX SparkEmit":
+            controller = block.controller
+            while controller is not None and not isinstance(controller, NifFormat.NiTransformController):
+                controller = controller.next_controller
+            path = controller.interpolator if controller is not None else None
+            if path is not None and getattr(path, "pos_data", None) is not None:
+                lines += [f"p {k.time:.4f} {k.value.x:.2f} {k.value.y:.2f} {k.value.z:.2f}" for k in path.pos_data.data.keys]
+    if not any(l.startswith("p ") for l in lines) or not any(l.startswith("t ") for l in lines):
+        sys.exit("FX_Disappear.nif: emitter mesh or spark path not found")
+    return "\n".join(lines) + "\n"
 
 
 def main():
@@ -103,8 +128,11 @@ def main():
         names = [n for n in wad_names(source / WAD) if n.startswith("Textures/")]
         wanted = {n: next(p for p in TEXTURES if n[len("Textures/"):].startswith(p)) for n in names
                   if any(n[len("Textures/"):].startswith(p) for p in TEXTURES)}
-        found = {wanted[n]: d for n, d in wad_files(source / WAD, set(wanted)).items()}
+        files = wad_files(source / WAD, set(wanted) | {EFFECT})
+        effect = files.pop(EFFECT, None)
+        found = {wanted[n]: d for n, d in files.items()}
     else:
+        effect = (source / EFFECT).read_bytes() if (source / EFFECT).is_file() else None
         found = {}
         for path in (source / "Textures").glob("*.nif"):
             for prefix in TEXTURES:
@@ -114,9 +142,13 @@ def main():
         if prefix not in found:
             sys.exit(f"Textures/{prefix}*.nif not found in {source}")
         image = pixel_image(found[prefix])
-        image = additive_to_alpha(image) if additive else stretch_alpha(image)
+        image = additive_to_alpha(image) if additive else image
         image.save(out / png)
         print(f"{png} {image.size[0]}x{image.size[1]}")
+    if effect is None:
+        sys.exit(f"{EFFECT} not found in {source}")
+    (out / "fx_disappear.tsv").write_text(effect_shape(effect))
+    print("fx_disappear.tsv")
 
 
 if __name__ == "__main__":

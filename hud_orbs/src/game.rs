@@ -190,7 +190,10 @@ impl Game {
                 set(p);
             }
         }
-        chrs.retain(|c| *c >= 0x10000);
+        // Only real characters: 8-aligned, with an RTTI class named *Ins (CS::PlayerIns, CS::EnemyIns, ...). The
+        // lists also hold table slots and other objects, whose "character_id" was garbage (scene probe run 1).
+        chrs.retain(|c| *c >= 0x10000 && *c % 8 == 0);
+        chrs.retain(|c| crate::probe::rtti(*c).is_some_and(|n| n.ends_with("Ins")));
         chrs.sort_unstable();
         chrs.dedup();
         let out: Vec<(usize, u32)> = chrs.into_iter()

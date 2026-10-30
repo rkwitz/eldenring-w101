@@ -1515,9 +1515,9 @@ pub fn map_rect(aspect: f32) -> [f32; 4] {
     [cx - w / 2.0, cy - ht / 2.0, cx + w / 2.0, cy + ht / 2.0]
 }
 
-/// The part of the map screen shown on the page (uv): the middle, its sides cut off (the time of day on the right
-/// with them), above Elden Ring's button hints along the bottom.
-const MAP_UV_X: [f32; 2] = [0.15, 0.85];
+/// The part of the map screen shown on the page (uv): all of it, edge to edge (Ryan, 2026-10-30: zoomed all the
+/// way out the map's edges must show; scaled down, not cropped), above Elden Ring's button hints along the bottom.
+const MAP_UV_X: [f32; 2] = [0.0, 1.0];
 const MAP_UV_BOTTOM: f32 = 0.875;
 /// Elden Ring's button hints ("View map" over "A: Place beacon  B: Close  X: Marker  Y: Sites of grace ..."): just
 /// their text, cut from the bottom of the map screen and drawn in a strip inside the frame under the map. Measured
@@ -1527,9 +1527,10 @@ const MAP_UV_BOTTOM: f32 = 0.875;
 const HINTS_UV: [f32; 4] = [0.03, 0.922, 0.75, 0.995];
 const HINTS_H: f32 = 40.0;
 
-/// The copied map screen on the page: (map rect, its uv, hints rect, their uv) inside MAP_HOLE's margin, both in
-/// their own shape on a screen of `aspect` (width / height).
-pub fn map_picture_rect(aspect: f32) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
+/// The copied map screen on the page: (map rect, its uv, hints rect, their uv, the room the map is letterboxed in)
+/// inside MAP_HOLE's margin, both in their own shape on a screen of `aspect` (width / height): the map scaled down
+/// to fit the room above the hints and centred in it, never cropped or squeezed.
+pub fn map_picture_rect(aspect: f32) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
     let h = MAP_HOLE;
     let area = [h[0] + 8.0, h[1] + 8.0, h[2] - 8.0, h[3] - 8.0];
     let cx = (area[0] + area[2]) / 2.0;
@@ -1539,10 +1540,13 @@ pub fn map_picture_rect(aspect: f32) -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4])
     let hints_w = (band * HINTS_H).min(area[2] - area[0] - 8.0);
     let hints_h = hints_w / band;
     let hints = [cx - hints_w / 2.0, hints_bottom - hints_h, cx + hints_w / 2.0, hints_bottom];
-    let map_h = hints[1] - 6.0 - area[1];
-    let map_w = ((MAP_UV_X[1] - MAP_UV_X[0]) * aspect / MAP_UV_BOTTOM * map_h).min(area[2] - area[0]);
-    let map = [cx - map_w / 2.0, area[1], cx + map_w / 2.0, area[1] + map_h];
-    (map, [MAP_UV_X[0], 0.0, MAP_UV_X[1], MAP_UV_BOTTOM], hints, HINTS_UV)
+    let room = [area[0], area[1], area[2], hints[1] - 6.0];
+    let (room_w, room_h) = (room[2] - room[0], room[3] - room[1]);
+    let shape = (MAP_UV_X[1] - MAP_UV_X[0]) * aspect / MAP_UV_BOTTOM;
+    let (map_w, map_h) = if room_w / room_h > shape { (room_h * shape, room_h) } else { (room_w, room_w / shape) };
+    let cy = (room[1] + room[3]) / 2.0;
+    let map = [cx - map_w / 2.0, cy - map_h / 2.0, cx + map_w / 2.0, cy + map_h / 2.0];
+    (map, [MAP_UV_X[0], 0.0, MAP_UV_X[1], MAP_UV_BOTTOM], hints, HINTS_UV, room)
 }
 
 fn map(l: &Layout, d: &Data, v: &mut View) {
@@ -1561,11 +1565,12 @@ fn map(l: &Layout, d: &Data, v: &mut View) {
         // of that shape onto the map behind the book.
         match d.map_picture {
             Some(aspect) => {
-                // The page's whole map area, the screen's sides cut off to fit (not squeezed).
-                let (r, uv, hints, hints_uv) = map_picture_rect(aspect);
-                // The dark border hugs the map and the hints under it (as narrow as the map now is).
-                let area = [r[0].min(hints[0]) - 6.0, r[1] - 6.0, r[2].max(hints[2]) + 6.0, hints[3] + 6.0];
+                // The whole map screen scaled down into the page's map area (letterboxed: dark bands where the
+                // shapes differ), the hints under it.
+                let (r, uv, hints, hints_uv, room) = map_picture_rect(aspect);
+                let area = [room[0].min(hints[0]) - 6.0, room[1] - 6.0, room[2].max(hints[2]) + 6.0, hints[3] + 6.0];
                 v.fills.push((area, ImColor32::from_rgb(74, 46, 24)));
+                v.fills.push((room, ImColor32::from_rgb(16, 12, 8)));
                 v.images.push((r, MAP_PICTURE.into(), uv));
                 v.fills.push(([hints[0] - 4.0, hints[1] - 2.0, hints[2] + 4.0, hints[3] + 2.0], ImColor32::from_rgb(16, 12, 8)));
                 v.images.push((hints, MAP_PICTURE.into(), hints_uv));

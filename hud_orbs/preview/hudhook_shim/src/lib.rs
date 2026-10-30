@@ -10,3 +10,9 @@ pub trait RenderContext {
         None
     }
 }
+
+/// As the vendored hudhook's: a draw-list callback whose user data switches to additive / normal blending (the
+/// preview's rasterizer recognises it).
+pub unsafe extern "C" fn blend_callback(_list: *const imgui::sys::ImDrawList, _cmd: *const imgui::sys::ImDrawCmd) {}
+pub const BLEND_ADDITIVE: usize = 0x5710_1AD0;
+pub const BLEND_NORMAL: usize = 0x5710_1A10;
