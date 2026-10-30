@@ -58,7 +58,7 @@ impl When {
         match self {
             When::Now => "Changes Elden Ring right away",
             When::Restart => "Saved; Elden Ring uses it when it next starts",
-            When::HudRestart => "Saved; used when the game next starts",
+            When::HudRestart => "Experimental; saved, used when the game next starts",
         }
     }
 }
@@ -76,6 +76,7 @@ pub enum Hud {
     Debug,
     Probe,
     ProbeNudge,
+    LivePreview,
 }
 
 /// A graphics setting: its field in CSWindowScreenConfig, GraphicsConfig.xml tag and choices (value, shown, xml).
@@ -206,6 +207,7 @@ pub const TABS: [(&str, &str, &[Row]); 10] = [
         row("Level Number", Kind::Hud(Hud::Level), When::Now, "-"),
         row("Loading Screens", Kind::Hud(Hud::LoadScreen), When::Now, "-"),
         row("Book Map", Kind::Hud(Hud::BookMap), When::Now, "-"),
+        row("Live Preview", Kind::Hud(Hud::LivePreview), When::HudRestart, "-"),
     ]),
     ("PrivacyButton", "HDR Display", &[
         row("HDR Brightness", Kind::Scale(opt::HDR_BRIGHTNESS), When::Now, "-"),
@@ -252,11 +254,12 @@ pub fn value(row: &Row, game: Option<&game::Game>, s: &crate::Settings, gfx: Opt
             Hud::Up => format!("{:.0}", s.bottom),
             Hud::Level => on(s.level),
             Hud::LoadScreen => on(s.loadscreen),
-            Hud::BookMap => if s.bookmap { "Map On Page" } else { "Map Behind" }.into(),
+            Hud::BookMap => if s.bookmap { "On Page" } else { "Behind" }.into(),
             Hud::Nameplates => on(s.nameplates),
             Hud::Debug => on(s.debug),
             Hud::Probe => on(s.scene_probe),
             Hud::ProbeNudge => on(s.scene_probe_nudge),
+            Hud::LivePreview => on(s.live_preview),
         }),
     }
 }
@@ -335,6 +338,7 @@ pub fn change(row: &Row, step: i32, game: Option<&game::Game>, s: &mut crate::Se
                 Hud::Debug => s.debug = !s.debug,
                 Hud::Probe => s.scene_probe = !s.scene_probe,
                 Hud::ProbeNudge => s.scene_probe_nudge = !s.scene_probe_nudge,
+                Hud::LivePreview => s.live_preview = !s.live_preview,
             }
             crate::save_settings(settings_path, s).map_err(|e| format!("w101_orbs.ini not saved: {e}"))?;
             Ok(format!("{}: {}", row.label, value(row, None, s, None).unwrap_or_default()))
