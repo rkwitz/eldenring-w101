@@ -169,7 +169,7 @@ pub trait RenderContext {
     ) -> Result<(), Error>;
 
     /// w101_orbs: asks for a copy of the frame the game drew (the back buffer before the imgui overlay) in texture
-    /// `slot` (0 to 2), made when this frame renders, before the overlay is drawn over it, so drawing the returned
+    /// `slot` (0 to 3), made when this frame renders, before the overlay is drawn over it, so drawing the returned
     /// texture this frame shows this frame's picture. The texture samples opaque. `None` until the renderer knows
     /// the back buffer (the first request), or where unsupported (only DX12 does it).
     fn capture_screen(&mut self, _slot: usize) -> Option<TextureId> {
@@ -196,7 +196,7 @@ pub trait RenderContext {
 
     /// w101_orbs: asks for a GPU copy of `region` (left, top, right, bottom, in pixels) of subresource 0 of a
     /// game 2D texture (`resource`, a raw `ID3D12Resource*` the caller holds a reference to, assumed to be in
-    /// D3D12 state `state`; moved to COPY_SOURCE and back around the copy) into texture `slot` (0 or 1). Made
+    /// D3D12 state `state`; moved to COPY_SOURCE and back around the copy) into texture `slot` (0 to 2). Made
     /// when this frame renders, on the game's queue, before the overlay is drawn, so drawing the returned
     /// texture this frame shows this frame's copy. The texture samples opaque. `None` until the texture exists
     /// (the first request, or a new region size, makes it) or where unsupported (only DX12 does it).

@@ -817,6 +817,8 @@ impl Book {
         // M1: the character still walks with the book open (WASD, left stick), except on the map page.
         // Not over Elden Ring's own menus (the live mirror): there WASD would move their cursor.
         input::set_move_through(self.open && cx.gameplay && cx.hud && self.dialogue.is_none() && self.tab != Tab::Map);
+        // Round 17 B3: the hidden live mirror may stay up while the book is open off the map page.
+        crate::live_preview::note_book(self.open && self.dialogue.is_none() && self.tab != Tab::Map);
         // Before taking the presses, so that the press that closed ER's map doesn't close the reopened book.
         self.follow_map(cx);
         self.quit_follow(cx);

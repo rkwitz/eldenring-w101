@@ -81,10 +81,11 @@ pub struct D3D12RenderEngine {
 }
 
 /// w101_orbs: how many game-texture copies (RenderContext::copy_texture) there are.
-const LIVE_SLOTS: usize = 2;
+const LIVE_SLOTS: usize = 3;
 
-/// w101_orbs: how many screen copies there are (0, 1: the spellbook's world and map; 2: the teleport poof's world).
-const CAPTURE_SLOTS: usize = 3;
+/// w101_orbs: how many screen copies there are (0, 1: the spellbook's world and map; 2: the teleport poof's world;
+/// 3: the live preview's world cover).
+const CAPTURE_SLOTS: usize = 4;
 
 /// w101_orbs: a texture that holds a copy of the back buffer (its size and format).
 struct Capture {
@@ -181,11 +182,11 @@ impl D3D12RenderEngine {
             fence,
             frame_contexts,
             frame_index: 0,
-            captures: [None, None, None],
+            captures: [None, None, None, None],
             capture_wanted: [false; CAPTURE_SLOTS],
             readback_request: None,
             readback_done: None,
-            live: [None, None],
+            live: [None, None, None],
             live_wanted: [None; LIVE_SLOTS],
         })
     }

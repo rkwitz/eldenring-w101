@@ -8,3 +8,5 @@ pub fn note_portrait(_size: [u32; 2]) {}
 pub fn image_strips(_name: &str) -> Option<Vec<([f32; 2], [f32; 4])>> {
     None
 }
+
+pub fn note_book(_keep: bool) {}

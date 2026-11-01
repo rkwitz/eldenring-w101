@@ -53,6 +53,22 @@
 //!     Character page's portrait the head (image_strips; ini `live_preview_frame` = what the square covers); an
 //!     arrow on its own keeps the software picture.
 //!
+//! - Round 17:
+//!   - Portrait (B1): the Character page's portrait shows set 0, the equipped picture Elden Ring draws once when the
+//!     mirror opens (facing the camera) and never redraws or turns, copied in its own slot (2). The right stick
+//!     only reaches the game while the Backpack's live picture is up, never for the portrait alone.
+//!   - World camera (B3): round 16's log (probe "cam" lines) showed the world camera circling the player while the
+//!     mirror was up: the stick that turns the mirror's model (ours and the real one) also turns Elden Ring's
+//!     camera under the menu, so after the book closed the camera looked another way, and the screenshot cover
+//!     jumped to that. Now: the cover is the last clean frame before the mirror opened (capture slot 3, every frame
+//!     while the book is open and no Elden Ring menu is up), its camera yaw is kept, and before the mirror closes
+//!     the camera is turned back to it with an injected right stick x (input::inject_camera_x, closed loop on the
+//!     camera matrix; the direction learnt from the spin, else probed), also continuously while the mirror is up
+//!     and the Backpack picture isn't (Character page). Only stick x reaches the game (y would tilt the camera).
+//!     After the menu closes the cover stays a moment and fades out (ini live_close_hold / live_close_fade). The
+//!     mirror also stays up for live_preview_linger seconds on other pages (quick tab flips don't reopen it); it
+//!     closes at once when the book closes or goes to the map page.
+//!
 //! Fail-safe: no target, no copy, no dispatcher, or the menu not opening / closing: the software picture stays and
 //! a "live:" line says why. Nothing here writes game memory; phase 2 calls one game function.
 
@@ -183,6 +199,44 @@ const MIRROR_FRAME: [f32; 2] = [0.9, 1.92];
 /// stick (Ryan, round 15 log: F9 to set 3 turned, set 0 didn't). The equipped pair is made in the same order, so
 /// set 0 is the equipped one ER doesn't redraw and set 2 its live twin.
 const DEFAULT_EQUIPPED: usize = 2;
+/// B1: the portrait's still front picture (set 0: drawn once when the mirror opens) and its copy slot.
+const STILL_SET: usize = 0;
+const PORTRAIT_SLOT: usize = 2;
+/// B3: the world as it was just before the mirror opened (capture slot 3).
+const COVER: &str = "@screen/live_cover";
+const COVER_SLOT: usize = 3;
+/// B3 defaults (ini live_preview_linger, live_close_hold, live_close_fade): seconds the mirror stays up on another
+/// page, the cover stays after Elden Ring's menu closed, and it takes to fade out.
+const LINGER: f32 = 3.0;
+const CLOSE_HOLD: f32 = 0.2;
+const CLOSE_FADE: f32 = 0.3;
+/// B3: the camera counts as back within this yaw (radians, about 2 degrees); the return gives up after this long.
+const RETURN_TOLERANCE: f32 = 0.035;
+const RETURN_MAX: f32 = 2.0;
+/// The book is open on a page that may keep the mirror up (not closed, not the map page), as book.rs says.
+static BOOK_KEEP: AtomicBool = AtomicBool::new(false);
+
+/// book.rs, every frame: the book is open on a page that may keep the hidden mirror up (B3).
+pub fn note_book(keep: bool) {
+    BOOK_KEEP.store(keep, Ordering::Relaxed);
+}
+
+fn wrap(a: f32) -> f32 {
+    let t = std::f32::consts::TAU;
+    (a + std::f32::consts::PI).rem_euclid(t) - std::f32::consts::PI
+}
+
+/// Turning the world camera back (B3).
+#[derive(Default)]
+struct Return {
+    start: Option<Instant>,
+    start_error: f32,
+    frames: u32,
+    prev_yaw: Option<f32>,
+    moved: f32,
+    ok: u32,
+    flipped: bool,
+}
 /// Turning the mirror's model by the stick (A1, A2): ER's CharaMake turn speed at full stick (radians per second,
 /// not measured: ini `live_preview_turn_rate`) and the dead zone it ignores (ini `live_preview_stick_dead`).
 const TURN_RATE: f32 = 3.0;
@@ -502,6 +556,10 @@ enum Drive {
     Opening(Instant),
     Open,
     Closing(Instant, bool),
+    /// B3: the book let go; the camera is being turned back before the mirror closes.
+    Returning(Instant),
+    /// B3: Elden Ring's menu closed; the cover stays a moment, then fades.
+    Settling(Instant, bool),
     Failed,
 }
 
@@ -536,6 +594,24 @@ pub struct LivePreview {
     last_attempt: Option<Instant>,
     keys: [bool; 2],
     why_not: String,
+    // B1 / B3 (round 17).
+    still_said: bool,
+    linger: f32,
+    close_hold: f32,
+    close_fade: f32,
+    cover_at: Option<Instant>,
+    cover_view: Option<[f32; 2]>,
+    saved_view: Option<[f32; 2]>,
+    view: Option<[f32; 2]>,
+    last_turn: Option<(f32, f32)>,
+    learn: f32,
+    cam_sign: Option<f32>,
+    probe_sign: f32,
+    ret: Return,
+    returned: bool,
+    gave_up: bool,
+    last_shown: Instant,
+    wanted_since: Option<Instant>,
 }
 
 impl LivePreview {
@@ -569,6 +645,9 @@ impl LivePreview {
             .unwrap_or(DEFAULT_STATE);
         let drive = get("live_preview_drive").as_deref() == Some("1");
         let fake_breath = get("live_preview_fake_breath").as_deref() == Some("1");
+        let linger = float("live_preview_linger", LINGER).clamp(0.0, 600.0);
+        let close_hold = float("live_close_hold", CLOSE_HOLD).clamp(0.0, 5.0);
+        let close_fade = float("live_close_fade", CLOSE_FADE).clamp(0.0, 5.0);
         ENABLED.store(true, Ordering::Relaxed);
         tracing::info!("live: live preview on (set {set}, bare set {bare}, assumed state {state:#x}, world state \
                         {world_state:#x}, drive {drive}, frame {frame:?}, turn {turn} (full stick {turn_rate} rad/s, \
@@ -599,6 +678,23 @@ impl LivePreview {
             last_attempt: None,
             keys: [false; 2],
             why_not: String::new(),
+            still_said: false,
+            linger,
+            close_hold,
+            close_fade,
+            cover_at: None,
+            cover_view: None,
+            saved_view: None,
+            view: None,
+            last_turn: None,
+            learn: 0.0,
+            cam_sign: None,
+            probe_sign: 1.0,
+            ret: Return::default(),
+            returned: true,
+            gave_up: false,
+            last_shown: Instant::now(),
+            wanted_since: None,
         })
     }
 
@@ -609,8 +705,7 @@ impl LivePreview {
     /// The book may stay open with Elden Ring's HUD hidden: the book drives the mirror menu, or Elden Ring's own
     /// mirror scene is up (phase 1).
     pub fn holds_book(&self) -> bool {
-        matches!(self.drive, Drive::Opening(_) | Drive::Open | Drive::Closing(..))
-            || (self.hud == Some(0) && self.current().is_some())
+        self.drives() || (self.hud == Some(0) && self.current().is_some())
     }
 
     /// The target to show: the survey's live picture of the wanted kind (equipped / bare), else the configured
@@ -628,6 +723,13 @@ impl LivePreview {
             .map(|t| (t.resource, t.size))
     }
 
+    /// B1: the still front picture for the portrait (set 0's final picture, drawn once when the mirror opened).
+    fn still(&self) -> Option<(usize, u32)> {
+        let sh = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+        sh.targets.iter().find(|t| t.retired.is_none() && t.by_stack && t.set == Some(STILL_SET))
+            .map(|t| (t.resource, t.size))
+    }
+
     fn say(&mut self, why: &str) {
         if self.why_not != why {
             tracing::info!("live: {why}");
@@ -636,8 +738,12 @@ impl LivePreview {
     }
 
     /// Before the frame is drawn (render thread): hotkeys, target lifetimes, and the copy into the book's picture.
-    pub fn before_render(&mut self, render: &mut dyn RenderContext, textures: &mut Textures) {
+    /// `camera`: the world camera's forward row (Game::camera), for B3's turning back.
+    pub fn before_render(&mut self, render: &mut dyn RenderContext, textures: &mut Textures,
+                         camera: Option<[f32; 3]>) {
         let hud = crate::game::hud_state();
+        self.view = camera.filter(|f| f.iter().all(|v| v.is_finite()))
+            .map(|f| [f[0].atan2(f[2]), f[1].clamp(-1.0, 1.0).asin()]);
         if hud != self.hud {
             self.hud = hud;
             self.hud_since = Instant::now();
@@ -646,6 +752,16 @@ impl LivePreview {
             std::thread::spawn(find_dispatcher);
         }
         self.hotkeys();
+        // B3: the world as it is now, while the book is open and nothing of Elden Ring's covers it: the cover once
+        // the mirror opens (the last of these copies is the frame before it), with the camera's direction then.
+        if self.drive == Drive::Armed && crate::input::book_open() && hud == Some(3) && self.hud_stable(3, 0.3)
+            && crate::game::faded() < 0.05 {
+            if let Some(id) = render.capture_screen(COVER_SLOT) {
+                textures.set(COVER, id, [1.0, 1.0]);
+                self.cover_at = Some(Instant::now());
+                self.cover_view = self.view;
+            }
+        }
         // Menu closed for a while: the scene's pictures go (the game frees them; ours are the last references).
         let menu_gone = self.hud_stable(3, 1.5) || hud.is_none();
         {
@@ -680,6 +796,13 @@ impl LivePreview {
         let full = picture().filter(|b| b.size[0] > 0 && b.size[1] > 0);
         let face = portrait().filter(|s| s[0] > 0 && s[1] > 0);
         let target = if hud != Some(3) { self.current() } else { None };
+        // B1: the portrait shows the still front picture (its own copy), never the turning one.
+        let still = match (face, target) {
+            (Some(_), Some(_)) => self.still().and_then(|(r, size)| {
+                render.copy_texture(PORTRAIT_SLOT, r, self.state, [0, 0, size, size]).map(|id| (id, r, size))
+            }),
+            _ => None,
+        };
         let copied = match (full.is_some() || face.is_some(), target) {
             (true, Some((resource, size))) => {
                 // The whole square, every frame (one fixed size: the copy texture is made once); each book picture
@@ -704,10 +827,21 @@ impl LivePreview {
         match copied {
             Some((id, resource, size)) => {
                 let crops = [full.map(|b| crop(self.frame, b.view, b.size)), face.map(|s| crop(self.frame, PORTRAIT_VIEW, s))];
+                if let Some((_, r, _)) = still.filter(|_| !self.still_said) {
+                    self.still_said = true;
+                    tracing::info!("live: the portrait shows the still front picture {r:#x} (set {STILL_SET}), not the \
+                                    turning one");
+                }
+                let ours = [Some(id), still.map(|s| s.0)];
                 for (k, name) in names.iter().enumerate() {
+                    let (id, size) = match still.filter(|_| k == 1) {
+                        Some((still_id, _, still_size)) => (still_id, still_size),
+                        None => (id, size),
+                    };
                     match crops[k] {
                         Some(_) => {
-                            if textures.get(name).is_some_and(|t| t.0 != id) {
+                            // The software picture is kept to put back (never one of the live copies).
+                            if textures.get(name).is_some_and(|t| !ours.contains(&Some(t.0))) {
                                 self.soft[k] = textures.get(name);
                             }
                             textures.set(name, id, [size as f32; 2]);
@@ -741,11 +875,13 @@ impl LivePreview {
                 }
             }
         }
-        crate::input::pass_right_stick(self.showing.is_some());
+        // B1: the right stick reaches the game only for the Backpack's live picture, never the portrait alone.
+        let returning = matches!(self.drive, Drive::Returning(_));
+        crate::input::pass_right_stick(self.showing.is_some() && full.is_some() && !returning);
         // A1 / A2: the book's turning of its picture (the slow spin like Wizard101's, or a mouse drag) turns Elden
         // Ring's model: CharaMake turns it by the right stick, so that stick is given to the game while the real one
         // is at rest. The survey then also sees the redrawn picture change.
-        let rate = full.filter(|_| self.showing.is_some() && self.turn).map_or(0.0, |b| b.turn);
+        let rate = full.filter(|_| self.showing.is_some() && self.turn && !returning).map_or(0.0, |b| b.turn);
         let stick = if rate.abs() < 1e-3 {
             0.0
         } else {
@@ -753,6 +889,9 @@ impl LivePreview {
                 * (rate.abs() / self.turn_rate).min(1.0))
         };
         crate::input::inject_right_x(stick, self.fake_pad);
+        let camera_x = self.camera_return(full.is_some());
+        crate::input::inject_camera_x(camera_x);
+        self.last_turn = self.view.map(|v| (v[0], if camera_x != 0.0 { camera_x } else { stick }));
         if stick != 0.0 && !self.turn_said {
             self.turn_said = true;
             tracing::info!("live: turning the mirror's model with right stick x {stick:.2} (book turn {rate:.2} rad/s; \
@@ -777,6 +916,76 @@ impl LivePreview {
             self.search.menu_grid = None;
             self.search.menu_samples = 0;
         }
+    }
+
+    /// B3: the right stick x that turns the world camera back to its yaw from before the mirror opened (0: none),
+    /// while the book lets go (Returning) or the mirror is up without the Backpack picture. Learns which way the
+    /// stick turns the camera from the spin; sets `returned` once the camera is back (or the return gave up).
+    fn camera_return(&mut self, backpack: bool) -> f32 {
+        // Learning the stick's direction: last frame's stick against how the yaw moved since.
+        if let (Some(v), Some((yaw, stick))) = (self.view, self.last_turn) {
+            let dy = wrap(v[0] - yaw);
+            if stick.abs() > self.stick_dead + 0.05 && dy.abs() > 1e-4 && dy.abs() < 0.5 {
+                self.learn += stick.signum() * dy.signum();
+                if self.cam_sign.is_none() && self.learn.abs() >= 8.0 {
+                    self.cam_sign = Some(self.learn.signum());
+                    tracing::info!("live: camera: a positive right stick x turns the camera's yaw {}",
+                                   if self.learn > 0.0 { "up" } else { "down" });
+                }
+            }
+        }
+        let wanted = match self.drive {
+            Drive::Returning(_) => true,
+            Drive::Open => !backpack && self.hud.is_some_and(|h| h != 3),
+            _ => false,
+        };
+        let (Some(v), Some(target)) = (self.view, self.saved_view) else {
+            self.returned = true;
+            return 0.0;
+        };
+        let error = wrap(target[0] - v[0]);
+        self.returned = self.gave_up || error.abs() < RETURN_TOLERANCE;
+        if !wanted || self.gave_up {
+            self.ret = Return::default();
+            return 0.0;
+        }
+        let r = &mut self.ret;
+        let start = *r.start.get_or_insert_with(Instant::now);
+        if r.frames == 0 {
+            r.start_error = error.abs();
+        }
+        r.frames += 1;
+        if let Some(prev) = r.prev_yaw.replace(v[0]) {
+            r.moved += wrap(v[0] - prev).abs();
+        }
+        r.ok = if error.abs() < RETURN_TOLERANCE { r.ok + 1 } else { 0 };
+        if r.ok >= 3 {
+            if r.frames > 3 {
+                tracing::info!("live: camera back where it was before the mirror (yaw {:.1} deg off, pitch {:.1} deg \
+                                off) after {:.0} ms", error.to_degrees(), (target[1] - v[1]).to_degrees(),
+                               start.elapsed().as_secs_f32() * 1000.0);
+            }
+            self.ret = Return::default();
+            return 0.0;
+        }
+        if start.elapsed().as_secs_f32() > RETURN_MAX || (r.frames > 40 && r.moved < 0.005) {
+            tracing::info!("live: camera: couldn't turn it back (yaw {:.1} deg off after {:.0} ms, moved {:.1} deg; \
+                            no controller? ini live_preview_fake_pad = 1 makes one up); left as it is",
+                           error.to_degrees(), start.elapsed().as_secs_f32() * 1000.0, r.moved.to_degrees());
+            self.gave_up = true;
+            self.returned = true;
+            self.ret = Return::default();
+            return 0.0;
+        }
+        if self.cam_sign.is_none() && !r.flipped && r.frames == 20 && error.abs() > r.start_error + 0.02 {
+            r.flipped = true;
+            self.probe_sign = -self.probe_sign;
+            tracing::info!("live: camera: turning the wrong way; the other way now");
+        }
+        let sign = self.cam_sign.unwrap_or(self.probe_sign);
+        let low = (self.stick_dead + 0.08).min(1.0);
+        let magnitude = if error.abs() > 0.6 { 1.0 } else { low + (1.0 - low) * error.abs() / 0.6 };
+        sign * error.signum() * magnitude.min(1.0)
     }
 
     /// While Elden Ring's menu is up with a scene: reads every square target back twice, about a second apart, and
@@ -898,7 +1107,7 @@ impl LivePreview {
     }
 
     fn drives(&self) -> bool {
-        matches!(self.drive, Drive::Opening(_) | Drive::Open | Drive::Closing(..))
+        matches!(self.drive, Drive::Opening(_) | Drive::Open | Drive::Closing(..) | Drive::Returning(_))
     }
 
     /// In normal play (Elden Ring's HUD up, no fade), finds which world candidate is the world scene's picture.
@@ -1031,11 +1240,11 @@ impl LivePreview {
         if down[1] && !self.keys[1] {
             self.drive = match self.drive {
                 Drive::Off | Drive::Failed => Drive::Armed,
-                Drive::Open | Drive::Opening(_) => {
+                Drive::Open | Drive::Opening(_) | Drive::Returning(_) => {
                     self.close_menu(FORCE_CLOSE_MENU);
                     Drive::Closing(Instant::now(), false)
                 }
-                d @ Drive::Closing(..) => d,
+                d @ (Drive::Closing(..) | Drive::Settling(..)) => d,
                 Drive::Armed => Drive::Off,
             };
             tracing::info!("live: F10, book-driven mirror {:?}", self.drive);
@@ -1048,8 +1257,19 @@ impl LivePreview {
     pub fn frame(&mut self, ui: &Ui, textures: &Textures) {
         let shown = wanted();
         let now = Instant::now();
+        if shown {
+            self.last_shown = now;
+            self.wanted_since.get_or_insert(now);
+        } else {
+            self.wanted_since = None;
+        }
+        // B3: the mirror opens over a fresh copy of the world (the frame before it), or after a second without one.
+        let cover_fresh = self.cover_at.is_some_and(|t| t.elapsed() < Duration::from_millis(200));
+        let cover_wait = self.wanted_since.is_some_and(|t| t.elapsed() > Duration::from_secs(1));
+        let keep = BOOK_KEEP.load(Ordering::Relaxed);
         self.drive = match self.drive {
             Drive::Armed if shown && self.hud_stable(3, 1.0) && crate::game::faded() < 0.05
+                && (cover_fresh || cover_wait)
                 && self.last_attempt.is_none_or(|t| t.elapsed() > Duration::from_secs(2)) => {
                 let dispatch = DISPATCH.load(Ordering::Relaxed);
                 if dispatch == 0 {
@@ -1057,7 +1277,12 @@ impl LivePreview {
                     Drive::Failed
                 } else {
                     self.last_attempt = Some(now);
-                    tracing::info!("live: opening the cosmetics mirror (OpenCharaMakeMenu 1) for the book");
+                    // The camera's direction in the cover: turned back to before the mirror closes (B3).
+                    self.saved_view = if cover_fresh { self.cover_view } else { self.view };
+                    self.gave_up = false;
+                    self.ret = Return::default();
+                    tracing::info!("live: opening the cosmetics mirror (OpenCharaMakeMenu 1) for the book{}",
+                                   if cover_fresh { "" } else { " (no fresh world copy for the cover)" });
                     unsafe { ezstate_event(dispatch, &[OPEN_CHARA_MAKE_MENU, 1]) };
                     tracing::info!("live: OpenCharaMakeMenu returned");
                     Drive::Opening(now)
@@ -1073,17 +1298,35 @@ impl LivePreview {
             }
             Drive::Open if self.hud == Some(3) => {
                 tracing::info!("live: Elden Ring's menu closed by itself; book-driven mirror off (F10 arms it again)");
-                Drive::Off
+                Drive::Settling(now, false)
             }
-            Drive::Open if !shown => {
-                tracing::info!("live: the book's picture went; closing the mirror (ForceCloseMenu)");
+            // B3: the mirror stays up while the book is open on another page for a while (quick tab flips don't
+            // close and reopen it); it lets go when the book closes, goes to the map page or the time is up.
+            // The map page needs Elden Ring's map menu: the mirror goes at once (no turning back first).
+            Drive::Open if !shown && !keep && crate::input::book_open() => {
+                tracing::info!("live: the book went to the map page; closing the mirror (ForceCloseMenu)");
+                self.close_menu(FORCE_CLOSE_MENU);
+                Drive::Closing(now, false)
+            }
+            Drive::Open if !shown && !(keep && self.last_shown.elapsed().as_secs_f32() < self.linger) => {
+                tracing::info!("live: the book's picture went ({}); turning the camera back, then closing the mirror",
+                               if keep { "another page for a while" } else { "book closed" });
+                Drive::Returning(now)
+            }
+            Drive::Returning(_) if self.hud == Some(3) => {
+                tracing::info!("live: Elden Ring's menu closed by itself while the camera turned back");
+                Drive::Settling(now, true)
+            }
+            Drive::Returning(_) if shown && keep => Drive::Open,
+            Drive::Returning(t) if self.returned || t.elapsed().as_secs_f32() > RETURN_MAX + 0.5 => {
+                tracing::info!("live: closing the mirror (ForceCloseMenu) {:.0} ms after the book let go",
+                               t.elapsed().as_secs_f32() * 1000.0);
                 self.close_menu(FORCE_CLOSE_MENU);
                 Drive::Closing(now, false)
             }
             Drive::Closing(t, _) if self.hud == Some(3) => {
                 tracing::info!("live: mirror closed {:.0} ms after the close call", t.elapsed().as_secs_f32() * 1000.0);
-                self.last_attempt = Some(now);
-                Drive::Armed
+                Drive::Settling(now, true)
             }
             Drive::Closing(t, false) if t.elapsed() > Duration::from_millis(2500) => {
                 tracing::info!("live: still open 2.5 s after ForceCloseMenu; trying CloseMenu");
@@ -1094,17 +1337,35 @@ impl LivePreview {
                 tracing::info!("live: the mirror didn't close; close it in Elden Ring (B). Book-driven mirror off");
                 Drive::Failed
             }
+            Drive::Settling(t, rearm) if t.elapsed().as_secs_f32() >= self.close_hold + self.close_fade => {
+                self.last_attempt = Some(now);
+                if rearm { Drive::Armed } else { Drive::Off }
+            }
             d => d,
         };
-        if (self.drives() || (self.world_live && self.showing.is_some())) && self.hud != Some(3) {
-            // Elden Ring's mirror menu stays hidden behind the world: live once the world scene's picture is known
-            // (A3), else as it was before the book opened.
+        // Elden Ring's mirror menu stays hidden behind the world: live once the world scene's picture is known (A3),
+        // else the frame before the mirror opened (B3), else the teleport's older copy. After the menu closed it stays
+        // a moment (Elden Ring's menu going) and fades into the game.
+        let menu_up = self.hud != Some(3);
+        let alpha = match self.drive {
+            Drive::Settling(t, _) => {
+                1.0 - ((t.elapsed().as_secs_f32() - self.close_hold) / self.close_fade.max(1e-3)).clamp(0.0, 1.0)
+            }
+            Drive::Opening(_) if !menu_up => if self.cover_at.is_some() { 1.0 } else { 0.0 },
+            _ if self.drives() && menu_up => 1.0,
+            _ if self.world_live && self.showing.is_some() && menu_up => 1.0,
+            _ => 0.0,
+        };
+        if alpha > 0.0 {
             let size = ui.io().display_size;
             let draw = ui.get_background_draw_list();
-            let world = if self.world_live { textures.get(LIVE_WORLD) } else { textures.get(TELEPORT_WORLD) };
+            let world = if self.world_live && menu_up { textures.get(LIVE_WORLD) }
+                else { textures.get(COVER).filter(|_| self.cover_at.is_some()).or_else(|| textures.get(TELEPORT_WORLD)) };
+            let a = (alpha * 255.0).round() as u8;
             match world {
-                Some((world, _)) => draw.add_image(world, [0.0, 0.0], size).build(),
-                None => draw.add_rect([0.0, 0.0], size, ImColor32::from_rgba(12, 9, 6, 255)).filled(true).build(),
+                Some((world, _)) => draw.add_image(world, [0.0, 0.0], size)
+                    .col(ImColor32::from_rgba(255, 255, 255, a)).build(),
+                None => draw.add_rect([0.0, 0.0], size, ImColor32::from_rgba(12, 9, 6, a)).filled(true).build(),
             }
         }
     }

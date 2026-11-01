@@ -137,6 +137,19 @@ pub fn inject_right_x(x: f32, fake_pad: bool) {
     FAKE_PAD.store(fake_pad, Ordering::SeqCst);
 }
 
+/// Round 17 B3: a right stick x (-32767..32767, 0 = none) that turns Elden Ring's camera back to where it was
+/// before the live mirror opened (the mirror's stick turning also turns the world camera under the menu). It
+/// applies with the book open or closed, while the real right stick rests, and over every other right stick.
+static INJECT_CAMERA_X: AtomicI16 = AtomicI16::new(0);
+
+pub fn inject_camera_x(x: f32) {
+    INJECT_CAMERA_X.store((x.clamp(-1.0, 1.0) * 32767.0) as i16, Ordering::SeqCst);
+}
+
+pub fn book_open() -> bool {
+    BOOK_OPEN.load(Ordering::SeqCst)
+}
+
 /// Real right-stick values inside this dead zone count as at rest (the injected turning applies).
 const STICK_REST: u16 = 7000;
 
@@ -395,9 +408,10 @@ unsafe extern "system" fn get_state_ex(user: u32, state: *mut XInputState) -> u3
 /// No controller on player 0 while the live picture is turned by an injected stick (and the ini allows it): an
 /// idle one answers instead, whose right stick `filter_pad` then sets.
 unsafe fn fake_pad(user: u32, result: u32, state: *mut XInputState) -> u32 {
+    let turning = INJECT_RIGHT_X.load(Ordering::SeqCst) != 0 && PASS_RIGHT_STICK.load(Ordering::SeqCst)
+        && BOOK_OPEN.load(Ordering::SeqCst);
     if result == 0 || user != 0 || state.is_null() || !FAKE_PAD.load(Ordering::SeqCst)
-        || INJECT_RIGHT_X.load(Ordering::SeqCst) == 0 || !PASS_RIGHT_STICK.load(Ordering::SeqCst)
-        || !BOOK_OPEN.load(Ordering::SeqCst) {
+        || !(turning || INJECT_CAMERA_X.load(Ordering::SeqCst) != 0) {
         return result;
     }
     (*state).packet = FAKE_PACKET.fetch_add(1, Ordering::SeqCst) as u32;
@@ -433,18 +447,27 @@ unsafe fn filter_pad(user: u32, result: u32, state: *mut XInputState) {
     if !FAKED.swap(false, Ordering::SeqCst) {
         PAD_SEEN.store(now_ms(), Ordering::SeqCst);
     }
+    let camera = INJECT_CAMERA_X.load(Ordering::SeqCst);
+    let at_rest = pad.right_x.unsigned_abs() < STICK_REST && pad.right_y.unsigned_abs() < STICK_REST;
     if BOOK_OPEN.load(Ordering::SeqCst) {
-        let (right_x, right_y, left_x, left_y) = (pad.right_x, pad.right_y, pad.left_x, pad.left_y);
+        let (right_x, left_x, left_y) = (pad.right_x, pad.left_x, pad.left_y);
         *pad = Gamepad::default();
         if PASS_RIGHT_STICK.load(Ordering::SeqCst) {
+            // Only x: the mirror turns its model with it. Its y would tilt the world camera under the menu,
+            // which nothing turns back (round 17 B3).
             let injected = INJECT_RIGHT_X.load(Ordering::SeqCst);
-            let at_rest = right_x.unsigned_abs() < STICK_REST && right_y.unsigned_abs() < STICK_REST;
-            (pad.right_x, pad.right_y) = if at_rest && injected != 0 { (injected, 0) } else { (right_x, right_y) };
+            pad.right_x = if at_rest && injected != 0 { injected } else { right_x };
+        }
+        if camera != 0 && at_rest {
+            pad.right_x = camera;
         }
         if move_through() {
             (pad.left_x, pad.left_y) = (left_x, left_y);
         }
         return;
+    }
+    if camera != 0 && at_rest {
+        (pad.right_x, pad.right_y) = (camera, 0);
     }
     if GAMEPLAY.load(Ordering::SeqCst) {
         pad.buttons &= !BACK;

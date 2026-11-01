@@ -130,6 +130,8 @@ struct Orbs {
     probe: Option<probe::Probe>,
     /// The opt-in live mirror picture in the book (ini live_preview = 1, live_preview.rs).
     live: Option<live_preview::LivePreview>,
+    /// The last stats read in normal play (B2: the book shows them while the hidden mirror hides Elden Ring's HUD).
+    last_stats: Option<game::Stats>,
 }
 
 /// Frame timing written to w101_orbs.log every few seconds, to see what the overlay costs the game.
@@ -189,6 +191,7 @@ impl Orbs {
             settings,
             probe,
             live,
+            last_stats: None,
             folder,
             art: None,
             font: None,
@@ -273,9 +276,11 @@ impl ImguiRenderLoop for Orbs {
         let game = self.game.as_ref().and_then(|g| g.as_ref());
         let plain = game.is_some() && !self.book.open && !self.loadscreen.holding() && game::hud_shown()
             && game::faded() < 0.05;
-        self.teleport.capture(render, &mut self.book.textures, plain, game.and_then(|g| g.camera()));
+        let camera = game.and_then(|g| g.camera());
+        let forward = camera.as_ref().map(|c| [c.matrix[2][0], c.matrix[2][1], c.matrix[2][2]]);
+        self.teleport.capture(render, &mut self.book.textures, plain, camera);
         if let Some(live) = &mut self.live {
-            live.before_render(render, &mut self.book.textures);
+            live.before_render(render, &mut self.book.textures, forward);
         }
         if let Some(probe) = &mut self.probe {
             probe.render_frame(render, &self.folder);
@@ -299,13 +304,35 @@ impl ImguiRenderLoop for Orbs {
             None => false,
         };
         let game = self.game.as_ref().and_then(|g| g.as_ref());
+        // Round 17 B2: with the hidden live mirror up Elden Ring's HUD is off, so `draw` gives no stats and the
+        // Character page had none. Then the player's own stat module is read (its maxima must match the last good
+        // values, in case the menu stands another character in), else the last good values stay.
+        if stats.is_some() {
+            self.last_stats = stats;
+        }
+        let book_stats = match (stats, game) {
+            (Some(s), _) => Some(s),
+            (None, Some(g)) if live_hold => {
+                let probe = g.probe();
+                let last = self.last_stats;
+                let live = probe.live.filter(|s| last.is_none_or(|l| (l.max_hp, l.max_fp, l.max_sp)
+                    == (s.max_hp, s.max_fp, s.max_sp)) && (1..100_000).contains(&s.max_hp)
+                    && (0..=s.max_hp).contains(&s.hp) && (0..=s.max_fp.max(0)).contains(&s.fp)
+                    && (0..=s.max_sp.max(0)).contains(&s.sp));
+                match (live, last) {
+                    (Some(s), l) => Some(game::Stats { level: probe.level.or(l.and_then(|l| l.level)), ..s }),
+                    (None, l) => l,
+                }
+            }
+            _ => None,
+        };
         let hud = game::hud_shown();
         let faded = game::faded();
         let position = game.and_then(|g| g.position());
         let settings_path = self.folder.join("w101_orbs.ini");
         let mut cx = book::Context {
             game,
-            stats,
+            stats: book_stats,
             gameplay: game.is_some() && faded <= 0.3 && ((hud && stats.is_some()) || live_hold),
             hud,
             faded,
