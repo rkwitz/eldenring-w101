@@ -7,6 +7,9 @@
 //!   its camera from raw mouse input, WM_INPUT / GetRawInputData / GetRawInputBuffer, so those are hooked too). The
 //!   mouse's movement and buttons are kept for the book's own cursor (Elden Ring keeps the system cursor locked),
 //!   and SetCursorPos / ClipCursor are hooked so that the game doesn't pull the cursor back while the book is open.
+//! - Walking with the book open (round 16 M1, `set_move_through`): in normal play, off the map page, the W, A, S and D
+//!   keys (DirectInput keyboard state and buffered data) and the controller's left stick still reach the game; the
+//!   mouse, the right stick and every other key stay with the book, so the camera doesn't move.
 //!
 //! Keyboard keys for the book itself (B, Esc, arrows) come through imgui, which hudhook feeds from window messages.
 
@@ -83,8 +86,8 @@ static MOUSE_DY: AtomicI32 = AtomicI32::new(0);
 static MOUSE_WHEEL: AtomicI32 = AtomicI32::new(0);
 static MOUSE_BUTTONS: AtomicU8 = AtomicU8::new(0);
 static MOUSE_SEEN: AtomicU64 = AtomicU64::new(0);
-/// DirectInput devices seen in GetDeviceData: (device, is a mouse).
-static DEVICES: Mutex<Vec<(usize, bool)>> = Mutex::new(Vec::new());
+/// DirectInput devices seen in GetDeviceData: (device, DI8DEVTYPE: 0x12 mouse, 0x13 keyboard).
+static DEVICES: Mutex<Vec<(usize, u8)>> = Mutex::new(Vec::new());
 
 static TRAMPOLINES: [AtomicUsize; 10] = [
     AtomicUsize::new(0), // XInputGetState
@@ -119,6 +122,38 @@ static PASS_RIGHT_STICK: AtomicBool = AtomicBool::new(false);
 
 pub fn pass_right_stick(on: bool) {
     PASS_RIGHT_STICK.store(on, Ordering::SeqCst);
+}
+
+/// live_preview.rs: a right stick x (-32767..32767, 0 = none) given to the game while the right stick passes and
+/// the real stick is at rest: the book's turning of the live picture (its slow spin, a mouse drag) becomes Elden
+/// Ring's CharaMake turning its model by the stick. With `fake_pad`, an idle controller is made up for player 0
+/// while no real one is connected, so that this also works without one.
+static INJECT_RIGHT_X: AtomicI16 = AtomicI16::new(0);
+static FAKE_PAD: AtomicBool = AtomicBool::new(false);
+static FAKE_PACKET: AtomicU64 = AtomicU64::new(0);
+
+pub fn inject_right_x(x: f32, fake_pad: bool) {
+    INJECT_RIGHT_X.store((x.clamp(-1.0, 1.0) * 32767.0) as i16, Ordering::SeqCst);
+    FAKE_PAD.store(fake_pad, Ordering::SeqCst);
+}
+
+/// Real right-stick values inside this dead zone count as at rest (the injected turning applies).
+const STICK_REST: u16 = 7000;
+
+/// M1: while the book is open in normal play the character still walks: the W, A, S and D keys and the left stick
+/// reach the game; the camera stays still (the mouse and the right stick stay with the book). book.rs turns it off
+/// on the map page (both sticks move its cursor), in NPC dialogue and while Elden Ring's own menu is up.
+static MOVE_THROUGH: AtomicBool = AtomicBool::new(false);
+
+pub fn set_move_through(on: bool) {
+    MOVE_THROUGH.store(on, Ordering::SeqCst);
+}
+
+/// DirectInput keyboard offsets (DIK_ codes) of W, A, S and D.
+const MOVE_KEYS: [usize; 4] = [0x11, 0x1E, 0x1F, 0x20];
+
+fn move_through() -> bool {
+    MOVE_THROUGH.load(Ordering::SeqCst) && BOOK_OPEN.load(Ordering::SeqCst)
 }
 
 /// Forgets every half-finished input after the game window lost or regained focus (alt-tab): buttons whose release
@@ -346,16 +381,33 @@ unsafe fn trampoline<T: Copy>(slot: usize) -> T {
 }
 
 unsafe extern "system" fn get_state(user: u32, state: *mut XInputState) -> u32 {
-    let result = trampoline::<GetState>(0)(user, state);
+    let result = fake_pad(user, trampoline::<GetState>(0)(user, state), state);
     filter_pad(user, result, state);
     result
 }
 
 unsafe extern "system" fn get_state_ex(user: u32, state: *mut XInputState) -> u32 {
-    let result = trampoline::<GetState>(1)(user, state);
+    let result = fake_pad(user, trampoline::<GetState>(1)(user, state), state);
     filter_pad(user, result, state);
     result
 }
+
+/// No controller on player 0 while the live picture is turned by an injected stick (and the ini allows it): an
+/// idle one answers instead, whose right stick `filter_pad` then sets.
+unsafe fn fake_pad(user: u32, result: u32, state: *mut XInputState) -> u32 {
+    if result == 0 || user != 0 || state.is_null() || !FAKE_PAD.load(Ordering::SeqCst)
+        || INJECT_RIGHT_X.load(Ordering::SeqCst) == 0 || !PASS_RIGHT_STICK.load(Ordering::SeqCst)
+        || !BOOK_OPEN.load(Ordering::SeqCst) {
+        return result;
+    }
+    (*state).packet = FAKE_PACKET.fetch_add(1, Ordering::SeqCst) as u32;
+    (*state).pad = Gamepad::default();
+    FAKED.store(true, Ordering::SeqCst);
+    0
+}
+
+/// The state filter_pad sees this call is the made-up controller (it doesn't count as a connected one).
+static FAKED: AtomicBool = AtomicBool::new(false);
 
 unsafe fn filter_pad(user: u32, result: u32, state: *mut XInputState) {
     if result != 0 || state.is_null() {
@@ -378,12 +430,19 @@ unsafe fn filter_pad(user: u32, result: u32, state: *mut XInputState) {
     LEFT_X.store(pad.left_x, Ordering::SeqCst);
     RIGHT_Y.store(pad.right_y, Ordering::SeqCst);
     RIGHT_X.store(pad.right_x, Ordering::SeqCst);
-    PAD_SEEN.store(now_ms(), Ordering::SeqCst);
+    if !FAKED.swap(false, Ordering::SeqCst) {
+        PAD_SEEN.store(now_ms(), Ordering::SeqCst);
+    }
     if BOOK_OPEN.load(Ordering::SeqCst) {
-        let (right_x, right_y) = (pad.right_x, pad.right_y);
+        let (right_x, right_y, left_x, left_y) = (pad.right_x, pad.right_y, pad.left_x, pad.left_y);
         *pad = Gamepad::default();
         if PASS_RIGHT_STICK.load(Ordering::SeqCst) {
-            (pad.right_x, pad.right_y) = (right_x, right_y);
+            let injected = INJECT_RIGHT_X.load(Ordering::SeqCst);
+            let at_rest = right_x.unsigned_abs() < STICK_REST && right_y.unsigned_abs() < STICK_REST;
+            (pad.right_x, pad.right_y) = if at_rest && injected != 0 { (injected, 0) } else { (right_x, right_y) };
+        }
+        if move_through() {
+            (pad.left_x, pad.left_y) = (left_x, left_y);
         }
         return;
     }
@@ -412,27 +471,39 @@ unsafe fn device_state(slot: usize, this: *mut c_void, size: u32, data: *mut c_v
         MOUSE_SEEN.store(now_ms(), Ordering::SeqCst);
     }
     if BOOK_OPEN.load(Ordering::SeqCst) {
+        // A keyboard's state (256 key bytes) keeps W, A, S and D while the character may walk (M1).
+        let keep = (size == 256 && move_through()).then(|| MOVE_KEYS.map(|k| *data.cast::<u8>().add(k)));
         std::ptr::write_bytes(data.cast::<u8>(), 0, size as usize);
+        if let Some(keys) = keep {
+            for (k, v) in MOVE_KEYS.iter().zip(keys) {
+                *data.cast::<u8>().add(*k) = v;
+            }
+        }
     }
     result
 }
 
 /// Whether a DirectInput device is a mouse (GetCapabilities' device type), remembered per device.
 unsafe fn is_mouse(this: *mut c_void) -> bool {
-    let Ok(mut devices) = DEVICES.lock() else { return false };
-    if let Some((_, mouse)) = devices.iter().find(|(d, _)| *d == this as usize) {
-        return *mouse;
+    device_type(this) == 0x12 // DI8DEVTYPE_MOUSE
+}
+
+/// A DirectInput device's type (GetCapabilities' dwDevType & 0xFF: 0x12 mouse, 0x13 keyboard), remembered per device.
+unsafe fn device_type(this: *mut c_void) -> u8 {
+    let Ok(mut devices) = DEVICES.lock() else { return 0 };
+    if let Some((_, kind)) = devices.iter().find(|(d, _)| *d == this as usize) {
+        return *kind;
     }
     type GetCapabilities = unsafe extern "system" fn(*mut c_void, *mut u32) -> i32;
     let vtable = *(this as *const *const usize);
     let get: GetCapabilities = std::mem::transmute(*vtable.add(3));
     let mut caps = [0u32; 11];
     caps[0] = 44; // sizeof(DIDEVCAPS)
-    let mouse = get(this, caps.as_mut_ptr()) >= 0 && caps[2] & 0xFF == 0x12; // DI8DEVTYPE_MOUSE
+    let kind = if get(this, caps.as_mut_ptr()) >= 0 { (caps[2] & 0xFF) as u8 } else { 0 };
     if devices.len() < 64 {
-        devices.push((this as usize, mouse));
+        devices.push((this as usize, kind));
     }
-    mouse
+    kind
 }
 
 /// Buffered data: DIDEVICEOBJECTDATA entries of `size` bytes (offset, data, time, sequence, app data); for a mouse
@@ -442,7 +513,8 @@ unsafe fn device_data(slot: usize, this: *mut c_void, size: u32, data: *mut c_vo
     if result < 0 || count.is_null() {
         return result;
     }
-    if !data.is_null() && size >= 16 && *count > 0 && is_mouse(this) {
+    let mouse = !data.is_null() && size >= 16 && *count > 0 && is_mouse(this);
+    if mouse {
         MOUSE_SEEN.store(now_ms(), Ordering::SeqCst);
         for i in 0..*count as usize {
             let entry = data.cast::<u8>().add(i * size as usize).cast::<u32>();
@@ -464,7 +536,22 @@ unsafe fn device_data(slot: usize, this: *mut c_void, size: u32, data: *mut c_vo
         }
     }
     if BOOK_OPEN.load(Ordering::SeqCst) {
-        *count = 0;
+        if !data.is_null() && size >= 16 && *count > 0 && move_through() && device_type(this) == 0x13 {
+            // A keyboard's buffered keys: only W, A, S and D stay (M1), packed to the front.
+            let mut kept = 0usize;
+            for i in 0..*count as usize {
+                let entry = data.cast::<u8>().add(i * size as usize);
+                if MOVE_KEYS.contains(&(*entry.cast::<u32>() as usize)) {
+                    if kept != i {
+                        std::ptr::copy(entry, data.cast::<u8>().add(kept * size as usize), size as usize);
+                    }
+                    kept += 1;
+                }
+            }
+            *count = kept as u32;
+        } else {
+            *count = 0;
+        }
     }
     result
 }

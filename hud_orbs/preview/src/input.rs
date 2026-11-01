@@ -17,6 +17,7 @@ pub const Y: u16 = 0x8000;
 
 pub fn set_book_open(_open: bool) {}
 pub fn set_gameplay(_gameplay: bool) {}
+pub fn set_move_through(_on: bool) {}
 pub fn take_pressed() -> u16 { 0 }
 pub fn held() -> (u16, f32, f32) { (0, 0.0, 0.0) }
 pub fn pad_connected() -> bool { std::env::var("PREVIEW_PAD").is_ok() }

@@ -596,8 +596,13 @@ impl Book {
             };
             let r = page.nodes[*node].rect;
             let size = [((r[2] - r[0]) * s).round().max(8.0) as u32, ((r[3] - r[1]) * s).round().max(8.0) as u32];
-            if slot == 0 {
-                crate::live_preview::note_box(size);
+            // The live mirror picture (live_preview.rs) stands in for the character, not for an arrow on its own;
+            // it is framed like this picture and turned the way this one turns (its slow spin, a drag).
+            if slot == 0 && look.item.is_none() {
+                let rate = if by_hand { pointer_turn / dt.max(1e-3) } else if spinning { self.spin * SPIN } else { 0.0 };
+                crate::live_preview::note_box(size, zoom, rate);
+            } else if slot == 1 {
+                crate::live_preview::note_portrait(size);
             }
             renderer.request(slot, Request { look: look.clone(), framing, yaw, size, fast: fast && slot == 0, view });
         }
@@ -772,6 +777,9 @@ impl Book {
         let dt = self.last_frame.elapsed().as_secs_f32().min(0.1);
         self.last_frame = Instant::now();
         input::set_gameplay(cx.gameplay && !self.open && self.dialogue.is_none());
+        // M1: the character still walks with the book open (WASD, left stick), except on the map page.
+        // Not over Elden Ring's own menus (the live mirror): there WASD would move their cursor.
+        input::set_move_through(self.open && cx.gameplay && cx.hud && self.dialogue.is_none() && self.tab != Tab::Map);
         // Before taking the presses, so that the press that closed ER's map doesn't close the reopened book.
         self.follow_map(cx);
         self.quit_follow(cx);

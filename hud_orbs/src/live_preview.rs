@@ -42,6 +42,17 @@
 //!     back buffer and the one that matches it (correlation of a 32x18 brightness grid) wins; "live: world" lines
 //!     log it. Until one is found, the old screenshot stays.
 //!
+//! - Round 16:
+//!   - Equipped set (A1): set 2 by default, not 0. Ryan's round 15 log: with F9 on set 3 the stick turned the model,
+//!     on set 0 it didn't; set 0 is the equipped picture ER made once and doesn't redraw (as set 1 is for the bare
+//!     body), set 2 its live twin. The survey's pick of one kind never stands in for the other.
+//!   - Slow spin (A2): the book's own turning (its spin, a drag; book.rs reports the rate with the picture) is given
+//!     to the game as a right stick x while the real stick rests (input::inject_right_x); ini `live_preview_turn`,
+//!     `_turn_rate`, `_stick_dead`, `_turn_sign`; `live_preview_fake_pad = 1` makes up a controller without one.
+//!   - Framing (A3): the whole square is copied; the Backpack picture shows its category's zoom of it and the
+//!     Character page's portrait the head (image_strips; ini `live_preview_frame` = what the square covers); an
+//!     arrow on its own keeps the software picture.
+//!
 //! Fail-safe: no target, no copy, no dispatcher, or the menu not opening / closing: the software picture stays and
 //! a "live:" line says why. Nothing here writes game memory; phase 2 calls one game function.
 
@@ -145,23 +156,68 @@ static WORLD: Mutex<World> = Mutex::new(World { targets: Vec::new(), last_made: 
 /// The live picture is in the book this frame (the breathing applies to it only).
 static SHOWING: AtomicBool = AtomicBool::new(false);
 static BREATH_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-/// The book's full character picture this frame (its size in pixels, when it was drawn): book.rs reports it.
-static PICTURE: Mutex<Option<([u32; 2], Instant)>> = Mutex::new(None);
+/// The book's full character picture this frame, as book.rs reports it: its size in pixels, its framing (centre
+/// height and view height in metres, model::Framing / pages::backpack_zoom), how fast the book turns it (radians per
+/// second: its slow spin or a drag), and when it was drawn.
+#[derive(Clone, Copy)]
+struct Shown {
+    size: [u32; 2],
+    view: [f32; 2],
+    turn: f32,
+    at: Instant,
+}
+
+static PICTURE: Mutex<Option<Shown>> = Mutex::new(None);
+/// The Character page's portrait this frame (its size, when it was drawn).
+static PORTRAIT: Mutex<Option<([u32; 2], Instant)>> = Mutex::new(None);
+/// The part of the live square picture each book picture shows (uv rect; full picture, portrait), while it shows.
+static CROPS: Mutex<[Option<[f32; 4]>; 2]> = Mutex::new([None; 2]);
+/// The portrait's framing (model::Framing::Portrait with a helm: a hat reaches well above the head).
+const PORTRAIT_VIEW: [f32; 2] = [1.66, 0.62];
+/// What the mirror's square picture covers by default (centre height, view height in metres): row 0 of
+/// MenuOffscrRendParam looks at y 0.85 from 2.66 m with a 40 degree fov, about 1.94 m tall, which is the book's own
+/// full framing (model::Framing::Full, 0.9 / 1.92) within a few centimetres; so the full picture is the whole square.
+const MIRROR_FRAME: [f32; 2] = [0.9, 1.92];
+/// The book's equipped set unless the ini says otherwise (A1, round 16). Runs 2 and 15: set 1 (the first bare one)
+/// can have a black face (not kept up), set 3 (the second) was right every time and is the one that turns with the
+/// stick (Ryan, round 15 log: F9 to set 3 turned, set 0 didn't). The equipped pair is made in the same order, so
+/// set 0 is the equipped one ER doesn't redraw and set 2 its live twin.
+const DEFAULT_EQUIPPED: usize = 2;
+/// Turning the mirror's model by the stick (A1, A2): ER's CharaMake turn speed at full stick (radians per second,
+/// not measured: ini `live_preview_turn_rate`) and the dead zone it ignores (ini `live_preview_stick_dead`).
+const TURN_RATE: f32 = 3.0;
+const STICK_DEAD: f32 = 0.24;
 
 pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
-/// book.rs: the full character picture is on the page at this size this frame.
-pub fn note_box(size: [u32; 2]) {
+/// book.rs: the full character picture is on the page at this size and framing this frame, turning at `turn`.
+pub fn note_box(size: [u32; 2], view: [f32; 2], turn: f32) {
     if enabled() {
-        *PICTURE.lock().unwrap_or_else(|e| e.into_inner()) = Some((size, Instant::now()));
+        *PICTURE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Shown { size, view, turn, at: Instant::now() });
     }
 }
 
-fn picture() -> Option<[u32; 2]> {
-    PICTURE.lock().unwrap_or_else(|e| e.into_inner())
+/// book.rs: the Character page's portrait is on the page at this size this frame (A3).
+pub fn note_portrait(size: [u32; 2]) {
+    if enabled() {
+        *PORTRAIT.lock().unwrap_or_else(|e| e.into_inner()) = Some((size, Instant::now()));
+    }
+}
+
+fn picture() -> Option<Shown> {
+    PICTURE.lock().unwrap_or_else(|e| e.into_inner()).filter(|p| p.at.elapsed() < Duration::from_millis(300))
+}
+
+fn portrait() -> Option<[u32; 2]> {
+    PORTRAIT.lock().unwrap_or_else(|e| e.into_inner())
         .filter(|p| p.1.elapsed() < Duration::from_millis(300)).map(|p| p.0)
+}
+
+/// A live picture is wanted: the full picture or the portrait is on the page.
+fn wanted() -> bool {
+    picture().is_some() || portrait().is_some()
 }
 
 /// probe.rs's creation hooks: a 2D render target or depth texture the game just made.
@@ -316,23 +372,52 @@ fn compare(a: &[f32], b: &[f32]) -> (f32, f32) {
     (r, diff / n)
 }
 
-/// layout.rs, for the full character picture: the strips (top and bottom as fractions of the picture, and the uv
-/// rect each shows) that draw it breathing, while the live picture is in it. None: draw it as it is.
-pub fn breath_strips(name: &str) -> Option<Vec<([f32; 2], [f32; 4])>> {
-    if name != MODEL_FULL || !SHOWING.load(Ordering::Relaxed) || !FAKE_BREATH.load(Ordering::Relaxed) {
+/// layout.rs, for the book's character pictures while the live picture is in them: the strips (top and bottom as
+/// fractions of the book picture, and the uv rect of the live square each shows). One strip for the part of the
+/// square the picture's framing covers (the Backpack zooms on a category, the portrait on the head); many for the
+/// fallback breathing. None: draw the image as it is.
+pub fn image_strips(name: &str) -> Option<Vec<([f32; 2], [f32; 4])>> {
+    let k = match name {
+        MODEL_FULL => 0,
+        n if n == crate::pages::MODEL_PORTRAIT => 1,
+        _ => return None,
+    };
+    if !SHOWING.load(Ordering::Relaxed) {
         return None;
     }
+    let crop = CROPS.lock().unwrap_or_else(|e| e.into_inner())[k]?;
+    let inside = |uv: [f32; 4]| [crop[0] + uv[0] * (crop[2] - crop[0]), crop[1] + uv[1] * (crop[3] - crop[1]),
+                                 crop[0] + uv[2] * (crop[2] - crop[0]), crop[1] + uv[3] * (crop[3] - crop[1])];
+    if k == 0 && FAKE_BREATH.load(Ordering::Relaxed) {
+        return Some(breath_strips().into_iter().map(|(y, uv)| (y, inside(uv))).collect());
+    }
+    Some(vec![([0.0, 1.0], crop)])
+}
+
+/// The fallback breathing (ini live_preview_fake_breath): strips of the picture, each with its uv rect.
+fn breath_strips() -> Vec<([f32; 2], [f32; 4])> {
     let t = BREATH_START.get_or_init(Instant::now).elapsed().as_secs_f32();
     // 0 (breathed out) .. 1 (in), eased.
     let b = 0.5 - 0.5 * (t * std::f32::consts::TAU / BREATH_PERIOD).cos();
     // How much each height lifts (head and shoulders all of it, nothing from the hips down) and widens (the chest).
     let lift = |y: f32| BREATH_LIFT * b * ((0.55 - y) / (0.55 - 0.18)).clamp(0.0, 1.0);
     let widen = |y: f32| BREATH_WIDEN * b * (1.0 - ((y - 0.3) / 0.15).powi(2)).max(0.0);
-    Some((0..BREATH_STRIPS).map(|k| {
+    (0..BREATH_STRIPS).map(|k| {
         let (y0, y1) = (k as f32 / BREATH_STRIPS as f32, (k + 1) as f32 / BREATH_STRIPS as f32);
         let half = 0.5 / (1.0 + widen((y0 + y1) / 2.0));
         ([y0, y1], [0.5 - half, (y0 + lift(y0)).min(1.0), 0.5 + half, (y1 + lift(y1)).min(1.0)])
-    }).collect())
+    }).collect()
+}
+
+/// The uv rect of the mirror's square picture that a book picture of `size` pixels framed as `view` (centre height,
+/// view height in metres) shows, given what the square covers (`frame`), kept inside the square (the sampler
+/// wraps).
+fn crop(frame: [f32; 2], view: [f32; 2], size: [u32; 2]) -> [f32; 4] {
+    let h = (view[1] / frame[1]).clamp(0.05, 1.0);
+    let w = (h * size[0] as f32 / size[1].max(1) as f32).min(1.0);
+    let v0 = (0.5 - (view[0] + view[1] / 2.0 - frame[0]) / frame[1]).clamp(0.0, 1.0 - h);
+    let u0 = 0.5 - w / 2.0;
+    [u0, v0, u0 + w, v0 + h]
 }
 
 /// Finding the world scene's picture among the candidates: the back buffer and each candidate are read back in
@@ -434,8 +519,18 @@ pub struct LivePreview {
     drive: Drive,
     hud: Option<u8>,
     hud_since: Instant,
-    /// The book's own picture (the software renderer's texture) while the live one stands in for it.
-    soft: Option<(hudhook::imgui::TextureId, [f32; 2])>,
+    /// The book's own pictures (the software renderer's textures: full, portrait) while the live one stands in.
+    soft: [Option<(hudhook::imgui::TextureId, [f32; 2])>; 2],
+    /// What the mirror's square covers (centre height, view height in metres; ini `live_preview_frame`).
+    frame: [f32; 2],
+    /// Turning the mirror's model by the stick the way the book turns its picture (ini `live_preview_turn`), the
+    /// assumed full-stick rate, dead zone and direction, and whether a controller may be made up for it.
+    turn: bool,
+    turn_rate: f32,
+    stick_dead: f32,
+    turn_sign: f32,
+    fake_pad: bool,
+    turn_said: bool,
     showing: Option<usize>,
     shown_once: Vec<usize>,
     last_attempt: Option<Instant>,
@@ -453,7 +548,18 @@ impl LivePreview {
         if get("live_preview").as_deref() != Some("1") {
             return None;
         }
-        let set = get("live_preview_slot").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0).min(3);
+        let set = get("live_preview_slot").and_then(|v| v.parse::<usize>().ok()).unwrap_or(DEFAULT_EQUIPPED).min(3);
+        let float = |key: &str, default: f32| get(key).and_then(|v| v.parse::<f32>().ok()).filter(|v| v.is_finite())
+            .unwrap_or(default);
+        let frame = get("live_preview_frame")
+            .and_then(|v| v.split_once(',').and_then(|(a, b)| Some([a.trim().parse().ok()?, b.trim().parse().ok()?])))
+            .filter(|f: &[f32; 2]| f[1] > 0.1)
+            .unwrap_or(MIRROR_FRAME);
+        let turn = get("live_preview_turn").as_deref() != Some("0");
+        let turn_rate = float("live_preview_turn_rate", TURN_RATE).max(0.1);
+        let stick_dead = float("live_preview_stick_dead", STICK_DEAD).clamp(0.0, 0.9);
+        let turn_sign = if float("live_preview_turn_sign", 1.0) < 0.0 { -1.0 } else { 1.0 };
+        let fake_pad = get("live_preview_fake_pad").as_deref() == Some("1");
         let bare = get("live_preview_bare").and_then(|v| v.parse::<usize>().ok()).unwrap_or(DEFAULT_BARE).min(3);
         let world_state = get("live_world_state")
             .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok())
@@ -465,8 +571,9 @@ impl LivePreview {
         let fake_breath = get("live_preview_fake_breath").as_deref() == Some("1");
         ENABLED.store(true, Ordering::Relaxed);
         tracing::info!("live: live preview on (set {set}, bare set {bare}, assumed state {state:#x}, world state \
-                        {world_state:#x}, drive {drive}); F9 toggles equipped / bare, F10 arms / disarms the \
-                        book-driven mirror");
+                        {world_state:#x}, drive {drive}, frame {frame:?}, turn {turn} (full stick {turn_rate} rad/s, \
+                        dead zone {stick_dead}, sign {turn_sign}, fake pad {fake_pad})); F9 toggles equipped / bare, \
+                        F10 arms / disarms the book-driven mirror");
         Some(LivePreview {
             set,
             sets: [set, bare],
@@ -479,7 +586,14 @@ impl LivePreview {
             drive: if drive { Drive::Armed } else { Drive::Off },
             hud: None,
             hud_since: Instant::now(),
-            soft: None,
+            soft: [None; 2],
+            frame,
+            turn,
+            turn_rate,
+            stick_dead,
+            turn_sign,
+            fake_pad,
+            turn_said: false,
             showing: None,
             shown_once: Vec::new(),
             last_attempt: None,
@@ -499,12 +613,14 @@ impl LivePreview {
             || (self.hud == Some(0) && self.current().is_some())
     }
 
-    /// The target to show: the configured set's final picture (by stack), else the first one kept.
+    /// The target to show: the survey's live picture of the wanted kind (equipped / bare), else the configured
+    /// set's final picture (by stack), else the first one kept. The other kind's live picture never stands in (A1:
+    /// the equipped look stays equipped).
     fn current(&self) -> Option<(usize, u32)> {
         let sh = SHARED.lock().unwrap_or_else(|e| e.into_inner());
         let live: Vec<&Target> = sh.targets.iter().filter(|t| t.retired.is_none()).collect();
         let bare = usize::from(self.set == self.sets[1]);
-        let picked = self.anim.picks[bare].or(self.anim.picks[1 - bare]);
+        let picked = self.anim.picks[bare];
         live.iter().find(|t| Some(t.resource) == picked)
             .or_else(|| live.iter().find(|t| t.by_stack && t.set == Some(self.set)))
             .or_else(|| live.iter().filter(|t| t.by_stack).nth(self.set))
@@ -561,26 +677,20 @@ impl LivePreview {
         }
         self.world_search(render, hud);
         self.anim_survey(render, hud);
-        let box_size = picture();
+        let full = picture().filter(|b| b.size[0] > 0 && b.size[1] > 0);
+        let face = portrait().filter(|s| s[0] > 0 && s[1] > 0);
         let target = if hud != Some(3) { self.current() } else { None };
-        let copied = match (box_size, target) {
-            (Some([bw, bh]), Some((resource, size))) if bw > 0 && bh > 0 => {
-                // The middle of the square picture, cut to the book picture's shape.
-                let aspect = bw as f32 / bh as f32;
-                let region = if aspect <= 1.0 {
-                    let w = ((size as f32 * aspect).round() as u32).clamp(8, size);
-                    [(size - w) / 2, 0, (size - w) / 2 + w, size]
-                } else {
-                    let h = ((size as f32 / aspect).round() as u32).clamp(8, size);
-                    [0, (size - h) / 2, size, (size - h) / 2 + h]
-                };
-                let id = render.copy_texture(0, resource, self.state, region);
+        let copied = match (full.is_some() || face.is_some(), target) {
+            (true, Some((resource, size))) => {
+                // The whole square, every frame (one fixed size: the copy texture is made once); each book picture
+                // shows its own part of it (image_strips): the Backpack's category zoom, the Character page's head.
+                let id = render.copy_texture(0, resource, self.state, [0, 0, size, size]);
                 if id.is_none() {
                     self.say("copy texture not ready yet (made this frame, or the source couldn't be copied)");
                 }
-                id.map(|id| (id, resource, region))
+                id.map(|id| (id, resource, size))
             }
-            (None, _) => {
+            (false, _) => {
                 self.say("the book's character picture isn't on screen");
                 None
             }
@@ -589,32 +699,66 @@ impl LivePreview {
                          else { "menu up, but no mirror scene picture kept" });
                 None
             }
-            _ => None,
         };
+        let names = [MODEL_FULL, crate::pages::MODEL_PORTRAIT];
         match copied {
-            Some((id, resource, region)) => {
-                if textures.get(MODEL_FULL).is_some_and(|t| t.0 != id) {
-                    self.soft = textures.get(MODEL_FULL);
+            Some((id, resource, size)) => {
+                let crops = [full.map(|b| crop(self.frame, b.view, b.size)), face.map(|s| crop(self.frame, PORTRAIT_VIEW, s))];
+                for (k, name) in names.iter().enumerate() {
+                    match crops[k] {
+                        Some(_) => {
+                            if textures.get(name).is_some_and(|t| t.0 != id) {
+                                self.soft[k] = textures.get(name);
+                            }
+                            textures.set(name, id, [size as f32; 2]);
+                        }
+                        // This picture isn't live (not on the page, or an arrow on its own): its own texture back.
+                        None => {
+                            if let Some((soft, soft_size)) = self.soft[k].take() {
+                                textures.set(name, soft, soft_size);
+                            }
+                        }
+                    }
                 }
-                textures.set(MODEL_FULL, id, [(region[2] - region[0]) as f32, (region[3] - region[1]) as f32]);
+                *CROPS.lock().unwrap_or_else(|e| e.into_inner()) = crops;
                 if !self.shown_once.contains(&resource) {
                     self.shown_once.push(resource);
-                    tracing::info!("live: drawing {resource:#x} (set {}) in the book's picture, region {region:?}, \
-                                    state {:#x}", self.set, self.state);
+                    tracing::info!("live: drawing {resource:#x} (set {}) in the book's picture ({size}x{size}, \
+                                    crops {crops:?}), state {:#x}", self.set, self.state);
                 }
                 self.showing = Some(resource);
                 self.why_not.clear();
             }
             None => {
                 if self.showing.take().is_some() {
-                    if let Some((id, size)) = self.soft.take() {
-                        textures.set(MODEL_FULL, id, size);
+                    for (k, name) in names.iter().enumerate() {
+                        if let Some((soft, soft_size)) = self.soft[k].take() {
+                            textures.set(name, soft, soft_size);
+                        }
                     }
+                    *CROPS.lock().unwrap_or_else(|e| e.into_inner()) = [None; 2];
                     tracing::info!("live: back to the software picture");
                 }
             }
         }
         crate::input::pass_right_stick(self.showing.is_some());
+        // A1 / A2: the book's turning of its picture (the slow spin like Wizard101's, or a mouse drag) turns Elden
+        // Ring's model: CharaMake turns it by the right stick, so that stick is given to the game while the real one
+        // is at rest. The survey then also sees the redrawn picture change.
+        let rate = full.filter(|_| self.showing.is_some() && self.turn).map_or(0.0, |b| b.turn);
+        let stick = if rate.abs() < 1e-3 {
+            0.0
+        } else {
+            self.turn_sign * rate.signum() * (self.stick_dead + (1.0 - self.stick_dead)
+                * (rate.abs() / self.turn_rate).min(1.0))
+        };
+        crate::input::inject_right_x(stick, self.fake_pad);
+        if stick != 0.0 && !self.turn_said {
+            self.turn_said = true;
+            tracing::info!("live: turning the mirror's model with right stick x {stick:.2} (book turn {rate:.2} rad/s; \
+                            ini live_preview_turn_rate / _stick_dead / _turn_sign tune it, live_preview_turn = 0 \
+                            stops it)");
+        }
         SHOWING.store(self.showing.is_some(), Ordering::Relaxed);
         FAKE_BREATH.store(self.fake_breath && self.anim.done && self.anim.picks.iter().all(Option::is_none),
                           Ordering::Relaxed);
@@ -902,7 +1046,7 @@ impl LivePreview {
     /// Each frame after the HUD (UI thread): the book-driven mirror menu, and the world copy over Elden Ring's
     /// menu while the book drives it.
     pub fn frame(&mut self, ui: &Ui, textures: &Textures) {
-        let shown = picture().is_some();
+        let shown = wanted();
         let now = Instant::now();
         self.drive = match self.drive {
             Drive::Armed if shown && self.hud_stable(3, 1.0) && crate::game::faded() < 0.05
