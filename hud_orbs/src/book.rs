@@ -818,14 +818,23 @@ impl Book {
                     let name = tab_hit.map(|h| prefs.nodes[h].name.clone()).unwrap_or_default();
                     // The page's warp buttons (the arrows: The First Step; the house: Roundtable Hold) stay on the
                     // page around the map: close the map, then warp (follow_map).
-                    let warp = match (tab_hit, page_hit, self.layouts.get(TABS[tab_index(Tab::Map)].2)) {
-                        (None, Some(hit), Some(page)) => match pages::click(Tab::Map, page, hit, &mut self.state) {
-                            Action::Warp(flag) => Some(flag),
-                            _ => None,
-                        },
+                    let action = match (tab_hit, page_hit, self.layouts.get(TABS[tab_index(Tab::Map)].2)) {
+                        (None, Some(hit), Some(page)) => pages::click(Tab::Map, page, hit, &mut self.state),
+                        _ => Action::None,
+                    };
+                    let warp = match action {
+                        Action::Warp(flag) => Some(flag),
                         _ => None,
                     };
-                    if let Some(flag) = warp {
+                    if matches!(action, Action::OpenMap) {
+                        // The magnifier (plus while Elden Ring's map is open): back to Wizard101's map, the way a
+                        // book tab goes back (follow_map reopens the book on the Map page once the map is gone).
+                        tracing::info!("spellbook: magnifier on Elden Ring's map; back to the World Map page");
+                        self.after_map = Some(Tab::Map);
+                        self.tab = Tab::Map;
+                        self.opened_at = Instant::now() - Duration::from_secs(1);
+                        input::press_map();
+                    } else if let Some(flag) = warp {
                         tracing::info!("map page: warp flag {flag} (closing Elden Ring's map first)");
                         self.warp_after_map = Some(flag);
                         self.after_map = None;
@@ -1335,7 +1344,13 @@ impl Book {
         } else if !view.hole.or(view.picture).is_some_and(|h| layout::inside(mouse, h))
             && layout::inside(mouse, [0.0, 0.0, BOOK[0], BOOK[1]])
         {
-            // Over the book's frame around the map: the book's cursor, for its tabs.
+            // Over the book's frame around the map: the book's cursor, for its tabs, and the page buttons' plain
+            // tooltips (the magnifier's "back" among them).
+            if let Some((_, lines)) = view.tips.iter().rev().find(|(r, _)| layout::inside(mouse, *r)) {
+                if let Some((_, rest)) = lines.split_first().filter(|(f, _)| *f == layout::PLAIN_TIP) {
+                    self.draw_plain_tip(&canvas, rest, mouse, [width, height]);
+                }
+            }
             draw_cursor(&draw, &self.textures, pointer.pos, height);
         }
         (tab_hit, page_hit, in_model, mouse)

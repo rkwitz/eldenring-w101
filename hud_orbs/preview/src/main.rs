@@ -243,9 +243,15 @@ fn main() {
         ("6_map", pages::Tab::Map, 0, [0.0, 0.0], ""),
         // Wizard101's maps: on Unicorn Way (the player near the Ceren Nightchant / Olivia corner, the cursor on the
         // grace), and at the Roundtable Hold.
-        ("6c_map_street", pages::Tab::Map, 0, [0.352, 0.586], "place:street"),
+        ("6c_map_street", pages::Tab::Map, 0, [0.344, 0.586], "place:street"),
         ("6d_map_roundtable", pages::Tab::Map, 0, [0.5, 0.5], "place:roundtable"),
         ("6b_map_open", pages::Tab::Map, 0, [0.0, 0.0], "map"),
+        // Round 16 (map): the bosses' plates, the magnifier's plain tooltip on both maps.
+        ("6e_map_rattlebones", pages::Tab::Map, 0, [0.6044, 0.4967], "place:street"),
+        ("6f_map_blackhope", pages::Tab::Map, 0, [0.3737, 0.4225], "place:street"),
+        ("6g_map_zoom_tip", pages::Tab::Map, 0, [0.2773, 0.8306], "place:street"),
+        ("6h_map_open_zoom_tip", pages::Tab::Map, 0, [0.2773, 0.8306], "map"),
+        ("6i_map_home_tip", pages::Tab::Map, 0, [0.716, 0.8306], "place:street"),
         ("7_crafting", pages::Tab::Crafting, 0, [0.0, 0.0], ""),
         ("7g_crafting_tab_tip", pages::Tab::Crafting, 0, [0.318, 0.198], ""),
         ("7b_crafting_materials", pages::Tab::Crafting, 0, [0.0, 0.0], "materials"),

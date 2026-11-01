@@ -1610,6 +1610,83 @@ const MAP_ARROW_FPS: f32 = 8.0;
 const MAP_INSIDE: [f32; 4] = [0.121, 0.074, 0.961, 0.918];
 /// The First Step grace (AEG099_090_9011, entity 1042361981) in tile m60_42_36_00 (x, z), from the deployed MSB.
 const MAP_GRACE_AT: [f32; 2] = [-15.62, -60.549];
+/// The grace icon's nudge on the page (page pixels): Ryan (round 16 H2) had it slightly to the left.
+const MAP_GRACE_NUDGE: [f32; 2] = [-10.0, 0.0];
+/// The PlusMinusButton's art while Elden Ring's map is open: Button_Zoom's plus row (tools/w101_map_art.py).
+const MAP_ZOOM_PLUS: &str = "GUI/Buttons/Button_Zoom_Plus.png";
+
+/// Wizard101's parchment name plates (_Shared-WorldData GUI/Nameplates): what a map icon shows while the mouse is on
+/// it (Elite purple for bosses, Shop tan), and the place labels that are always shown.
+const MAP_PLATE_ELITE: &str = "GUI/Nameplates/NamePlate_128x64_Elite.png";
+const MAP_PLATE_SHOP: &str = "GUI/Nameplates/NamePlate_128x64_Shop.png";
+const MAP_LABEL_SCROLL: &str = "GUI/Nameplates/Location_Long_2_Line_52_pixels_high.png";
+const MAP_LABEL_POI: &str = "GUI/Nameplates/POI_128x64.png";
+/// The plates' text: Comic Sans bold (WizardNormal), the dark brown of Wizard101's own map labels (82,51,29, measured
+/// on the tutorial's picture of the map page, _Shared-WorldData GUI/Backgrounds/UWMap.dds).
+const MAP_PLATE_FONT: &str = "WizardNormal";
+const MAP_PLATE_INK: ImColor32 = ImColor32::from_rgb(82, 51, 29);
+/// Measured on that picture: the text is WizardNormal at 0.5 ("Skeletal" 63, "COMMONS" 88 page pixels wide, as
+/// drawn there) with lines 20 page pixels apart (closer than the font's own 47-pixel cell, so each line is placed by
+/// itself).
+const MAP_PLATE_SCALE: f32 = 0.5;
+const MAP_PLATE_LINE: f32 = 20.0;
+
+/// A map icon from Map_WC_Unicorn_Way.xml's icon list (rectangles in its 720 x 600 pixels): picture and rect, its
+/// hover plate and that plate's size, and the plate's text (WCNameplates.lang).
+///
+/// The hover plate as the tutorial's picture shows it (the Skeletal Pirate's): sized to its text (13 page pixels
+/// either side and 6 above and below, room for the plate art's torn edges; WizardNormal 0.5 widths below), its left
+/// edge 8 pixels inside the icon's right edge, centred on the icon's height, the icon drawn over it.
+struct MapIcon {
+    picture: &'static str,
+    rect: [f32; 4],
+    plate: &'static str,
+    plate_size: [f32; 2],
+    text: &'static str,
+}
+
+/// The bosses of Unicorn Way's towers that have rooms here: Lady Blackhope (tower T1; WCNameplates_00000178,
+/// "Blackhope" 75 wide) and Rattlebones (tower T2; WCNameplates_00000173, 91 wide), both on the Elite plate. Wizard101
+/// draws their tower icon (LocationIconUnicornWayTower) in the same spots before the quests reach them.
+const MAP_BOSSES: [MapIcon; 2] = [
+    MapIcon { picture: "GUI/NpcPortraits/Art_Portrait_GhostLady_Green.png", rect: [203.0, 216.0, 252.0, 265.0],
+              plate: MAP_PLATE_ELITE, plate_size: [101.0, 52.0], text: "Lady\nBlackhope" },
+    MapIcon { picture: "GUI/NpcPortraits/Portrait_Skeleton_Armored_A_MOB.png", rect: [518.0, 273.0, 567.0, 322.0],
+              plate: MAP_PLATE_ELITE, plate_size: [117.0, 32.0], text: "Rattlebones" },
+];
+
+/// Unicorn Way's place labels, always shown as Wizard101 does (its painting has them too, small and blurred; the
+/// game draws them again over the painting in its font). The rectangles are where the tutorial's picture shows them:
+/// each is the icon list's rectangle grown to fit its text and drawn on the same centre, covering the painted one.
+const MAP_LABELS: [(&str, [f32; 4], &str); 4] = [
+    (MAP_LABEL_SCROLL, [90.0, 417.0, 190.0, 465.0], "ARENA"),
+    (MAP_LABEL_SCROLL, [45.0, 282.0, 172.0, 338.0], "The\nCOMMONS"),
+    (MAP_LABEL_POI, [512.0, 68.0, 578.0, 128.0], "Hedge\nMaze"),
+    (MAP_LABEL_POI, [282.0, 442.0, 365.0, 500.0], "Unicorn\nPark"),
+];
+
+/// A parchment plate with its lines of text centred in it (the map's labels and hover plates).
+fn map_plate(v: &mut View, plate: &str, r: [f32; 4], text: &str) {
+    v.image(r, plate);
+    let lines: Vec<&str> = text.split('\n').collect();
+    let top = (r[1] + r[3]) / 2.0 - lines.len() as f32 * MAP_PLATE_LINE / 2.0;
+    for (i, line) in lines.iter().enumerate() {
+        let y = top + i as f32 * MAP_PLATE_LINE;
+        v.add([r[0], y, r[2], y + MAP_PLATE_LINE], line.trim(),
+              TextStyle::new(MAP_PLATE_FONT, MAP_PLATE_SCALE, MAP_PLATE_INK).centred());
+    }
+}
+
+/// A map icon that shows its parchment plate while the mouse is on it (MapIcon).
+fn map_icon(v: &mut View, icon: &MapIcon) {
+    v.image(icon.rect, icon.picture);
+    let r = icon.rect;
+    let (x, y) = (r[2] - 8.0, (r[1] + r[3]) / 2.0 - icon.plate_size[1] / 2.0);
+    let mut hover = View::default();
+    map_plate(&mut hover, icon.plate, [x, y, x + icon.plate_size[0], y + icon.plate_size[1]], icon.text);
+    hover.image(r, icon.picture);
+    v.hovers.push((r, Box::new(hover)));
+}
 /// Elden Ring tile m60_42_36_00 and the Roundtable Hold's map (m11_10).
 const STREET_TILE: [i32; 2] = [42, 36];
 const ROUNDTABLE: [u32; 2] = [11, 10];
@@ -1659,6 +1736,7 @@ fn map_at(uv: [f32; 2]) -> [f32; 2] {
 /// The grace marker's rectangle on the page.
 pub fn map_grace_rect() -> [f32; 4] {
     let p = map_at(street_uv(MAP_GRACE_AT[0], MAP_GRACE_AT[1]));
+    let p = [p[0] + MAP_GRACE_NUDGE[0], p[1] + MAP_GRACE_NUDGE[1]];
     let h = MAP_ICON / 2.0;
     [p[0] - h, p[1] - h, p[0] + h, p[1] + h]
 }
@@ -1690,14 +1768,20 @@ fn map(l: &Layout, d: &Data, v: &mut View, st: &mut State) {
     hide(l, v, &["txtGoHomeTimer", "txtGotoDormTimer"]);
     // Fishing and skeleton keys: nothing in Elden Ring.
     hide(l, v, &["FishingSprite", "SkeletonKeySprite"]);
-    for (button, lines) in [("GoHomeButton", ["Unicorn Way", "Travel to The First Step"]),
-                            ("GotoDormButton", ["Roundtable Hold", "Travel to the Roundtable Hold"]),
-                            ("PlusMinusButton", ["Elden Ring's Map", "Travel to the other Sites of Grace"])] {
+    // The buttons' hover texts: MapSpellbookPage.gui gives each an m_sTip (GUI_00001513 "Commons", GUI_00001514 "Zoom",
+    // GUI_00001515 "Go Home"), which Wizard101 shows in ToolTip.gui's white bubble; ours say where they go.
+    let zoom = if d.map_open { "Back to Wizard101's map" } else { "Elden Ring's map" };
+    for (button, text) in [("GoHomeButton", "Travel to The First Step"), ("GotoDormButton", "Travel to the Roundtable Hold"),
+                           ("PlusMinusButton", zoom)] {
         if let Some(b) = l.find(button) {
-            v.tip(l.nodes[b].rect, lines.iter().map(|s| s.to_string()).collect());
+            v.plain_tip(l.nodes[b].rect, vec![text.to_string()]);
         }
     }
     if d.map_open {
+        // The magnifier turns to plus (Button_Zoom's top row) while Elden Ring's map is open; clicking it goes back.
+        if let Some(b) = l.find("PlusMinusButton") {
+            v.node_art.insert(b, MAP_ZOOM_PLUS.into());
+        }
         // Elden Ring's own map, opened with the magnifier: drawn on the page as before.
         v.set(l.find("ZoneName"), centre("The Lands Between"));
         match d.map_picture {
@@ -1710,7 +1794,7 @@ fn map(l: &Layout, d: &Data, v: &mut View, st: &mut State) {
             None => v.hole = Some(map_rect(16.0 / 9.0)),
         }
         v.add([MAP_HOLE[0], MAP_HOLE[3] + 4.0, MAP_HOLE[2], MAP_HOLE[3] + 26.0],
-              "Close the map as usual, or click another tab of the book", TextStyle::new("WizardFancy", 0.45, BLACK).centred());
+              "Close the map as usual, or click the magnifier or another tab of the book", TextStyle::new("WizardFancy", 0.45, BLACK).centred());
         return;
     }
     // Wizard101's map under the page's own controls: the page's root window draws it in MAP_AREA.
@@ -1723,10 +1807,16 @@ fn map(l: &Layout, d: &Data, v: &mut View, st: &mut State) {
     v.rect.insert(0, MAP_AREA);
     v.node_images.insert(0, picture.into());
     let MapPlace::Street(player) = place else { return };
-    // The grace: hover for its name, click (or A) to travel there.
+    for (plate, r, text) in MAP_LABELS {
+        map_plate(v, plate, r, text);
+    }
+    for icon in &MAP_BOSSES {
+        map_icon(v, icon);
+    }
+    // The grace: hover for its name on a tan parchment plate ("The First Step" 116 wide), click (or A) to travel there.
     let grace = map_grace_rect();
-    v.image(grace, MAP_GRACE);
-    v.tip(grace, vec!["The First Step".into(), "Site of Grace: click to travel here".into()]);
+    map_icon(v, &MapIcon { picture: MAP_GRACE, rect: grace, plate: MAP_PLATE_SHOP, plate_size: [142.0, 32.0],
+                           text: "The First Step" });
     st.hits.push((grace, Hit::Warp(WARP_UNICORN_WAY)));
     if let Some(uv) = player {
         let p = map_at(uv);
