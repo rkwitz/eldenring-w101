@@ -31,6 +31,8 @@ mod itemdata;
 mod quests;
 #[path = "../../src/talk.rs"]
 mod talk;
+#[path = "../../src/questhelper.rs"]
+mod questhelper;
 #[path = "../../src/steam.rs"]
 mod steam;
 #[path = "../../src/model.rs"]
@@ -333,6 +335,20 @@ fn main() {
         ("10e_offer_accept", pages::Tab::Character, 0, [0.0, 0.0], "talk:olivia_dawnwillow|pesky_pirates|offer:1"),
         ("10f_offer_oryan", pages::Tab::Character, 0, [0.0, 0.0], "talk:private_connelly|saving_private_oryan|offer:1"),
         ("10g_intro_gamma", pages::Tab::Character, 0, [0.0, 0.0], "talk:intro|unicorn_way:0"),
+        // Round 18 (quests F1/F3/F4): Ambrose's offer, Gamma's tip, a goal that offers the next quest (its card with
+        // the goal's picture), Olivia cutting in, the mouse on yes, and the Quest Helper arrow.
+        ("15a_intro_ambrose", pages::Tab::Character, 0, [0.0, 0.0], "talk:intro|unicorn_way:0"),
+        ("15b_intro_offer_card", pages::Tab::Character, 0, [0.0, 0.0], "talk:intro|unicorn_way:2"),
+        ("15c_intro_after_gamma", pages::Tab::Character, 0, [0.0, 0.0], "talk:intro|unicorn_way|after:1"),
+        ("15d_connelly_goal1_page1", pages::Tab::Character, 0, [0.0, 0.0], "talk:private_connelly|unicorn_way|goal1:0"),
+        ("15e_connelly_goal1_offer_ghost_hunters", pages::Tab::Character, 0, [0.0, 0.0], "talk:private_connelly|unicorn_way|goal1:5"),
+        ("15f_ceren_olivia_cuts_in", pages::Tab::Character, 0, [0.0, 0.0], "talk:ceren_nightchant|ghost_hunters|goal3:4"),
+        ("15g_ceren_offer_skeleton_crew_mouse_yes", pages::Tab::Character, 0, [0.582, 0.873], "talk:ceren_nightchant|ghost_hunters|goal3:5"),
+        ("15h_oriel_offer_finding_out_why", pages::Tab::Character, 0, [0.0, 0.0], "talk:lady_oriel|monsters_and_mazes|goal2:5"),
+        ("15i_accepted_gamma", pages::Tab::Character, 0, [0.0, 0.0], "talk:private_connelly|ghost_hunters|accepted:0"),
+        ("14a_quest_helper_ahead", pages::Tab::Character, 0, [0.0, 0.0], "turn:0"),
+        ("14b_quest_helper_turned_left", pages::Tab::Character, 0, [0.0, 0.0], "turn:-70"),
+        ("14c_quest_helper_behind", pages::Tab::Character, 0, [0.0, 0.0], "turn:150"),
         // The loading screen, then Wizard101's page turn that many seconds in.
         ("12_loadscreen", pages::Tab::Character, 0, [0.0, 0.0], "load:"),
         ("12b_flip_0.35", pages::Tab::Character, 0, [0.0, 0.0], "load:0.35"),
@@ -370,6 +386,10 @@ fn main() {
             book.preview_map();
         }
         *game::CLOSE.lock().unwrap() = None;
+        *game::TURN.lock().unwrap() = show.strip_prefix("turn:").and_then(|t| t.parse::<f32>().ok()).unwrap_or(0.0).to_radians();
+        if show.starts_with("turn:") {
+            book.preview_closed();
+        }
         if let Some(at) = show.strip_prefix("markers") {
             book.preview_closed();
             let p: Vec<f32> = at.trim_start_matches(':').split(',').filter_map(|v| v.parse().ok()).collect();
@@ -437,6 +457,7 @@ fn main() {
             book.frame(ui, &mut cx);
             if !show.starts_with("poof") {
                 book.draw_markers(ui, &cx);
+                book.draw_quest_helper(ui, &cx);
                 book.draw_nameplates(ui, &cx);
             }
             if let Some(t) = show.strip_prefix("poof:").and_then(|t| t.parse::<f32>().ok()) {

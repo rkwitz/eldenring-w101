@@ -81,7 +81,15 @@ pub fn er_portraits(requests: &mut [crate::talk::Request], book: &std::path::Pat
 }
 
 /// Quests given by talking to their giver: (giver, assigned flag, the flag that makes it available).
-const OFFERS: [(&str, u32, u32); 3] = [
+/// Round 18 (quests F2): the main quests are offered too (Wizard101's flow: each one handed out by its giver on
+/// yes), so a giver whose quest was declined shows the "!" again (w101_quests.QUESTS "assign").
+const OFFERS: &[(&str, u32, u32)] = &[
+    ("private_connelly", 1042362010, 1042362009), // Ghost Hunters once Unicorn Way is complete
+    ("ceren_nightchant", 1042362020, 1042362019), // Skeleton Crew once Ghost Hunters is complete
+    ("ceren_nightchant", 1042362030, 1042362029), // Monsters and Mazes once Skeleton Crew is complete
+    ("lady_oriel", 1042362040, 1042362039), // Finding Out Why once Monsters and Mazes is complete
+    ("lady_oriel", 1042362050, 1042362049), // Who Could It Be Now? once Finding Out Why is complete
+    ("ceren_nightchant", 1042362060, 1042362059), // Sinister Skeleton once Who Could It Be Now? is complete
     ("olivia_dawnwillow", 1042362100, 1042362020), // Pesky Pirates once Skeleton Crew is assigned
     ("private_connelly", 1042362110, 1042362019), // Saving Private Oryan once Ghost Hunters is complete
     ("olivia_dawnwillow", 1042362150, 1042362109), // Fear of Fire once Pesky Pirates is complete

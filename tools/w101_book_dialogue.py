@@ -10,8 +10,12 @@ Usage: python -I w101_book_dialogue.py [npc_dialogue.json] dialogue.tsv
 
 Lines (tab-separated):
   R  request flag  key  speaker slug  speaker name  portrait (art path)  quest slug (or -)  kind (intro, goal<n>,
-     offer, underway, idle)
-  P  request flag  text                one page, in order (the speaker line of the file's pages is dropped)
+     offer, accepted, underway, idle)  card (round 18: the quest whose card and yes / no end the conversation, or -)
+  P  request flag  text  speaker name  portrait   one page, in order; the name and portrait (round 18) are the page's
+     own speaker's (Gamma's tips, Olivia cutting in), empty for the conversation's own speaker
+
+npc_dialogue.json version 2 (w101_npc_dialogue.py) has pages [speaker slug, text]; version 1 (round 15) had
+[message id, "<speaker>\\n<line>..."], whose speaker line is dropped.
 """
 import json
 import re
@@ -38,9 +42,16 @@ def main(argv):
         parts = key.split("|")
         speaker = parts[0]
         quest, kind = (parts[1], parts[2]) if len(parts) == 3 else (parts[1], "intro") if speaker == "intro" else ("-", parts[1])
-        lines.append(["R", flag, key, speaker, names.get(speaker, speaker), Q.PORTRAITS.get(speaker, ""), quest, kind])
-        for _message, text in pages.get(key, []):
-            lines.append(["P", flag, clean(text)])
+        own = Q.BY_SLUG[quest]["giver"] if speaker == "intro" else speaker
+        lines.append(["R", flag, key, speaker, names.get(own, own), Q.PORTRAITS.get(own, ""), quest, kind,
+                      Q.dialogue_card(key) or "-"])
+        for who, text in pages.get(key, []):
+            if isinstance(who, str):  # version 2: [speaker slug, text]
+                other = who != own
+                lines.append(["P", flag, text, names.get(who, who) if other else "",
+                              Q.PORTRAITS.get(who, "") if other else ""])
+            else:
+                lines.append(["P", flag, clean(text), "", ""])
     Path(argv[-1]).write_text("".join("\t".join(map(str, l)) + "\n" for l in lines), encoding="utf-8")
     print(f"{argv[-1]}: {sum(l[0] == 'R' for l in lines)} conversations, {sum(l[0] == 'P' for l in lines)} pages")
 

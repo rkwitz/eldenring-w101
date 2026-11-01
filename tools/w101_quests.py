@@ -15,8 +15,9 @@ They now live in 1042362xxx, clear of 1042362732-734:
   cages:    one flag per Bone Cage opened, CAGE_FLAG + c
   talk:     TALK_FLAG + npc index: rounds 10-14 set it on a talk press for the HUD's dialogue box; unused since round 15
             (ER's dialog box, DIALOG_OK / DIALOG_CANCEL = 1042362620 / 621, see emevd_quests.py)
-No flag is on in a new save, so the player starts with no quests: Unicorn Way is assigned on reaching Private
-Connelly at the street entrance, every other quest by the quest before it or by talking to its giver.
+No flag is on in a new save, so the player starts with no quests. Round 18: every quest is offered by its giver and
+assigned only when accepted (yes): Unicorn Way by Merle Ambrose's message on first reaching Private Connelly at the
+street entrance, every other quest by its giver in conversation (see QUESTS).
 
 Goal types: talk ("Talk" on the NPC character, CHARACTERS), goto (player inside a sphere region), defeat (count kills of
 the listed enemies while the goal is current, then the count reaches `count`; one kill counts for every current goal
@@ -138,22 +139,57 @@ PORTRAITS = {
     "olivia_dawnwillow": "GUI/NpcPortraits/Human_WCShopKeepF_A_NPC.png",  # WC-ST01-NPC03
     "lady_oriel": "GUI/NpcPortraits/Portrait_Seraph_Aerial_B_NPC.png",  # WC-ST01-NPC02
     "private_oryan": "GUI/NpcPortraits/Human_WCGuard_B.png",  # WC-ST01-NPC05
-    "intro": "GUI/NpcPortraits/Portrait_Owl_Gamma_A_NPC.png",
+    "merle_ambrose": "GUI/NpcPortraits/Art_Portrait_Ambrose.png",  # ObjectData/WC/WC-Ambrose-PreAV.xml
+    "gamma": "GUI/NpcPortraits/Portrait_Owl_Gamma_A_NPC.png",
 }
-SPEAKERS = {"intro": "Gamma"}
+PORTRAITS["intro"] = PORTRAITS["merle_ambrose"]
+# Names of the speakers who are not street characters (round 18: a page can have its own speaker, e.g. Gamma's tips
+# or Olivia cutting into Ceren's Skeleton Crew talk, as the client's lines have it).
+SPEAKERS = {"intro": "Merle Ambrose", "merle_ambrose": "Merle Ambrose", "gamma": "Gamma"}
+
+
+def follow_up(q, i):
+    """The quest the npc of talk goal i of quest q offers at the end of that same conversation, or None: goal i
+    completes q and that npc hands out a quest once q is complete (round 18 F2: Connelly closes Unicorn Way and offers
+    Ghost Hunters in one conversation, as in Wizard101)."""
+    g = q["goals"][i - 1]
+    if g["type"] != "talk" or i != len(q["goals"]):
+        return None
+    return next((r for r in QUESTS if r["assign"] and r["assign"][0] == "talk" and r["assign"][1] == g["target"]
+                 and r["assign"][2] == f"{q['slug']}:complete"), None)
+
+
+def dialogue_card(key):
+    """The quest whose card ends conversation `key` with Wizard101's yes / no (accept / decline), or None: the
+    intro's offer, an npc's offer, and a talk goal that hands out the next quest (follow_up)."""
+    parts = key.split("|")
+    if parts[0] == "intro":
+        return parts[1] if len(parts) == 2 else None
+    if len(parts) == 3 and parts[2] == "offer":
+        return parts[1]
+    if len(parts) == 3 and parts[2].startswith("goal"):
+        nxt = follow_up(BY_SLUG[parts[1]], int(parts[2][4:]))
+        return nxt["slug"] if nxt else None
+    return None
 
 
 def dialogue_keys():
     """{dialogue key: request flag}, in a fixed order that doesn't depend on the dialogue text: the intros of quests
-    assigned by walking somewhere, then per character its talk goals, the quests it offers, the quests it is part of
-    (underway) and its idle line."""
-    keys = [f"intro|{q['slug']}" for q in QUESTS if q["assign"] and q["assign"][0] == "goto"]
+    handed out on arrival (the giver's offer, then what follows it: Gamma's pointer), then per character its talk
+    goals, the quests it offers, the quests it is part of (underway) and its idle line."""
+    keys = []
+    for q in QUESTS:
+        if q["assign"] and q["assign"][0] == "intro":
+            keys += [f"intro|{q['slug']}", f"intro|{q['slug']}|after"]
     for slug, *_rest in CHARACTERS:
         talks = [(q, i) for q in QUESTS for i, g in enumerate(q["goals"], 1)
                  if g["type"] == "talk" and g["target"] == slug]
         keys += [f"{slug}|{q['slug']}|goal{i}" for q, i in talks]
-        keys += [f"{slug}|{q['slug']}|offer" for q in QUESTS
-                 if q["assign"] and q["assign"][0] == "talk" and q["assign"][1] == slug]
+        offers = [q for q in QUESTS if q["assign"] and q["assign"][0] == "talk" and q["assign"][1] == slug]
+        keys += [f"{slug}|{q['slug']}|offer" for q in offers]
+        # Round 18: what the giver says once the quest is accepted (and Gamma's tips that come with it), as
+        # Ambrose's "Splendid!" after Unicorn Way.
+        keys += [f"{slug}|{q['slug']}|accepted" for q in offers]
         keys += [f"{slug}|{q['slug']}|underway" for q in QUESTS
                  if q["giver"] == slug or any(t[0] is q for t in talks)]
         keys.append(f"{slug}|idle")
@@ -197,25 +233,40 @@ def goal(type_, target, count=1, after=None):
     return {"type": type_, "target": target, "count": count, "after": after}
 
 
-# n, slug, W101 quest id, giver, how it is assigned, goals, quests assigned on completion
+# n, slug, W101 quest id, giver, how it is assigned, goals, quests assigned on completion.
+# Round 18 (F2): every quest is handed out by its giver and only becomes the player's once accepted, as in Wizard101
+# (the client's own lines: Ambrose "Care to put your talents to the test?" / "Splendid!", Gamma "Olivia is offering
+# you a Side Quest. Once you accept it..."). assign:
+#   ("intro", region, None): Merle Ambrose's offer, shown as his message on first reaching `region` (in Wizard101 he
+#       gives Unicorn Way in his office before teleporting the student to the street; Gamma's pointer follows)
+#   ("talk", npc, prereq): the npc offers it once prereq ("quest" = assigned, "quest:complete") holds; when the talk
+#       goal that completes the prereq quest is with the same npc, the offer is the end of that same conversation
+#       (Connelly: Unicorn Way done -> Ghost Hunters), else the npc shows "!" and offers it on the next talk.
+# `then` is no longer used to hand out quests (rounds 10-17 assigned the next main quest without asking).
 QUESTS = [
-    dict(n=0, slug="unicorn_way", w101="1625BF", giver="merle_ambrose", assign=("goto", "street_start", None),
-         goals=[goal("talk", "private_connelly")], then=["ghost_hunters"]),
-    dict(n=1, slug="ghost_hunters", w101="1625C2", giver="private_connelly", assign=None,
+    dict(n=0, slug="unicorn_way", w101="1625BF", giver="merle_ambrose", assign=("intro", "street_start", None),
+         goals=[goal("talk", "private_connelly")], then=[]),
+    dict(n=1, slug="ghost_hunters", w101="1625C2", giver="private_connelly",
+         assign=("talk", "private_connelly", "unicorn_way:complete"),
          goals=[goal("defeat", "lost_soul", 2), goal("talk", "private_connelly"), goal("talk", "ceren_nightchant")],
-         then=["skeleton_crew"]),
-    dict(n=2, slug="skeleton_crew", w101="1625C1", giver="ceren_nightchant", assign=None,
-         goals=[goal("defeat", "skeletal_pirate", 2), goal("talk", "ceren_nightchant")], then=["monsters_and_mazes"]),
-    dict(n=3, slug="monsters_and_mazes", w101="1625C5", giver="ceren_nightchant", assign=None,
-         goals=[goal("goto", "hedge_maze"), goal("talk", "lady_oriel")], then=["finding_out_why"]),
-    dict(n=4, slug="finding_out_why", w101="1625CA", giver="lady_oriel", assign=None,
+         then=[]),
+    dict(n=2, slug="skeleton_crew", w101="1625C1", giver="ceren_nightchant",
+         assign=("talk", "ceren_nightchant", "ghost_hunters:complete"),
+         goals=[goal("defeat", "skeletal_pirate", 2), goal("talk", "ceren_nightchant")], then=[]),
+    dict(n=3, slug="monsters_and_mazes", w101="1625C5", giver="ceren_nightchant",
+         assign=("talk", "ceren_nightchant", "skeleton_crew:complete"),
+         goals=[goal("goto", "hedge_maze"), goal("talk", "lady_oriel")], then=[]),
+    dict(n=4, slug="finding_out_why", w101="1625CA", giver="lady_oriel",
+         assign=("talk", "lady_oriel", "monsters_and_mazes:complete"),
          goals=[goal("cages", "bone_cage", 4, after=[]), goal("defeat", "dark_fairy", 2, after=[]),
-                goal("goto", "hedge_maze", after=[1, 2]), goal("talk", "lady_oriel")], then=["who_could_it_be_now"]),
-    dict(n=5, slug="who_could_it_be_now", w101="1625CE", giver="lady_oriel", assign=None,
-         goals=[goal("talk", "ceren_nightchant")], then=["sinister_skeleton"]),
-    dict(n=6, slug="sinister_skeleton", w101="1625CF", giver="ceren_nightchant", assign=None,
+                goal("goto", "hedge_maze", after=[1, 2]), goal("talk", "lady_oriel")], then=[]),
+    dict(n=5, slug="who_could_it_be_now", w101="1625CE", giver="lady_oriel",
+         assign=("talk", "lady_oriel", "finding_out_why:complete"),
+         goals=[goal("talk", "ceren_nightchant")], then=[]),
+    dict(n=6, slug="sinister_skeleton", w101="1625CF", giver="ceren_nightchant",
+         assign=("talk", "ceren_nightchant", "who_could_it_be_now:complete"),
          goals=[goal("goto", "T2"), goal("boss", "rattlebones"), goal("goto", "near_ceren"),
-                goal("talk", "ceren_nightchant")], then=[]),  # Grim Tales (n=7) is off the street: not assigned
+                goal("talk", "ceren_nightchant")], then=[]),  # Grim Tales (n=7) is off the street: not offered
     dict(n=10, slug="pesky_pirates", w101="1625C9", giver="olivia_dawnwillow",
          assign=("talk", "olivia_dawnwillow", "skeleton_crew"),
          goals=[goal("defeat", "skeletal_pirate", 2), goal("talk", "olivia_dawnwillow")], then=[]),
@@ -224,11 +275,31 @@ QUESTS = [
          goals=[goal("goto", "near_oryan"), goal("talk", "private_oryan"), goal("goto", "T1"),
                 goal("boss", "lady_blackhope"), goal("talk", "private_oryan"), goal("talk", "private_connelly")],
          then=[]),
+    # Wizard101 gives The Power is Ours at the Then-Faire (off the street); Olivia stands in as its giver here.
     dict(n=15, slug="fear_of_fire", w101="173198", giver="olivia_dawnwillow",
          assign=("talk", "olivia_dawnwillow", "pesky_pirates:complete"),
          goals=[goal("goto", "H4"), goal("boss", "fear_of_fire"), goal("talk", "olivia_dawnwillow")], then=[]),
 ]
 BY_SLUG = {q["slug"]: q for q in QUESTS}
+
+# Round 18 (F3): the picture Wizard101's quest card shows for a goal (QuestInfoWindow's imgGoalObjective1): the
+# portrait of the one to talk to or defeat (GUI/NpcPortraits, the files the mobs' and NPCs' ObjectData name), the Bone
+# Cage's quest art; none for a place (Wizard101 shows a location picture there, and Unicorn Way's places have none).
+GOAL_PICTURES = {  # Root.wad ObjectData/WC/<template>.xml of each mob
+    "lost_soul": "GUI/NpcPortraits/Portrait_Ghost_LostSoul_MOB_A.png",  # Ghost-Blue-L01
+    "skeletal_pirate": "GUI/NpcPortraits/Portrait_Skeleton_Pirate_A_MOB.png",  # WC-UW-Skeleton-Pirate-L01
+    "dark_fairy": "GUI/NpcPortraits/Fairy_DarkMinion_MOB.png",  # WC-UW-Sprite-Dark-L01
+    "rattlebones": "GUI/NpcPortraits/Portrait_Skeleton_Armored_A_NPC.png",  # WC-StandIn-Rattlebones
+    "lady_blackhope": "GUI/NpcPortraits/Art_Portrait_GhostLady_Green.png",  # Heroic_WC_Blackhope
+    "fear_of_fire": "GUI/NpcPortraits/Art_Portrait_Scarecrow.png",  # WC_StandIn_FearOfFire
+    "bone_cage": "GUI/QuestButtons/Art_HD_WC_BoneCage.png",
+}
+GOAL_PICTURES.update({slug: PORTRAITS[slug] for slug in PORTRAITS if slug != "intro"})
+
+
+def goal_picture(g):
+    """The quest card's picture of goal g (an art path under w101_orbs/book/art), or ""."""
+    return GOAL_PICTURES.get(g["target"], "")
 
 
 def base(slug):

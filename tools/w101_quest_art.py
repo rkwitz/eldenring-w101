@@ -9,7 +9,9 @@ sign itself neither bobs nor scales (its scale keys are 1.0 throughout). Their t
   Quest_Start.png    _Shared-WorldData.wad Textures/Quest_Start__e315fd4.nif (NiPixelData, DXT5 256x256)
   Quest_Spiral.png   _Shared-WorldData.wad Textures/Quest_Spiral__9549b9f2.nif (the one Quest_Marker_Start names)
   Quest_Complete.png Root.wad Wizbang/Quest_Marker_Complete.nif, its embedded Quest_Complete.tga (2nd NiPixelData)
-Portraits: the NpcPortraits files the street NPCs' ObjectData templates name (w101_quests.PORTRAITS).
+Portraits: the NpcPortraits files the street NPCs' ObjectData templates name (w101_quests.PORTRAITS); round 18 adds
+Merle Ambrose and Gamma, the goal pictures (GOAL_PICTURES), two inline icons, and the quest arrow
+(Character/Arrow/Quest_Arrow_JT.nif's FX_Quest_Arrow_JT, as Quest/Quest_Arrow.png).
 
 The dialogue box itself (DialogWindow.gui, DialogImage.gui, their art) comes from w101_book_layout.py
 (--pages=DialogWindow,DialogImage).
@@ -31,7 +33,12 @@ MARKERS = [  # (wad, entry, index of the NiPixelData in the file, output)
     ("_Shared-WorldData.wad", "Textures/Quest_Start__e315fd4.nif", 0, "Wizbang/Quest_Start.png"),
     ("_Shared-WorldData.wad", "Textures/Quest_Spiral__9549b9f2.nif", 0, "Wizbang/Quest_Spiral.png"),
     ("Root.wad", "Wizbang/Quest_Marker_Complete.nif", 1, "Wizbang/Quest_Complete.png"),
+    # Round 18 (F4): the quest arrow under the player's feet (a flat 42.46 x 70 unit quad, its texture embedded).
+    ("Root.wad", "Character/Arrow/Quest_Arrow_JT.nif", 0, "Quest/Quest_Arrow.png"),
 ]
+# Round 18: the quest cards' goal pictures (QuestInfoWindow imgGoalObjective1, w101_quests.GOAL_PICTURES) and the
+# pictures inline in the dialogue text (w101_npc_dialogue.tidy).
+PICTURES = ["GUI/Emoticons/Emoticons_Question.png", "GUI/Icons/Icon_Star.png"]
 WADS = ["Root.wad", "_Shared-WorldData.wad"]
 
 
@@ -98,15 +105,36 @@ def pixel_images(data):
         pos += 1
 
 
+def key_outside(image):
+    """FX_Quest_Arrow_JT is DXT1 with no alpha: the arrow (pale yellow, black outline) on a flat orange ground. The
+    nif blends it (NiAlphaProperty), so the ground is not meant to show: it is made transparent by filling it from
+    the corners up to the black outline."""
+    from PIL import ImageDraw
+    rgb = image.convert("RGB")
+    w, h = rgb.size
+    for corner in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)]:
+        if rgb.getpixel(corner) != (255, 0, 255):
+            ImageDraw.floodfill(rgb, corner, (255, 0, 255), thresh=60)
+    out = image.copy()
+    px, m = rgb.load(), out.load()
+    for y in range(h):
+        for x in range(w):
+            if px[x, y] == (255, 0, 255):
+                m[x, y] = (0, 0, 0, 0)
+    return out
+
+
 def main():
     game_data, out = Path(sys.argv[1]), Path(sys.argv[2]) / "art"
     for wad, entry, index, target in MARKERS:
         image = pixel_images(wad_read(game_data / wad, entry))[index]
+        if target == "Quest/Quest_Arrow.png":
+            image = key_outside(image)
         (out / target).parent.mkdir(parents=True, exist_ok=True)
         image.save(out / target)
         print(target, image.size)
     entries = {wad: wad_entries(game_data / wad) for wad in WADS}
-    for portrait in sorted(set(Q.PORTRAITS.values())):
+    for portrait in sorted(set(Q.PORTRAITS.values()) | set(Q.GOAL_PICTURES.values()) | set(PICTURES)):
         source = str(Path(portrait).with_suffix(".dds")).replace("\\", "/")
         wad = next(w for w in WADS if source in entries[w])
         image = Image.open(BytesIO(wad_read(game_data / wad, source))).convert("RGBA")

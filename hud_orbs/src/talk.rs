@@ -8,7 +8,13 @@
 //! event withdraw the request, which closes the box.
 //!
 //! A quest offer's last page shows the quest card (QuestInfoWindow.gui, as on the book's Quests page) in
-//! DialogImage.gui's picture square over the box, and DialogWindow's own btnYes / btnNo pair as ACCEPT / DECLINE.
+//! DialogImage.gui's picture square over the box, and DialogWindow's own btnYes / btnNo pair ("yes" / "no").
+//!
+//! Round 18 (quests F1/F3): a conversation may change speaker from page to page (Gamma's tips after Ambrose, Olivia
+//! cutting in on Ceren), each page with its own name and portrait; any conversation can end in a quest's card (the R
+//! line's card column), as Wizard101's givers close one quest and offer the next in one talk; the card shows the
+//! goal's picture (QuestInfoWindow's imgGoalObjective1); and the buttons take mouse clicks, the cursor freed from
+//! Elden Ring's clip while the box is up (lib.rs).
 //!
 //! The lines are read at runtime from `w101_orbs/book/dialogue.tsv` (tools/w101_book_dialogue.py, made on Ryan's PC
 //! from his personal Wizard101 dialogue file; never in the repo).
@@ -28,12 +34,13 @@ pub const IMAGE: &str = "DialogImage";
 /// pixels over the bottom of Wizard101's 1024x768 screen; DialogImage's picture square is centred in it.
 pub const SCREEN: [f32; 2] = [1024.0, 768.0];
 /// Button labels: Wizard101's GUI.lang strings for the dialogue's page buttons (GUI_00000418 NEXT,
-/// GUI_00000489 BACK, GUI_00000448 DONE) and for accepting (GUI ACCEPT / DECLINE).
+/// GUI_00000489 BACK, GUI_00000448 DONE) and DialogWindow.gui's own btnYes / btnNo labels (round 18:
+/// GUI_00000378 "yes", GUI_00000379 "no"; round 17 had ACCEPT / DECLINE, which the client doesn't use here).
 const NEXT: &str = "NEXT";
 const BACK: &str = "BACK";
 const DONE: &str = "DONE";
-const ACCEPT: &str = "ACCEPT";
-const DECLINE: &str = "DECLINE";
+const YES: &str = "yes";
+const NO: &str = "no";
 
 /// One conversation of dialogue.tsv.
 #[derive(Clone, Debug, Default)]
@@ -45,15 +52,23 @@ pub struct Request {
     pub name: String,
     pub portrait: String,
     /// Quest slug, or "-" for an idle line.
+    #[allow(dead_code)]
     pub quest: String,
-    /// intro, goal<n>, offer, underway or idle.
+    /// intro, after, goal<n>, offer, accepted, underway or idle.
+    #[allow(dead_code)]
     pub kind: String,
+    /// Round 18: the quest whose card and yes / no end the conversation ("" for none): an offer, the intro, or a
+    /// talk goal that hands out the next quest (Connelly closing Unicorn Way and offering Ghost Hunters).
+    pub card: String,
     pub pages: Vec<String>,
+    /// Round 18: each page's speaker when it isn't the conversation's own (Gamma's tips, Olivia cutting in on
+    /// Ceren): (name, portrait), empty strings for the request's own.
+    pub speakers: Vec<(String, String)>,
 }
 
 impl Request {
     pub fn offer(&self) -> bool {
-        self.kind == "offer"
+        !self.card.is_empty()
     }
 }
 
@@ -73,11 +88,21 @@ pub fn load(path: &Path) -> Vec<Request> {
                 portrait: f[5].into(),
                 quest: f[6].into(),
                 kind: f[7].into(),
+                // Round 17 files have no card column: their offers end in their own quest's card.
+                card: match f.get(8).copied() {
+                    Some("-") | Some("") => String::new(),
+                    Some(card) => card.into(),
+                    None if f[7] == "offer" => f[6].into(),
+                    None => String::new(),
+                },
                 pages: Vec::new(),
+                speakers: Vec::new(),
             }),
             Some("P") if f.len() >= 3 => {
                 if let Some(r) = out.iter_mut().rev().find(|r| r.flag == flag) {
                     r.pages.push(f[2].to_string());
+                    let field = |i: usize| f.get(i).map(|v| v.to_string()).unwrap_or_default();
+                    r.speakers.push((field(3), field(4)));
                 }
             }
             _ => {}
@@ -119,7 +144,7 @@ impl Conversation {
         self.page + 1 >= self.pages.len()
     }
 
-    /// Whether the quest card and ACCEPT / DECLINE are up (an offer's last page).
+    /// Whether the quest card and yes / no are up (an offer's last page).
     pub fn choosing(&self) -> bool {
         self.offer && self.last()
     }
@@ -148,12 +173,13 @@ impl Conversation {
     /// DialogWindow's view for the current page: portrait, name, text and the buttons it shows.
     pub fn view(&self, window: &Layout, request: &Request) -> View {
         let mut v = View::default();
-        if !request.portrait.is_empty() {
+        let (name, portrait) = self.speaker(request);
+        if !portrait.is_empty() {
             if let Some(id) = window.find("imgPortrait") {
-                v.node_art.insert(id, request.portrait.clone());
+                v.node_art.insert(id, portrait.to_string());
             }
         }
-        v.set(window.find("txtTitle"), format!("<center>{}</center>", request.name));
+        v.set(window.find("txtTitle"), format!("<center>{name}</center>"));
         let text = self.pages.get(self.page).cloned().unwrap_or_default();
         if let Some(id) = window.find("txtMessage") {
             v.text.insert(id, text);
@@ -182,9 +208,19 @@ impl Conversation {
         label(&mut v, "btnRight", if self.last() { DONE } else { NEXT });
         v.show(window.find("btnYes"), choosing);
         v.show(window.find("btnNo"), choosing);
-        label(&mut v, "btnYes", ACCEPT);
-        label(&mut v, "btnNo", DECLINE);
+        label(&mut v, "btnYes", YES);
+        label(&mut v, "btnNo", NO);
         v
+    }
+
+    /// The current page's speaker, (name, portrait): the request's own unless the page names another.
+    pub fn speaker<'a>(&self, request: &'a Request) -> (&'a str, &'a str) {
+        match request.speakers.get(self.page) {
+            Some((name, portrait)) if !name.is_empty() => {
+                (name.as_str(), if portrait.is_empty() { request.portrait.as_str() } else { portrait.as_str() })
+            }
+            _ => (request.name.as_str(), request.portrait.as_str()),
+        }
     }
 }
 

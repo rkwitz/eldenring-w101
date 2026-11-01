@@ -8,6 +8,7 @@ Lines (tab-separated; text has tabs and line breaks replaced by spaces, markup t
   Q  slug  title  kind (main/side)  assigned flag  ready flag  complete flag  giver name  turn-in name
   G  slug  goal n  flag  after (goal numbers, comma-separated)  count  counter (0 = none; a flag number = a
      4-bit event value on that flag and the next three, most significant first; list:<flags> = how many are on)  text  place
+     picture (round 18: the quest card's goal picture, w101_quests.goal_picture, or empty)
   N  npc slug  talk flag  name
   X  slug  key  text            (the quest's dialogue lines in client order)
   D  slug  event  text          (optional: what an NPC says on a talk press, by event: offer, goal<n>, turnin,
@@ -19,6 +20,10 @@ goals, +8 ready, +9 complete); talk flags 1042362600.. are set on every talk pre
 import json
 import re
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+import w101_quests as Q  # noqa: E402
 
 TALK_FLAGS = {"private_connelly": 1042362600, "ceren_nightchant": 1042362601, "olivia_dawnwillow": 1042362602,
               "lady_oriel": 1042362603, "private_oryan": 1042362604}
@@ -44,14 +49,24 @@ def main():
         if not flags:
             continue
         slug = q["id"]
+        # Round 18: the flags the map's events use (w101_quests), not the json's, which may still hold the
+        # 1042366xxx block that never worked (round 10).
+        if slug in Q.BY_SLUG:
+            flags = {"assigned": Q.assigned(slug), "ready": Q.ready(slug), "complete": Q.complete(slug)}
         lines.append(["Q", slug, clean(q["title"]), q.get("kind", "main"), flags["assigned"], flags["ready"],
                       flags["complete"], name(q.get("giver", "")), name(q.get("turn_in", ""))])
         for n, g in enumerate(q["goals"], 1):
             counter = (g.get("counter") or {}).get("base_flag", 0)
+            if slug in Q.BY_SLUG:
+                counter = Q.counters().get((slug, n), 0)
             if g.get("target") == "bone_cage":
                 counter = "list:" + ",".join(str(f) for f in CAGE_FLAGS)
-            lines.append(["G", slug, n, g.get("flag") or 0, ",".join(str(a) for a in g.get("after") or []),
-                          g.get("count", 1), counter, clean(g["display"]), PLACES.get(g.get("location"), "Unicorn Way")])
+            ours = Q.BY_SLUG.get(slug, {}).get("goals", [])
+            picture = Q.goal_picture(ours[n - 1]) if n <= len(ours) else ""
+            flag = Q.goal_flag(slug, n) if n <= len(ours) else g.get("flag") or 0
+            lines.append(["G", slug, n, flag, ",".join(str(a) for a in g.get("after") or []),
+                          g.get("count", 1), counter, clean(g["display"]), PLACES.get(g.get("location"), "Unicorn Way"),
+                          picture])
         for key, text in sorted(q.get("text", {}).items()):
             text = clean(text)
             if text:

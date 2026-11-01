@@ -27,6 +27,7 @@ mod pages;
 mod probe;
 mod live_preview;
 mod quests;
+mod questhelper;
 mod talk;
 mod settings;
 mod options;
@@ -289,7 +290,8 @@ impl ImguiRenderLoop for Orbs {
         }
         // Elden Ring hides and confines the cursor; the open book needs it.
         ctx.io_mut().mouse_draw_cursor = false; // the book draws its own
-        if self.book.open {
+        // Round 18 (quests F3): also while the NPC dialogue box is up, so the mouse reaches its buttons.
+        if self.book.open || self.book.talking() {
             unsafe { windows_sys::Win32::UI::WindowsAndMessaging::ClipCursor(std::ptr::null()) };
         }
     }
@@ -345,6 +347,7 @@ impl ImguiRenderLoop for Orbs {
         self.book.frame(ui, &mut cx);
         if !self.loadscreen.holding() {
             self.book.draw_markers(ui, &cx);
+            self.book.draw_quest_helper(ui, &cx);
             if cx.settings.nameplates {
                 self.book.draw_nameplates(ui, &cx);
             }

@@ -1859,6 +1859,14 @@ pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
     };
     set(v, "txtName", q.title.clone());
     set(v, "txtGoal", q.goal.clone());
+    // Round 18 (quests F3): the goal's picture in Wizard101's goal square (imgGoalObjective1, hidden in the .gui
+    // until the client fills it): the creature to defeat, the NPC to talk to, the Bone Cage.
+    if !q.picture.is_empty() {
+        if let Some(id) = card.find("imgGoalObjective1") {
+            v.node_art.insert(id, q.picture.clone());
+            v.show(Some(id), true);
+        }
+    }
     // The other goals open now, across both objective boxes.
     hide(card, v, &["txtGoalObjective1", "txtGoalObjective2"]);
     if !q.other_goals.is_empty() {

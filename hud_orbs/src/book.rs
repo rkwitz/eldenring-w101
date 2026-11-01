@@ -448,7 +448,7 @@ impl Book {
         self.requests = talk::load(&folder.join("dialogue.tsv"));
         markers::er_portraits(&mut self.requests, folder); // round 18 G3: the Elden Ring faces
         self.quest_flags.extend(self.requests.iter().map(|r| r.flag));
-        for page in [talk::WINDOW, talk::IMAGE] {
+        for page in [talk::WINDOW, talk::IMAGE, crate::questhelper::LAYOUT] {
             match Layout::load(&folder.join(format!("{page}.lay"))) {
                 Ok(l) => {
                     self.layouts.insert(page, l);
@@ -742,6 +742,37 @@ impl Book {
                       ui.io().display_size);
     }
 
+    /// Wizard101's Quest Helper (questhelper.rs, round 18 quests F4): the yellow arrow toward the current goal of
+    /// the first quest in progress, and the goal's name, on the street in normal play.
+    pub fn draw_quest_helper(&mut self, ui: &Ui, cx: &Context) {
+        use crate::questhelper as qh;
+        if !cx.gameplay || !cx.hud || self.blocking() || self.map != MapState::Idle || self.flags.is_empty() {
+            return;
+        }
+        let (Some(game), Some(layout)) = (cx.game, self.layouts.get(qh::LAYOUT)) else { return };
+        let (Some(camera), Some(player)) = (game.camera(), game.position().and_then(qh::player_msb)) else { return };
+        let Some((active, goal)) = self.active.iter().find_map(|a| qh::target(a, player).map(|g| (a, g))) else { return };
+        let mut wanted = layout.images();
+        wanted.push(qh::ARROW.into());
+        self.textures.want(wanted);
+        let screen = ui.io().display_size;
+        let (s, origin) = qh::placement(layout, screen);
+        let draw = ui.get_background_draw_list();
+        qh::draw_arrow(&draw, &self.textures, layout, qh::bearing(&camera, player, goal), origin, s);
+        let canvas = Canvas {
+            draw: &draw,
+            textures: &self.textures,
+            fonts: &self.fonts,
+            origin,
+            s,
+            mouse: [-1.0e4; 2],
+            mouse_down: false,
+            alpha: 1.0,
+            hole: Cell::new(None),
+        };
+        layout::draw(layout, &qh::view(layout, active), &canvas, |_| true);
+    }
+
     /// Wizard101's nameplates over the Unicorn Way enemies (nameplates.rs) in normal play.
     pub fn draw_nameplates(&mut self, ui: &Ui, cx: &Context) {
         if !cx.gameplay || self.blocking() || self.map != MapState::Idle {
@@ -815,6 +846,11 @@ impl Book {
         self.last_hit = None;
         self.last_os = [-1.0, -1.0];
         self.last_frame = Instant::now();
+    }
+
+    /// Whether Wizard101's dialogue box (talk.rs) is up.
+    pub fn talking(&self) -> bool {
+        self.dialogue.is_some()
     }
 
     /// Whether the game's keyboard, mouse and controller input are blocked.
@@ -1754,7 +1790,7 @@ impl Book {
         let r = &self.requests[k];
         let mut pages = r.pages.clone();
         if pages.is_empty() && r.offer() {
-            pages = self.quests.offer_lines(&r.quest);
+            pages = self.quests.offer_lines(&r.card);
         }
         (!pages.is_empty()).then(|| Conversation { request: k, pages, page: 0, offer: r.offer(), opened: Instant::now() })
     }
@@ -1793,10 +1829,12 @@ impl Book {
         // next frame.
         let mut wanted = window.images();
         wanted.extend(view.node_art.values().cloned());
+        wanted.extend(view.text.values().flat_map(|t| layout::text_pictures(t)));
         if d.choosing() {
             if let Some(card) = self.layouts.get(pages::QUEST_CARD) {
                 wanted.extend(card.images());
             }
+            wanted.extend(self.quests.offer_card(&request.card).map(|a| a.picture).filter(|p| !p.is_empty()));
         }
         wanted.push(CURSOR.into());
         self.textures.want(wanted);
@@ -1814,7 +1852,7 @@ impl Book {
         };
         // An offer's last page: the quest card (QuestInfoWindow, as on the Quests page) in DialogImage's square.
         if d.choosing() {
-            if let (Some(card), Some(active)) = (self.layouts.get(pages::QUEST_CARD), self.quests.offer_card(&request.quest)) {
+            if let (Some(card), Some(active)) = (self.layouts.get(pages::QUEST_CARD), self.quests.offer_card(&request.card)) {
                 let square = talk::picture_rect(self.layouts.get(talk::IMAGE), screen);
                 let c = card.nodes[0].rect;
                 let (cw, ch) = (c[2] - c[0], c[3] - c[1]);

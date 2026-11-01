@@ -15,6 +15,9 @@ pub struct Goal {
     pub counter: Counter,
     pub text: String,
     pub place: String,
+    /// Round 18: the quest card's goal picture (QuestInfoWindow imgGoalObjective1: the creature's or NPC's
+    /// portrait, the Bone Cage), an art path, or "".
+    pub picture: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -55,6 +58,11 @@ pub struct Active {
     pub place: String,
     pub ready: bool,
     pub turn_in: String,
+    /// Round 18: the quest's slug, and the goal the card and the quest arrow point to (0-based: the first current
+    /// one, or once ready the last, the turn-in), with its picture.
+    pub slug: String,
+    pub goal_index: usize,
+    pub picture: String,
 }
 
 #[derive(Default)]
@@ -102,6 +110,7 @@ impl Quests {
                         counter,
                         text: f[7].into(),
                         place: f[8].into(),
+                        picture: f.get(9).map(|p| p.to_string()).unwrap_or_default(),
                     });
                 }
                 Some("X") if f.len() >= 4 => {
@@ -157,10 +166,11 @@ impl Quests {
                 current.push((i, g.text.clone(), g.place.clone(), progress));
             }
             let ready = flag(q.ready) || current.is_empty();
-            let (goal, place, progress) = match current.first() {
-                Some((_, text, place, progress)) if !flag(q.ready) => (text.clone(), place.clone(), *progress),
-                _ => (format!("Return to {}", q.turn_in), String::new(), None),
+            let (goal, place, progress, goal_index) = match current.first() {
+                Some((i, text, place, progress)) if !flag(q.ready) => (text.clone(), place.clone(), *progress, *i),
+                _ => (format!("Return to {}", q.turn_in), String::new(), None, q.goals.len().saturating_sub(1)),
             };
+            let picture = q.goals.get(goal_index).map(|g| g.picture.clone()).unwrap_or_default();
             out.push(Active {
                 title: q.title.clone(),
                 main: q.main,
@@ -170,6 +180,9 @@ impl Quests {
                 place: if place.is_empty() { "Unicorn Way".into() } else { place },
                 ready,
                 turn_in: q.turn_in.clone(),
+                slug: q.slug.clone(),
+                goal_index,
+                picture,
             });
         }
         out.sort_by_key(|a| !a.main);

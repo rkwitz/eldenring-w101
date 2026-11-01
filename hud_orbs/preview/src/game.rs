@@ -8,6 +8,9 @@ pub struct Game;
 /// A giver's MSB position to put the preview camera in front of (11b/11c_markers_close).
 pub static CLOSE: std::sync::Mutex<Option<[f32; 3]>> = std::sync::Mutex::new(None);
 
+/// The camera turned this far (radians, clockwise from up the street): the quest helper shots (14_quest_helper*).
+pub static TURN: std::sync::Mutex<f32> = std::sync::Mutex::new(0.0);
+
 /// Quest flags the preview pretends are on.
 const FLAGS: &[u32] = &[10000800, 14000800, 105, 110, 1042362000, 1042362001, 1042362009, 1042362010, 1042362500 + 2, 1042362040, 1042362540,
                         1042362541, 1042362100, 1042362011, 1042362109,
@@ -68,7 +71,8 @@ impl Game {
 
     /// A camera behind the player looking up the street at the quest givers (physics space = chunk space here).
     pub fn camera(&self) -> Option<crate::markers::Camera> {
-        let f = [if CLOSE.lock().unwrap().is_some() { 0.0f32 } else { 0.02 }, 0.0, 1.0];
+        let turn = *TURN.lock().unwrap();
+        let f = [if CLOSE.lock().unwrap().is_some() { 0.0f32 } else { 0.02 } + turn.sin(), 0.0, turn.cos()];
         let n = (f[0] * f[0] + f[2] * f[2]).sqrt();
         let f = [f[0] / n, 0.0, f[2] / n];
         let (c, player) = self.spot();

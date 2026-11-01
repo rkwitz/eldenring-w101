@@ -4,8 +4,10 @@ top of event 0 and restarting on rest. Running it again replaces them, and it le
 can be applied on top of other helpers' changes.
 
 Events, in id order (all flags in w101_quests' docstring):
-  assign  quests assigned by walking somewhere (Unicorn Way: reaching Private Connelly's sphere), with the
-          quest's intro (dialogue key "intro|<quest>": Gamma pointing the player to Connelly).
+  assign  quests offered on arrival (Unicorn Way: reaching Private Connelly's sphere): the giver's offer
+          ("intro|<quest>": Merle Ambrose's lines and the quest card with yes / no), the quest assigned only on yes,
+          then "intro|<quest>|after" (Gamma pointing the player to Connelly). Round 18; rounds 10-17 assigned it
+          before showing anything.
   goal    one per goal that is not a talk goal: END if done; WAIT for the quest's assigned flag and the goals before
           it; then wait for the goal's own condition (player in the sphere / kill counter >= N / every cage flag /
           the boss alive and then dead) and set the goal flag; the second-to-last goal also sets "ready", the last
@@ -176,20 +178,32 @@ def current(q, i):
             + [(Q.goal_flag(q["slug"], j), 1) for j in Q.after_of(q, i)])
 
 
+def after_yes(npc, quest, entity):
+    """Round 18 (F1): what the giver (and Gamma) say once quest `quest` is accepted ("<npc>|<quest>|accepted"), when
+    the dialogue file has lines for it. The quest is already assigned, so closing it early loses nothing."""
+    key = f"{npc}|{quest}|accepted"
+    return talk(key, entity) if DIALOGUE.get(key) else []
+
+
 def npc_event(slug, entity):
     body = [if_button(0, Q.TALK_NPC_BUTTON, entity)]
     for q in Q.QUESTS:  # 1. talk goals
         for i, g in enumerate(q["goals"], 1):
             if g["type"] == "talk" and g["target"] == slug:
                 key = f"{slug}|{q['slug']}|goal{i}"
-                body += block(current(q, i), goal_done(q, i) + talk(key, entity) + [RESTART])
+                # Round 18 (F2): a goal that completes its quest may end in the offer of the next one (w101_quests.
+                # follow_up); it is assigned only on yes. On no, or the box closed, the quest stays offered (block 2).
+                nxt = Q.follow_up(q, i)
+                accepted = assign(nxt["slug"]) + after_yes(slug, nxt["slug"], entity) if nxt else []
+                body += block(current(q, i), goal_done(q, i) + talk(key, entity) + accepted + [RESTART])
     for q in Q.QUESTS:  # 2. side quests offered by talking
         if q["assign"] and q["assign"][0] == "talk" and q["assign"][1] == slug:
             conditions = [(Q.assigned(q["slug"]), 0)]
             if q["assign"][2]:
                 conditions.append((prereq_flag(q["assign"][2]), 1))
             # Round 17 (F3): assigned only once the offer is accepted (talk() restarts on decline / walking off).
-            body += block(conditions, talk(f"{slug}|{q['slug']}|offer", entity) + assign(q["slug"]) + [RESTART])
+            body += block(conditions, talk(f"{slug}|{q['slug']}|offer", entity) + assign(q["slug"])
+                            + after_yes(slug, q["slug"], entity) + [RESTART])
     for q in Q.QUESTS:  # 3. underway
         key = f"{slug}|{q['slug']}|underway"
         if DIALOGUE.get(key):
@@ -200,15 +214,23 @@ def npc_event(slug, entity):
 def quest_events():
     """[(event id, instructions)] of every quest event, in id order."""
     events = []
-    for q in Q.QUESTS:  # assign by walking somewhere (talk assigns are in the NPC events)
-        if not q["assign"] or q["assign"][0] != "goto":
+    for q in Q.QUESTS:  # offered on arrival (talk offers are in the NPC events)
+        if not q["assign"] or q["assign"][0] != "intro":
             continue
         _how, target, prereq = q["assign"]
+        region = Q.REGION_ENTITY[target]
         body = [end_if_flag(Q.assigned(q["slug"]))]
         if prereq:
             body.append(wait_flag(prereq_flag(prereq)))
-        body.append(if_area(0, 1, Q.REGION_ENTITY[target]))
-        events.append(body + assign(q["slug"]) + talk(f"intro|{q['slug']}") + [END])
+        body.append(if_area(0, 1, region))
+        # Round 18 (F2): the giver's offer (Merle Ambrose's lines and the quest card with yes / no); the quest is
+        # the player's only on yes. On no, or the box closed, it is offered again on the next arrival (after leaving
+        # the region), never assigned behind the player's back as in rounds 10-17.
+        request = REQUESTS[f"intro|{q['slug']}"]
+        body += [set_flag(Q.DIALOG_OK, 0), set_flag(Q.DIALOG_CANCEL, 0), set_flag(request),
+                 if_flag(-1, 1, Q.DIALOG_OK), if_flag(-1, 1, Q.DIALOG_CANCEL), if_group(0, 1, -1), set_flag(request, 0),
+                 skip_if_flag(2, Q.DIALOG_OK, 1), if_area(0, 0, region), RESTART]
+        events.append(body + assign(q["slug"]) + talk(f"intro|{q['slug']}|after") + [END])
     counters = Q.counters()
     kills = []  # (instructions, parameters, enemies)
     for q in Q.QUESTS:  # goals (talk goals are in the NPC events)
