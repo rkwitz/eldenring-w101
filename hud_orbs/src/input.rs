@@ -67,6 +67,8 @@ static PRESSED: AtomicU16 = AtomicU16::new(0);
 static HELD: AtomicU16 = AtomicU16::new(0);
 static RIGHT_Y: AtomicI16 = AtomicI16::new(0);
 static LEFT_Y: AtomicI16 = AtomicI16::new(0);
+/// The left stick's horizontal axis (the map page's cursor).
+static LEFT_X: AtomicI16 = AtomicI16::new(0);
 /// When a controller last answered, in milliseconds after START_TIME (0 = never).
 static PAD_SEEN: AtomicU64 = AtomicU64::new(0);
 static PREVIOUS: [AtomicU16; 4] = [AtomicU16::new(0), AtomicU16::new(0), AtomicU16::new(0), AtomicU16::new(0)];
@@ -186,6 +188,11 @@ pub fn held() -> (u16, f32, f32) {
         LEFT_Y.load(Ordering::SeqCst) as f32 / 32767.0,
         RIGHT_Y.load(Ordering::SeqCst) as f32 / 32767.0,
     )
+}
+
+/// Both sticks now, -1 to 1: left x, left y, right x, right y (y up).
+pub fn sticks() -> [f32; 4] {
+    [&LEFT_X, &LEFT_Y, &RIGHT_X, &RIGHT_Y].map(|a| a.load(Ordering::SeqCst) as f32 / 32767.0)
 }
 
 /// Whether a controller answered in the last few seconds.
@@ -368,6 +375,7 @@ unsafe fn filter_pad(user: u32, result: u32, state: *mut XInputState) {
     }
     HELD.store(buttons, Ordering::SeqCst);
     LEFT_Y.store(pad.left_y, Ordering::SeqCst);
+    LEFT_X.store(pad.left_x, Ordering::SeqCst);
     RIGHT_Y.store(pad.right_y, Ordering::SeqCst);
     RIGHT_X.store(pad.right_x, Ordering::SeqCst);
     PAD_SEEN.store(now_ms(), Ordering::SeqCst);

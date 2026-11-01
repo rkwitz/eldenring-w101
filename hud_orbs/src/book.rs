@@ -47,6 +47,9 @@ const TRAVEL: f32 = 30.0;
 /// Turning speed of the character picture: right stick (radians per second), mouse drag (radians per pixel).
 const TURN_STICK: f32 = 3.0;
 const TURN_MOUSE: f32 = 0.012;
+/// The map page's stick cursor: dead zone, and full-tilt speed in screen heights per second.
+const MAP_STICK_DEAD: f32 = 0.2;
+const MAP_STICK_SPEED: f32 = 0.8;
 /// Wizard101's item tooltip (itemStatsInfoViewed.gui / itemStatsInfoEquipped.gui): Art_Message_Box's frame
 /// pieces (the blue ones for what is worn) around Background_Message_Box04 (black, at alpha A0), the name in
 /// WizardFancy 0.55 yellow centred at 15..38, the stat lines from y 40 with 15 px margins, and for equipped items
@@ -676,7 +679,7 @@ impl Book {
         self.follow_map(cx);
         self.quit_follow(cx);
         let pressed = input::take_pressed();
-        let pointer = self.pointer(ui);
+        let pointer = self.pointer(ui, dt);
         if cx.game.is_some() {
             self.poll_quests(cx);
         }
@@ -740,7 +743,8 @@ impl Book {
             let key_b = ui.is_key_pressed_no_repeat(Key::B);
             if cx.gameplay && self.map == MapState::Idle && (pressed & input::BACK != 0 || key_b) {
                 self.set_open(true);
-                self.map_on_open = self.tab == Tab::Map;
+                // The World Map page shows Wizard101's maps now; Elden Ring's map opens only from its magnifier.
+                self.map_on_open = false;
             }
             input::set_book_open(self.blocking());
             return;
@@ -834,10 +838,16 @@ impl Book {
             self.settings_ok(cx);
             return;
         }
+        let mut pointer = pointer;
         if pressed & input::A != 0 || ui.is_key_pressed_no_repeat(Key::Enter) {
-            self.select(self.tab, true);
-            if !self.open {
-                return;
+            if self.tab == Tab::Map {
+                // The map page: A / Enter clicks where the cursor is (the grace, the buttons).
+                pointer.clicked = true;
+            } else {
+                self.select(self.tab, true);
+                if !self.open {
+                    return;
+                }
             }
         }
 
@@ -858,6 +868,13 @@ impl Book {
         let hit = self.state.hits.iter().rev().find(|(r, _)| layout::inside(mouse, *r)).map(|h| h.1);
         if let Some(pages::Hit::Setting(row, step)) = hit {
             self.change_setting(row, step, cx);
+            return;
+        }
+        if let Some(pages::Hit::Warp(flag)) = hit {
+            // The grace on the map page: the same warp as the page's travel buttons.
+            tracing::info!("map page: grace marker, warp flag {flag}");
+            game::set_event_flag(flag, true);
+            self.set_open(false);
             return;
         }
         if let Some(hit) = hit {
@@ -954,7 +971,7 @@ impl Book {
                 self.state.sub = i;
                 self.state.page = 0;
             }
-            Hit::Setting(..) => {} // handled before (book::frame)
+            Hit::Setting(..) | Hit::Warp(_) => {} // handled before (book::frame)
         }
     }
 
@@ -989,7 +1006,7 @@ impl Book {
 
     /// The mouse: the system cursor when it moves, else DirectInput's movement (Elden Ring can hold the system
     /// cursor still); clicks from either, counted once.
-    fn pointer(&mut self, ui: &Ui) -> Pointer {
+    fn pointer(&mut self, ui: &Ui, dt: f32) -> Pointer {
         let (dx, dy, wheel, buttons, _) = input::take_mouse();
         let io = ui.io();
         let [width, height] = io.display_size;
@@ -1006,6 +1023,14 @@ impl Book {
         }
         if valid {
             self.last_os = os;
+        }
+        if self.open && self.tab == Tab::Map && self.map == MapState::Idle {
+            // The map page: either stick moves the cursor over the map (the map itself stays still).
+            let [lx, ly, rx, ry] = input::sticks();
+            let live = |v: f32| if v.abs() < MAP_STICK_DEAD { 0.0 } else { (v.abs() - MAP_STICK_DEAD) / (1.0 - MAP_STICK_DEAD) * v.signum() };
+            let (x, y) = ((live(lx) + live(rx)).clamp(-1.0, 1.0), (live(ly) + live(ry)).clamp(-1.0, 1.0));
+            let step = height * MAP_STICK_SPEED * dt;
+            self.cursor = [self.cursor[0] + x * x.abs() * step, self.cursor[1] - y * y.abs() * step];
         }
         self.cursor = [self.cursor[0].clamp(0.0, (width - 1.0).max(0.0)), self.cursor[1].clamp(0.0, (height - 1.0).max(0.0))];
         let di_down = buttons & 1 != 0;
@@ -1050,6 +1075,7 @@ impl Book {
                 let [w, h] = ui.io().display_size;
                 w / h.max(1.0)
             }),
+            position: cx.position,
             achieved: &self.achieved,
         };
         if let Some(page) = self.layouts.get(page_name) {
@@ -1091,6 +1117,8 @@ impl Book {
         wanted.extend(view.images.iter().map(|i| i.1.clone()));
         wanted.extend(view.tinted.iter().map(|i| i.1.clone()));
         wanted.extend(view.node_art.values().cloned());
+        // Art drawn in a node's place (the map page's Wizard101 map); "@..." pictures are skipped by want().
+        wanted.extend(view.node_images.values().cloned());
         wanted.extend(view.backs.iter().map(|i| i.1.clone()));
         wanted.extend(view.frames.iter().flat_map(|f| f.1.iter().flatten().cloned()));
         wanted.push(CURSOR.into());
@@ -1514,8 +1542,9 @@ impl Book {
         }
         input::set_book_open(self.blocking());
     }
-    /// Shows `tab`; `activate` also does what the tab does (World Map opens ER's map, Close closes the book).
-    fn select(&mut self, tab: Tab, activate: bool) {
+    /// Shows `tab` (Close closes the book). `_activate`: a click or A on the tab itself (the World Map tab used to
+    /// open Elden Ring's map; now its page is Wizard101's map).
+    fn select(&mut self, tab: Tab, _activate: bool) {
         if tab != self.tab {
             self.state.reset();
         }
@@ -1524,8 +1553,7 @@ impl Book {
         }
         match tab {
             Tab::Close => self.set_open(false),
-            // Turning to the World Map opens Elden Ring's map straight away.
-            Tab::Map if activate || self.open => self.open_map_now(None),
+            // The World Map page is Wizard101's map; Elden Ring's opens from the page's magnifier (Action::OpenMap).
             _ => {}
         }
     }

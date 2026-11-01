@@ -120,7 +120,7 @@ pub fn marker(npc: &str, flag: &dyn Fn(u32) -> bool) -> Option<Marker> {
 }
 
 /// A map block's tile (x, z) in 256 m units and its scale, or None outside the open world (area 60).
-fn tile(block: i32) -> Option<[f32; 2]> {
+pub(crate) fn tile(block: i32) -> Option<[f32; 2]> {
     let b = block as u32;
     if b >> 24 != 60 {
         return None;

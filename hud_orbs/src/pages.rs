@@ -122,6 +122,8 @@ pub enum Hit {
     Sub(usize),
     /// A settings row's arrow drawn by the page (rows 6 and 7): row, step.
     Setting(usize, i32),
+    /// A teleport marker on the map page (the grace): the warp flag to set, as Action::Warp.
+    Warp(u32),
 }
 
 pub enum Action {
@@ -165,6 +167,8 @@ pub struct Data<'a> {
     /// With the map open: a copy of the game's screen (the map) to draw on the page, and the screen's width /
     /// height. None: the page is cut out to show the map behind it.
     pub map_picture: Option<f32>,
+    /// The player's place (Game::position: chunk position, block, block origin), for the map page.
+    pub position: Option<([f32; 3], i32, i32)>,
     /// Per ACHIEVEMENTS entry: earned (its event flag), or None when not tracked / not readable.
     pub achieved: &'a [Option<bool>],
 }
@@ -431,7 +435,7 @@ pub fn bind(tab: Tab, l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         Tab::Pets => pets(l, d, st, v),
         Tab::Deck => deck(l, d, st, v),
         Tab::Quests => quests(l, d, st, v),
-        Tab::Map => map(l, d, v),
+        Tab::Map => map(l, d, v, st),
         Tab::Crafting => crafting(l, d, st, v),
         Tab::Help => help(l, st, v),
         Tab::Settings => settings(l, d, st, v),
@@ -1512,28 +1516,91 @@ pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Map: MapSpellbookPage.gui. Wizard101 draws the zone map here; this book opens Elden Ring's own map instead.
+// Map: MapSpellbookPage.gui with Wizard101's own maps (tools/w101_map_art.py): Unicorn Way's zone map with the grace
+// to travel to and the player's green arrow; at the Roundtable Hold, the whole of Wizard City with no marker (as when
+// the map is opened from your house). Elden Ring's map (fast travel to every other grace) is behind the magnifier.
 
 /// The part of the map page that is cut out to show Elden Ring's map while it is open.
 pub const MAP_HOLE: [f32; 4] = [36.0, 56.0, 724.0, 524.0];
 /// The copy of the game's screen while its map is open (book.rs).
 pub const MAP_PICTURE: &str = "@screen/map";
+/// Wizard101's maps (GUI-WorldData.wad Maps/*.dds) and markers (_Shared-WorldData.wad).
+pub const MAP_UNICORN_WAY: &str = "GUI/Maps/Map_WC_Unicorn_Way.png";
+pub const MAP_WIZARD_CITY: &str = "GUI/Maps/Map_WC.png";
+/// The green "you are here" arrow: 8 frames of 64x64, 4 across and 2 down, its tip at the bottom middle.
+pub const MAP_PLAYER: &str = "GUI/Buttons/Button_Player_Position.png";
+/// Wizard101's teleporter icon (GUI/QuestButtons), for the grace.
+pub const MAP_GRACE: &str = "GUI/QuestButtons/Art_Quest_Teleporter.png";
+/// Where the map picture goes: Map_WC_Unicorn_Way.xml gives the map 720 x 600 pixels, the page's full height. The
+/// picture is painted as the open book itself (spine, gold corners), so it sits at the page's left edge, its spine
+/// and corners on the book's (centred, they showed twice); the zone name's scroll (ControlSprite 120,0..680,53) and
+/// the buttons (y 529..579) sit on its wooden frame. Its icons' rectangles are in these 720 x 600 pixels.
+pub const MAP_AREA: [f32; 4] = [0.0, 0.0, 720.0, 600.0];
+/// Icon size on the map: Map_WC_Unicorn_Way.xml draws quest buttons (Location_Universal, the bone cages) 39 x 39.
+const MAP_ICON: f32 = 39.0;
+/// The arrow's size on the page and its frame rate (the texture's 8 frames).
+const MAP_ARROW: f32 = 40.0;
+const MAP_ARROW_FPS: f32 = 8.0;
+/// The part of the Unicorn Way picture inside its painted frame (0..1 of the picture): the player's arrow shows only
+/// in here.
+const MAP_INSIDE: [f32; 4] = [0.121, 0.074, 0.961, 0.918];
+/// The First Step grace (AEG099_090_9011, entity 1042361981) in tile m60_42_36_00 (x, z), from the deployed MSB.
+const MAP_GRACE_AT: [f32; 2] = [-15.62, -60.549];
+/// Elden Ring tile m60_42_36_00 and the Roundtable Hold's map (m11_10).
+const STREET_TILE: [i32; 2] = [42, 36];
+const ROUNDTABLE: [u32; 2] = [11, 10];
 
-/// The map's place on the page: the screen's shape (`aspect` = width / height), as big as fits in MAP_HOLE with a
-/// margin of page around it, as if the map were printed on the book's two pages.
-pub fn map_rect(aspect: f32) -> [f32; 4] {
-    let h = MAP_HOLE;
-    let (room_w, room_h) = (h[2] - h[0] - 16.0, h[3] - h[1] - 16.0);
-    let (w, ht) = if room_w / room_h > aspect { (room_h * aspect, room_h) } else { (room_w, room_w / aspect) };
-    let (cx, cy) = ((h[0] + h[2]) / 2.0, (h[1] + h[3]) / 2.0);
-    [cx - w / 2.0, cy - ht / 2.0, cx + w / 2.0, cy + ht / 2.0]
+/// Where a point of tile m60_42_36_00 (x, z metres) is on Wizard101's Unicorn Way picture (0..1, y down).
+///
+/// Composed from (1) the street part AEG030_518_9000 in the MSB: position (-8.562, -75.911), rotation -27.01 degrees,
+/// world = pos + (fx cos + fz sin, -fx sin + fz cos) of its FLVER coordinates, which are Wizard101's (x, z, y) / 100;
+/// and (2) Wizard101 (x, y) to the 512-pixel picture: p = 0.0097679 e^(i 110.868 deg) (x - i y) + (125.363 + 305.760 i),
+/// fitted by laying the street's walk graph (zone.nav) over the picture's paths (1 picture pixel = about 1 m).
+pub fn street_uv(x: f32, z: f32) -> [f32; 2] {
+    const A: f32 = 0.001_415_04;
+    const B: f32 = 0.001_279_58;
+    [-A * x + B * z + 0.329_868, B * x + A * z + 0.715_560]
 }
 
-/// The copied map screen on the page: (map rect, the frame around it) for a screen of `aspect` (width / height).
-/// One picture of the whole screen, edge to edge, Elden Ring's own button hints along its bottom included (Ryan,
-/// 2026-10-30: no black bands, no separate shrunk hint row). It fills the map area's full width; the map area's
-/// height shrinks to the screen's shape (16:9 at 2560x1440: 672 x 378 of the 672 x 452 area), centred, so nothing
-/// is cropped or squeezed. A screen taller than the area (narrower than about 3:2) fills its height instead.
+/// Which Wizard101 map the page shows for the player's place.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MapPlace {
+    /// Unicorn Way, with the player's arrow where they are (0..1 of the picture) when they are on it.
+    Street(Option<[f32; 2]>),
+    /// Wizard City as a whole, without markers (the Roundtable Hold: Wizard101's house).
+    WizardCity,
+}
+
+/// The map for a Game::position (chunk position, block, block origin).
+pub fn map_place(position: Option<([f32; 3], i32, i32)>) -> MapPlace {
+    let Some((chunk, block, origin)) = position else { return MapPlace::Street(None) };
+    let b = block as u32;
+    if [b >> 24, b >> 16 & 0xFF] == ROUNDTABLE {
+        return MapPlace::WizardCity;
+    }
+    let Some(o) = crate::markers::tile(origin) else { return MapPlace::Street(None) };
+    let local = [chunk[0] + o[0] - STREET_TILE[0] as f32 * 256.0, chunk[2] + o[1] - STREET_TILE[1] as f32 * 256.0];
+    let uv = street_uv(local[0], local[1]);
+    let i = MAP_INSIDE;
+    let inside = uv[0] > i[0] && uv[0] < i[2] && uv[1] > i[1] && uv[1] < i[3];
+    MapPlace::Street(inside.then_some(uv))
+}
+
+/// A point of the map picture (0..1) on the page.
+fn map_at(uv: [f32; 2]) -> [f32; 2] {
+    let a = MAP_AREA;
+    [a[0] + uv[0] * (a[2] - a[0]), a[1] + uv[1] * (a[3] - a[1])]
+}
+
+/// The grace marker's rectangle on the page.
+pub fn map_grace_rect() -> [f32; 4] {
+    let p = map_at(street_uv(MAP_GRACE_AT[0], MAP_GRACE_AT[1]));
+    let h = MAP_ICON / 2.0;
+    [p[0] - h, p[1] - h, p[0] + h, p[1] + h]
+}
+
+/// The old picture of Elden Ring's map screen on the page: (map rect, the frame around it) for a screen of `aspect`
+/// (width / height), as big as fits in MAP_HOLE.
 pub fn map_picture_rect(aspect: f32) -> ([f32; 4], [f32; 4]) {
     let h = MAP_HOLE;
     let area = [h[0] + 8.0, h[1] + 8.0, h[2] - 8.0, h[3] - 8.0];
@@ -1544,23 +1611,33 @@ pub fn map_picture_rect(aspect: f32) -> ([f32; 4], [f32; 4]) {
     (map, [map[0] - 6.0, map[1] - 6.0, map[2] + 6.0, map[3] + 6.0])
 }
 
-fn map(l: &Layout, d: &Data, v: &mut View) {
-    v.set(l.find("ZoneName"), centre("The Lands Between"));
+/// The map's place on the page while Elden Ring's map shows through without a copy of the screen.
+pub fn map_rect(aspect: f32) -> [f32; 4] {
+    let h = MAP_HOLE;
+    let (room_w, room_h) = (h[2] - h[0] - 16.0, h[3] - h[1] - 16.0);
+    let (w, ht) = if room_w / room_h > aspect { (room_h * aspect, room_h) } else { (room_w, room_w / aspect) };
+    let (cx, cy) = ((h[0] + h[2]) / 2.0, (h[1] + h[3]) / 2.0);
+    [cx - w / 2.0, cy - ht / 2.0, cx + w / 2.0, cy + ht / 2.0]
+}
+
+fn map(l: &Layout, d: &Data, v: &mut View, st: &mut State) {
     v.show(l.find("MapLoadingIndicator"), d.map_opening);
     v.set(l.path("MapLoadingIndicator/PackageNameText"), centre("Opening Map..."));
     hide(l, v, &["txtGoHomeTimer", "txtGotoDormTimer"]);
-    for (button, place, to) in [("GoHomeButton", "Unicorn Way", "Travel to The First Step"),
-                                ("GotoDormButton", "Roundtable Hold", "Travel to the Roundtable Hold")] {
+    // Fishing and skeleton keys: nothing in Elden Ring.
+    hide(l, v, &["FishingSprite", "SkeletonKeySprite"]);
+    for (button, lines) in [("GoHomeButton", ["Unicorn Way", "Travel to The First Step"]),
+                            ("GotoDormButton", ["Roundtable Hold", "Travel to the Roundtable Hold"]),
+                            ("PlusMinusButton", ["Elden Ring's Map", "Travel to the other Sites of Grace"])] {
         if let Some(b) = l.find(button) {
-            v.tip(l.nodes[b].rect, vec![place.into(), to.into()]);
+            v.tip(l.nodes[b].rect, lines.iter().map(|s| s.to_string()).collect());
         }
     }
     if d.map_open {
-        // The whole map screen, scaled onto the page in its own shape; or, without a copy of the screen, a window
-        // of that shape onto the map behind the book.
+        // Elden Ring's own map, opened with the magnifier: drawn on the page as before.
+        v.set(l.find("ZoneName"), centre("The Lands Between"));
         match d.map_picture {
             Some(aspect) => {
-                // The whole map screen, hints and all, as one picture filling the (shrunk) map area.
                 let (r, frame) = map_picture_rect(aspect);
                 v.fills.push((frame, ImColor32::from_rgb(74, 46, 24)));
                 v.images.push((r, MAP_PICTURE.into(), [0.0, 0.0, 1.0, 1.0]));
@@ -1572,15 +1649,35 @@ fn map(l: &Layout, d: &Data, v: &mut View) {
               "Close the map as usual, or click another tab of the book", TextStyle::new("WizardFancy", 0.45, BLACK).centred());
         return;
     }
-    if !d.map_opening {
-        let body = TextStyle::new("WizardNormal", 0.5, BLACK).centred().wrapped();
-        v.add([120.0, 200.0, 680.0, 230.0], "World Map", TextStyle::new("WizardFancy", 0.8, BLACK).centred());
-        v.add([150.0, 250.0, 650.0, 420.0],
-              "Elden Ring's map opens inside the book as soon as you turn to this page, with its markers, grace \
-               travel and zoom. Close it as usual and the book comes back; travel to a grace and the book closes.\n\n\
-               If it didn't open, press A, Enter or the magnifier below to try again.",
-              body);
+    // Wizard101's map under the page's own controls: the page's root window draws it in MAP_AREA.
+    let place = map_place(d.position);
+    let (zone, picture) = match place {
+        MapPlace::WizardCity => ("Wizard City", MAP_WIZARD_CITY),
+        MapPlace::Street(_) => ("Unicorn Way", MAP_UNICORN_WAY),
+    };
+    v.set(l.find("ZoneName"), centre(zone));
+    v.rect.insert(0, MAP_AREA);
+    v.node_images.insert(0, picture.into());
+    let MapPlace::Street(player) = place else { return };
+    // The grace: hover for its name, click (or A) to travel there.
+    let grace = map_grace_rect();
+    v.image(grace, MAP_GRACE);
+    v.tip(grace, vec!["The First Step".into(), "Site of Grace: click to travel here".into()]);
+    st.hits.push((grace, Hit::Warp(WARP_UNICORN_WAY)));
+    if let Some(uv) = player {
+        let p = map_at(uv);
+        let frame = (map_clock() * MAP_ARROW_FPS) as usize % 8;
+        let (fu, fv) = ((frame % 4) as f32 * 0.25, (frame / 4) as f32 * 0.5);
+        // The arrow's tip (bottom middle of its frame, about 97% down) on the player's spot.
+        let r = [p[0] - MAP_ARROW / 2.0, p[1] - MAP_ARROW * 0.97, p[0] + MAP_ARROW / 2.0, p[1] + MAP_ARROW * 0.03];
+        v.images.push((r, MAP_PLAYER.into(), [fu, fv, fu + 0.25, fv + 0.5]));
     }
+}
+
+/// Seconds since the map page was first drawn (the arrow's animation).
+fn map_clock() -> f32 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_secs_f32()
 }
 
 // ---------------------------------------------------------------------------------------------------------------
