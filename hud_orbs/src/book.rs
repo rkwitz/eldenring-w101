@@ -75,9 +75,11 @@ const TIP_BACK: ImColor32 = ImColor32::from_rgba(0, 0, 0, 205);
 /// The item's name: the client's item-title markup "<center><COLOR;FFFFFF00>" (Wizard101 colours are AABBGGRR,
 /// as its .lang "Bronze" FF457DE4 / "Gold" FF2ACFFF show): light blue.
 const TIP_TITLE: ImColor32 = ImColor32::from_rgb(0, 255, 255);
-/// The stat lines: the tooltip window's own text style (itemStatsInfoViewed / WindowBubbleMultipleLayouts
-/// controlWidget: WizardFancy 0.55, m_Color 8000FFFF = yellow), in rows as tall as the title (15..39).
-const TIP_TEXT: ImColor32 = ImColor32::from_rgb(255, 255, 0);
+/// The stat lines: the font is the tooltip window's text style (itemStatsInfoViewed controlWidget: WizardFancy 0.55),
+/// in rows as tall as the title (15..39). The colour is the client's stat-row markup, which overrides the style's
+/// m_Color: "<color;FFFFFFFF><center>%d" / "<color;FFFFFFFF><left>%d" (WizardGraphicalClient.exe, next to the
+/// Type_Frame_* tooltip icons): white. The .lang stat templates ("#1:%+$eA$ Max Health ...") carry no colour.
+const TIP_TEXT: ImColor32 = ImColor32::from_rgb(255, 255, 255);
 const TIP_STAT_SCALE: f32 = 0.55;
 const TIP_NOTE: ImColor32 = ImColor32::from_rgb(200, 196, 184);
 const EQUIP_FIST: &str = "GUI/InventoryPage/Button_Equip.png";
