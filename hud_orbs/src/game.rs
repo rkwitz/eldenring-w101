@@ -182,6 +182,27 @@ impl Game {
         out
     }
 
+    /// Round 19 (quests E2): why a loaded street NPC may not be seen. Per entity in `ids` (model in `models`): the
+    /// ChrIns render bits (chr_flags1c4 bit 3 = render group (MSB draw groups) on, chr_flags1c5 bit 3 = rendering on)
+    /// and the activation flags (bit 3 = activation enabled), raw, for the log.
+    pub fn entity_render_bits(&self, models: &[u32], ids: &[u32]) -> Vec<(u32, u8, u8, u32)> {
+        use eldenring::cs::ChrIns;
+        use std::mem::offset_of;
+        let list = self.characters.lock().unwrap_or_else(|e| e.into_inner()).1.clone();
+        let mut out = Vec::new();
+        for (chr, model) in list {
+            if !models.contains(&model) {
+                continue;
+            }
+            let Some(id) = read::<u32>(chr + offset_of!(ChrIns, event_entity_id)).filter(|i| ids.contains(i)) else { continue };
+            let (Some(a), Some(b), Some(c)) = (read::<u8>(chr + offset_of!(ChrIns, chr_flags1c4)),
+                                                read::<u8>(chr + offset_of!(ChrIns, chr_flags1c5)),
+                                                read::<u32>(chr + offset_of!(ChrIns, chr_activation_flags))) else { continue };
+            out.push((id, a, b, c));
+        }
+        out
+    }
+
     /// Every loaded character and its model: (ChrIns address, character_id).
     fn characters(&self) -> Vec<(usize, u32)> {
         use eldenring::cs::{ChrIns, ChrSet, ChrSetEntry, OpenFieldChrSet, WorldChrMan};

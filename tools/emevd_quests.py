@@ -222,7 +222,10 @@ def quest_events():
         body = [end_if_flag(Q.assigned(q["slug"]))]
         if prereq:
             body.append(wait_flag(prereq_flag(prereq)))
-        body.append(if_area(0, 1, region))
+        # Round 19 (E1): the first offer comes anywhere on the street (Ryan never got within the 12 m of Connelly's
+        # sphere, so round 18's offer never came); once shown (INTRO_SEEN), a "no" waits for the region again.
+        body += [skip_if_flag(2, Q.INTRO_SEEN, 1), if_near(0, 1, Q.INTRO_ANCHOR, Q.INTRO_RADIUS),
+                 skip_if_flag(1, Q.INTRO_SEEN, 0), if_area(0, 1, region), set_flag(Q.INTRO_SEEN)]
         # Round 18 (F2): the giver's offer (Merle Ambrose's lines and the quest card with yes / no); the quest is
         # the player's only on yes. On no, or the box closed, it is offered again on the next arrival (after leaving
         # the region), never assigned behind the player's back as in rounds 10-17.
@@ -270,11 +273,26 @@ def quest_events():
         animation, loop = Q.IDLE[model]
         events.append([WAIT_FRAME, force_animation(entity, animation, loop), END])  # vanilla waits a frame too
     assert len(events) <= 100, f"{len(events)} events do not fit in {Q.EVENT_BASE}..+99"
+    events.append(reset_event())
     out = []
     for k, ev in enumerate(events):
         body, pars, instances = ev if isinstance(ev, tuple) else (ev, [], [None])
+        if k < len(events) - 1:
+            # Round 19 (E1): nothing runs before the one-shot reset has cleared the old quest state (parameters
+            # point at instruction lines, so they move down by the added line).
+            body = [wait_flag(Q.QUEST_RESET)] + body
+            pars = [(line + 1, *rest) for line, *rest in pars]
         out.append((Q.EVENT_BASE + k, body, pars, instances))
     return out
+
+
+def reset_event():
+    """Round 19 (E1): once per save (QUEST_RESET, versioned), every quest flag off, then QUEST_RESET on. Ryan's save
+    kept Unicorn Way's state from round 17, so the quest line could not start at Merle Ambrose's offer."""
+    body = [end_if_flag(Q.QUEST_RESET)]
+    for first, last in Q.QUEST_FLAG_RANGES:
+        body += [set_flag(f, 0) for f in range(first, last + 1)]
+    return body + [set_flag(Q.QUEST_RESET), END]
 
 
 def add_quests(d):

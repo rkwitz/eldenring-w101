@@ -84,6 +84,10 @@ pub fn er_portraits(requests: &mut [crate::talk::Request], book: &std::path::Pat
 /// Round 18 (quests F2): the main quests are offered too (Wizard101's flow: each one handed out by its giver on
 /// yes), so a giver whose quest was declined shows the "!" again (w101_quests.QUESTS "assign").
 const OFFERS: &[(&str, u32, u32)] = &[
+    // Round 19 (E3): Unicorn Way is Merle Ambrose's, offered by his message anywhere on the street (emevd_quests.py)
+    // and again on reaching Connelly after a "no"; until it is accepted Connelly shows the "!" so the player can
+    // find him. QUEST_RESET is on in every save once the round 19 reset has run.
+    ("private_connelly", 1042362000, QUEST_RESET),
     ("private_connelly", 1042362010, 1042362009), // Ghost Hunters once Unicorn Way is complete
     ("ceren_nightchant", 1042362020, 1042362019), // Skeleton Crew once Ghost Hunters is complete
     ("ceren_nightchant", 1042362030, 1042362029), // Monsters and Mazes once Skeleton Crew is complete
@@ -94,6 +98,9 @@ const OFFERS: &[(&str, u32, u32)] = &[
     ("private_connelly", 1042362110, 1042362019), // Saving Private Oryan once Ghost Hunters is complete
     ("olivia_dawnwillow", 1042362150, 1042362109), // Fear of Fire once Pesky Pirates is complete
 ];
+
+/// w101_quests.QUEST_RESET: the round 19 one-shot quest reset has run (the quest events wait for it).
+pub const QUEST_RESET: u32 = 1042362690;
 
 /// Talk goals: (npc, quest assigned flag, quest complete flag, goal flag, flags of the goals it comes after).
 const TALKS: &[(&str, u32, u32, u32, &[u32])] = &[
@@ -238,7 +245,7 @@ pub fn locate(camera: &Camera, position: Option<([f32; 3], i32, i32)>, entities:
 /// NPC whether the game has it loaded, the marker it gets, its distance (in 50 m steps for the change test), and how
 /// far its MSB spot is from where the game has it.
 fn log_state(camera: &Camera, position: Option<([f32; 3], i32, i32)>, entities: &[(u32, [f32; 3])], spots: &[Spot],
-             flag: &dyn Fn(u32) -> bool) {
+             render: &[(u32, u8, u8, u32)], flag: &dyn Fn(u32) -> bool) {
     static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
     let p = camera.player;
     let (mut key, mut line) = (String::new(), String::new());
@@ -251,8 +258,14 @@ fn log_state(camera: &Camera, position: Option<([f32; 3], i32, i32)>, entities: 
             let f = entities.iter().find(|e| e.0 == NPCS[i].2)?.1;
             Some(((p[0] + o[0] - f[0]).powi(2) + (p[1] + o[1] - f[1]).powi(2) + (p[2] + o[2] - f[2]).powi(2)).sqrt())
         });
-        key += &format!("{slug}:{loaded}:{kind:?}:{} ", (d / 50.0) as i32);
-        line += &format!(" {slug} {} marker {kind:?} {d:.0} m{};", if loaded { "loaded" } else { "at its MSB spot" },
+        // Round 19 (E2): height over the player (fallen under the street?) and the game's render bits.
+        let bits = render.iter().find(|r| r.0 == NPCS[i].2);
+        let shown = bits
+            .map(|b| format!(" render group {} render {} activation {:#x}", b.1 >> 3 & 1, b.2 >> 3 & 1, b.3))
+            .unwrap_or_default();
+        key += &format!("{slug}:{loaded}:{kind:?}:{}:{}:{shown} ", (d / 50.0) as i32, ((at[1] - p[1]) / 5.0) as i32);
+        line += &format!(" {slug} {} marker {kind:?} {d:.0} m, {:+.1} m up{shown}{};",
+                         if loaded { "loaded" } else { "at its MSB spot" }, at[1] - p[1],
                          err.map(|e| format!(" (MSB spot {e:.1} m off)")).unwrap_or_default());
     }
     if spots.is_empty() {
@@ -300,12 +313,13 @@ pub fn draw(
     position: Option<([f32; 3], i32, i32)>,
     entities: &[(u32, [f32; 3])],
     spots: &[Spot],
+    render: &[(u32, u8, u8, u32)],
     flags: &HashMap<u32, bool>,
     time: f32,
     screen: [f32; 2],
 ) {
     let flag = |f: u32| flags.get(&f) == Some(&true);
-    log_state(camera, position, entities, spots, &flag);
+    log_state(camera, position, entities, spots, render, &flag);
     let p = camera.player;
     let mut drawn: Vec<(f32, [f32; 2], f32, u8, &str)> = Vec::new();
     for &(i, at, _) in spots {

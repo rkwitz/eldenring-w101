@@ -725,7 +725,8 @@ impl Book {
         let (position, entities) = (game.position(), game.entities(&markers::MODELS, &markers::entity_ids()));
         let spots = markers::locate(&camera, position, &entities);
         let draw = ui.get_background_draw_list();
-        markers::draw(&draw, &self.textures, &camera, position, &entities, &spots, &self.flags, ui.time() as f32,
+        let render = game.entity_render_bits(&markers::MODELS, &markers::entity_ids());
+        markers::draw(&draw, &self.textures, &camera, position, &entities, &spots, &render, &self.flags, ui.time() as f32,
                       ui.io().display_size);
     }
 
@@ -1725,6 +1726,17 @@ impl Book {
             if let Some(on) = game::event_flag(*f) {
                 now.insert(*f, on);
             }
+        }
+        // Round 19 (quests E1): every quest flag that is on, at load and whenever that set changes.
+        let on_of = |m: &HashMap<u32, bool>| {
+            let mut v: Vec<u32> = m.iter().filter(|(_, on)| **on).map(|(f, _)| *f).collect();
+            v.sort_unstable();
+            v
+        };
+        let on_now = on_of(&now);
+        if first || on_now != on_of(&self.flags) {
+            tracing::info!("quest flags{}: on {:?} ({} read; round 19 reset done: {:?})", if first { " at load" } else { "" },
+                           on_now, now.len(), now.get(&markers::QUEST_RESET));
         }
         self.flags = now;
         let flags = &self.flags;

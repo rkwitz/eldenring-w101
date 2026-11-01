@@ -122,6 +122,20 @@ TALK_NPC_BUTTON = 6000  # ActionButtonParam "Talk" (category 4, radius 2.5 m), a
 # Round 17: the HUD's answer to a dialogue request (DIALOGUE_FLAG + k): OK = the last page was read / the quest was
 # accepted; CANCEL = closed early / the quest was declined (rounds 15-16: ER's 2007[10] OK / back buttons).
 DIALOG_OK, DIALOG_CANCEL = 1042362620, 1042362621
+# Round 19 (E1): a versioned one-shot reset of the whole quest state. Ryan's save kept quest flags from older rounds
+# (round 17's intro assigned Unicorn Way unasked), so the round 18 flow (Ambrose's offer first) never started. The
+# reset event clears every quest flag (QUEST_FLAG_RANGES) once and sets QUEST_RESET; the quest events wait for it.
+# A later round that needs another reset takes the next flag (1042362691 + ...), never reuses this one.
+QUEST_RESET = 1042362690
+# Round 19 (E1): on when Ambrose's intro offer has been shown once. The first offer comes anywhere on the street
+# (INTRO_ANCHOR within INTRO_RADIUS m: Ceren stands in the middle of the street, near where a load puts the player);
+# after a "no" it is offered again on reaching Private Connelly (street_start), as in round 18.
+INTRO_SEEN = 1042362689
+INTRO_ANCHOR, INTRO_RADIUS = 1042360821, 200.0
+# Every flag the quests use: quests (n = 0..15), dialogue requests, counters and cages, the old talk flags, the
+# dialog answers, INTRO_SEEN. (first, last) inclusive.
+QUEST_FLAG_RANGES = [(1042362000, 1042362159), (1042362400, 1042362499), (1042362500, 1042362543),
+                     (1042362600, 1042362621), (INTRO_SEEN, INTRO_SEEN)]
 CHARACTER = {c[0]: c for c in CHARACTERS}
 
 # Round 17 (F2/F3): the conversations are shown by the HUD DLL in Wizard101's own dialogue box (DialogWindow.gui),
