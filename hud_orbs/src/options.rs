@@ -53,6 +53,8 @@ pub enum When {
     HudRestart,
 }
 
+// `when` and `w101` document each row (book_settings/settings_map.md); the rows have no tips since round 16 (L2).
+#[allow(dead_code)]
 impl When {
     pub fn text(self) -> &'static str {
         match self {
@@ -130,11 +132,12 @@ pub enum Kind {
     Hud(Hud),
 }
 
+#[allow(dead_code)]
 pub struct Row {
     pub label: &'static str,
     pub kind: Kind,
     pub when: When,
-    /// The Wizard101 option this row stands in for (shown in the row's tip).
+    /// The Wizard101 option this row stands in for.
     pub w101: &'static str,
 }
 
@@ -341,7 +344,7 @@ fn step_choice<T: Copy + PartialEq>(choices: &[T], now: T, step: i32) -> T {
     choices[(i + step).clamp(0, choices.len() as i32 - 1) as usize]
 }
 
-/// Changes the row by `step` (-1 / +1) in `staged` only; nothing is written until apply(). Returns the page's note.
+/// Changes the row by `step` (-1 / +1) in `staged` only; nothing is written until apply(). Returns what changed (logged).
 pub fn change(row: &Row, step: i32, game: Option<&game::Game>, s: &crate::Settings, staged: &mut Staged)
               -> Result<String, String> {
     let shown = match &row.kind {
@@ -406,7 +409,7 @@ pub fn change(row: &Row, step: i32, game: Option<&game::Game>, s: &crate::Settin
             hud_text(*h, new)
         }
     };
-    Ok(format!("{}: {shown} (OK applies it)", row.label))
+    Ok(format!("{}: {shown}", row.label))
 }
 
 /// Applies the staged changes (OK): Elden Ring's options in memory, the graphics settings to its persistent config

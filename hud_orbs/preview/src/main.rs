@@ -276,7 +276,7 @@ fn main() {
         ("9g_settings_display", pages::Tab::Settings, 0, [0.0, 0.0], "settings:7"),
         ("9h_settings_morevideo", pages::Tab::Settings, 0, [0.0, 0.0], "settings:8"),
         ("9i_settings_testing", pages::Tab::Settings, 0, [0.0, 0.0], "settings:9"),
-        ("9j_settings_tip", pages::Tab::Settings, 0, [0.70, 0.58], ""),
+        ("9j_settings_row_hover", pages::Tab::Settings, 0, [0.70, 0.58], ""),
         ("9k_settings_tab_tip", pages::Tab::Settings, 0, [0.4215, 0.193], "settings:3"),
         ("11_markers", pages::Tab::Character, 0, [0.0, 0.0], "markers"),
         ("10_dialogue", pages::Tab::Character, 0, [0.0, 0.0], "talk:Ceren Nightchant"),

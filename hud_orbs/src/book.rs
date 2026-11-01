@@ -1572,22 +1572,19 @@ impl Book {
                     [r[0] + 24.0, r[3] - 26.0, r[2] - 24.0, r[3] - 6.0], &TextStyle::new("WizardNormal", 0.36, GOLD), false);
     }
 
-    /// Changes row `row` of the Settings page's current tab by `step` (options.rs), with a note on the page.
+    /// Changes row `row` of the Settings page's current tab by `step` (options.rs). The row's value shows the change;
+    /// there is no pending-changes strip (Ryan, round 16 L3), only a note when the change couldn't be made.
     fn change_setting(&mut self, row: usize, step: i32, cx: &mut Context) {
         let tab = self.state.page % crate::options::TABS.len();
         let Some(r) = crate::options::TABS[tab].2.get(row) else { return };
         self.state.sub = row;
-        let note = match crate::options::change(r, step, cx.game, cx.settings, &mut self.staged) {
-            Ok(done) => {
-                tracing::info!("settings: staged {done}");
-                done
-            }
+        match crate::options::change(r, step, cx.game, cx.settings, &mut self.staged) {
+            Ok(done) => tracing::info!("settings: staged {done}"),
             Err(why) => {
                 tracing::warn!("settings: {} not changed: {why}", r.label);
-                why
+                self.state.note = Some((why, Instant::now()));
             }
-        };
-        self.state.note = Some((note, Instant::now()));
+        }
     }
 
     /// The Settings window's OK (button, A or Enter): applies the staged changes and closes the book. If something
@@ -1812,16 +1809,12 @@ fn hair_model(face: &[u8]) -> Option<u32> {
     (v < 1000).then_some(v)
 }
 
-/// The Settings page's rows on tab `tab` (options::TABS): label, value, tip (what it is, when it applies).
+/// The Settings page's rows on tab `tab` (options::TABS): label and value.
 pub fn settings_rows(tab: usize, cx: &Context, staged: &crate::options::Staged) -> Vec<pages::SettingRow> {
     let graphics = staged.graphics();
     crate::options::TABS[tab % crate::options::TABS.len()].2.iter().map(|row| {
         let value = crate::options::value(row, cx.game, cx.settings, graphics.as_ref(), staged)
             .unwrap_or_else(|| "-".into());
-        let mut tip = vec![row.label.to_string(), row.when.text().to_string()];
-        if row.w101 != "-" {
-            tip.push(format!("Wizard101: {}", row.w101));
-        }
-        (row.label.to_string(), value, tip)
+        (row.label.to_string(), value)
     }).collect()
 }

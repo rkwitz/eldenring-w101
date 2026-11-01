@@ -2131,8 +2131,8 @@ pub const SETTINGS_PAGE_ROWS: usize = 7;
 const VALUE_SCALE: f32 = 0.54;
 const VALUE_LIFT: f32 = 2.5;
 
-/// One settings row as the page shows it: label, value, and the lines of its tip.
-pub type SettingRow = (String, String, Vec<String>);
+/// One settings row as the page shows it: label and value.
+pub type SettingRow = (String, String);
 
 fn settings(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     let tab = st.page % crate::options::TABS.len();
@@ -2152,25 +2152,16 @@ fn settings(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             v.plain_tip(l.nodes[b].rect, vec![(*title).into()]);
         }
     }
+    // Quit, OK, Help, Idle and the option rows have no tooltip in Settings.gui (empty m_sTip); only the tab buttons
+    // do. The options are just clicked (Ryan, round 16 L2).
     v.set(l.find("QuitButton"), centre("Quit"));
     v.set(l.find("IdleButton"), centre("Exit Game"));
-    if let Some(b) = l.find("QuitButton") {
-        v.plain_tip(l.nodes[b].rect, vec!["Back to Elden Ring's title screen".into(), "(the game saves first)".into()]);
-    }
-    if let Some(b) = l.find("IdleButton") {
-        v.plain_tip(l.nodes[b].rect, vec!["The game saves, then Elden Ring closes".into()]);
-    }
-    if let Some(b) = l.find("OkButton") {
-        v.plain_tip(l.nodes[b].rect, vec!["Apply the changes and close".into()]);
-    }
-    // With a controller the row the d-pad changes shows in OptionText's own highlight colour (m_HighColor white);
-    // there is no marker in front of the label (Ryan, round 15).
-    let selected = crate::input::pad_connected().then_some(st.sub % st.subs);
+    // Every label is black, the last-changed row too (Ryan, round 16 L1: no white highlight where the caret was).
     let label_style = TextStyle::new("WizardFancy", 0.6857, BLACK);
     let value_style = TextStyle::new("WizardFancy", VALUE_SCALE, ImColor32::from_rgb(0xCC, 0xCC, 0x00)).centred();
     for i in 0..SETTINGS_PAGE_ROWS {
         let shown = i < rows.len();
-        let (label, value, tip) = d.settings.get(i).cloned().unwrap_or_default();
+        let (label, value) = d.settings.get(i).cloned().unwrap_or_default();
         // The row's top: Settings.gui's own rows, or rows 6 and 7 in their art (OptionHardwareCursor's, moved down).
         let top = match SETTINGS_ROWS.get(i) {
             Some(name) => {
@@ -2198,12 +2189,7 @@ fn settings(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         }
         // OptionText (136..386 at +12..+42) may run on to just before the left arrow (436); OptionValue's text stays
         // inside the red box (462..654 at +16..+38) clear of the arrows' rims. Both are one line that shrinks to fit.
-        let mut label_style = label_style.clone();
-        if selected == Some(i) {
-            label_style.colour = ImColor32::WHITE;
-        }
-        v.add([136.0, top + 12.0, 430.0, top + 42.0], label, label_style);
+        v.add([136.0, top + 12.0, 430.0, top + 42.0], label, label_style.clone());
         v.add([474.0, top + 16.0 - VALUE_LIFT, 642.0, top + 38.0 - VALUE_LIFT], value, value_style.clone());
-        v.plain_tip([100.0, top, 680.0, top + 54.0], tip);
     }
 }
