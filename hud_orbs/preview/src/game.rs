@@ -55,10 +55,6 @@ impl Game {
         None
     }
 
-    pub fn entity_render_bits(&self, _models: &[u32], _ids: &[u32]) -> Vec<(u32, u8, u8, u32)> {
-        Vec::new()
-    }
-
     pub fn equip(&self, _slot: u32, _item_id: Option<u32>) -> Result<(), &'static str> {
         Ok(())
     }
