@@ -86,9 +86,8 @@ pub struct State {
     pub sub: usize,
     /// The chosen pet (spirit ash).
     pub pet: usize,
-    /// Crafting: show cookbooks instead of materials, and which cookbook is open on the left page.
-    pub cookbooks: bool,
-    pub cookbook: usize,
+    /// The crafting page (crafting.rs).
+    pub craft: crate::crafting::Craft,
     /// The Backpack item last clicked (inventory ID), shown in the picture on talisman, arrow and key item pages.
     pub selected: Option<u32>,
     /// Set while binding: the Backpack picture shows this weapon-type model alone (an arrow or bolt) instead of
@@ -252,6 +251,11 @@ impl State {
         self.filter_node = None;
     }
 
+    /// How many subs (category tabs) the current tab has, for LB / RB.
+    pub(crate) fn set_subs(&mut self, subs: usize) {
+        self.subs = subs;
+    }
+
     pub fn step_page(&mut self, delta: i32) {
         self.page = (self.page as i32 + delta).max(0) as usize;
     }
@@ -262,17 +266,17 @@ impl State {
     }
 }
 
-fn centre(text: &str) -> String {
+pub(crate) fn centre(text: &str) -> String {
     format!("<center>{text}</center>")
 }
 
-fn hide(l: &Layout, v: &mut View, names: &[&str]) {
+pub(crate) fn hide(l: &Layout, v: &mut View, names: &[&str]) {
     for n in names {
         v.show(l.find(n), false);
     }
 }
 
-fn grey(l: &Layout, v: &mut View, names: &[&str]) {
+pub(crate) fn grey(l: &Layout, v: &mut View, names: &[&str]) {
     for n in names {
         if let Some(id) = l.find(n) {
             v.greyed.insert(id);
@@ -281,14 +285,14 @@ fn grey(l: &Layout, v: &mut View, names: &[&str]) {
 }
 
 /// Moves a tab marker (Tab_Top03) under a button, keeping its offset from the first button.
-fn marker(l: &Layout, v: &mut View, marker: &str, first: &str, chosen: Option<usize>) {
+pub(crate) fn marker(l: &Layout, v: &mut View, marker: &str, first: &str, chosen: Option<usize>) {
     let (Some(m), Some(f), Some(c)) = (l.find(marker), l.find(first), chosen) else { return };
     let (mr, fr, cr) = (l.nodes[m].rect, l.nodes[f].rect, l.nodes[c].rect);
     v.rect.insert(m, [cr[0] + mr[0] - fr[0], cr[1] + mr[1] - fr[1], cr[0] + mr[2] - fr[0], cr[1] + mr[3] - fr[1]]);
 }
 
 /// "p/n" in a page number box, greying the arrows at the ends; returns the clamped page.
-fn paging(l: &Layout, v: &mut View, st: &mut State, count: usize, per_page: usize, ids: (&str, &str, &str)) -> usize {
+pub(crate) fn paging(l: &Layout, v: &mut View, st: &mut State, count: usize, per_page: usize, ids: (&str, &str, &str)) -> usize {
     let pages = count.div_ceil(per_page.max(1)).max(1);
     st.page = st.page.min(pages - 1);
     v.set(l.find(ids.0), centre(&format!("{}/{}", st.page + 1, pages)));
@@ -302,14 +306,14 @@ fn paging(l: &Layout, v: &mut View, st: &mut State, count: usize, per_page: usiz
 }
 
 /// The union of the named nodes' rectangles (a row of tab buttons), for the LB / RB hints.
-fn row_of(l: &Layout, names: &[&str]) -> Option<[f32; 4]> {
+pub(crate) fn row_of(l: &Layout, names: &[&str]) -> Option<[f32; 4]> {
     names.iter().filter_map(|n| l.find(n)).map(|i| l.nodes[i].rect).reduce(|a, b| {
         [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]
     })
 }
 
 /// An item's Elden Ring icon in `r`, if there is one.
-fn icon(v: &mut View, items: &ItemData, item_id: u32, r: [f32; 4]) -> bool {
+pub(crate) fn icon(v: &mut View, items: &ItemData, item_id: u32, r: [f32; 4]) -> bool {
     match items.icon(item_id) {
         Some(path) => {
             v.image(r, path);
@@ -436,7 +440,7 @@ pub fn bind(tab: Tab, l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         Tab::Deck => deck(l, d, st, v),
         Tab::Quests => quests(l, d, st, v),
         Tab::Map => map(l, d, v, st),
-        Tab::Crafting => crafting(l, d, st, v),
+        Tab::Crafting => crate::crafting::bind(l, d, st, v),
         Tab::Help => help(l, st, v),
         Tab::Settings => settings(l, d, st, v),
         Tab::Close => {}
@@ -476,15 +480,7 @@ pub fn click(tab: Tab, l: &Layout, id: usize, st: &mut State) -> Action {
         (Tab::Map, "PlusMinusButton") => return Action::OpenMap,
         (Tab::Map, "GoHomeButton") => return Action::Warp(WARP_UNICORN_WAY),
         (Tab::Map, "GotoDormButton") => return Action::Warp(WARP_ROUNDTABLE),
-        (Tab::Crafting, "Reagent_Toggle" | "Reagent_Toggle2") => {
-            st.cookbooks = !st.cookbooks;
-            st.page = 0;
-        }
-        (Tab::Crafting, _) if st.cookbooks && name.starts_with("Item_") => {
-            if let Ok(n) = name["Item_".len()..].parse::<usize>() {
-                st.cookbook = st.page * 8 + n.saturating_sub(1);
-            }
-        }
+        (Tab::Crafting, _) if crate::crafting::click(l, id, st) => {}
         (Tab::Help, _) if name.starts_with("Tab_") => {
             if let Some(i) = HELP.iter().position(|(n, _, _)| *n == name) {
                 (st.sub, st.page) = (i, 0);
@@ -1681,7 +1677,7 @@ fn map_clock() -> f32 {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Crafting: RecipeWindow.gui. Right: crafting materials (or cookbooks, with the Reagents button); left: the kit.
+// Crafting: RecipeWindow.gui (crafting.rs); its materials page here.
 
 /// Reagent cards (top left corners): ReagentWindow's Card01-08 (LeftPage 30,115 and RightPage 389,115 plus each
 /// card's offset), and their size.
@@ -1716,140 +1712,38 @@ fn reagent_school(name: &str) -> &'static str {
         .unwrap_or("Balance")
 }
 
-fn crafting(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
-    st.subs = 1;
-    v.set(l.find("title"), centre("Crafting"));
-    // RecipeWindow is a window of its own in Wizard101, with a full-size background that would cover the book's
-    // tabs: draw it on the book's own page instead.
-    if let Some(station) = l.find("StationBackground") {
-        v.no_back.insert(station);
-        if let Some(edge) = l.find_under(station, "Doodle") {
-            v.show(Some(edge), false);
-        }
-    }
-    // Exit and the furniture tab sit where the book's own tabs are (the book has its Close tab).
-    hide(l, v, &["BonusInfoIcon", "CompletedText", "UnequipButton", "TimerSlot_01", "Exit", "Tab_FurnitureStuff"]);
-    grey(l, v, &["CreateButton", "FiltersButton", "EquipButton", "Tab_FurnitureStuff", "Tab_Hat", "Tab_Robe",
-                 "Tab_Shoes", "Tab_Weapon", "Tab_Athame", "Tab_Amulet", "Tab_Ring", "Tab_Pet", "Tab_Deck", "Tab_Mount"]);
-    if let Some(all) = l.find("Tab_AllEquipment") {
-        v.checked.insert(all);
-    }
-    for i in 1..=8 {
-        let n = format!("Ingredient0{i}");
-        if let Some(slot) = l.find(&n) {
-            if let Some(num) = l.find_under(slot, "IngredientNumber") {
-                v.set(Some(num), String::new());
-            }
-        }
-    }
-    v.set(l.find("Reagent_Toggle2"), centre(if st.cookbooks { "Materials" } else { "Cookbooks" }));
+/// The materials page (Reagent_Toggle on the crafting page, crafting.rs): Wizard101's reagents page.
+pub(crate) fn materials(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     let rows: Vec<usize> = (1..=8).filter_map(|i| l.find(&format!("Item_{i}"))).collect();
     let Some(sheet) = d.sheet else { return };
-    let kit = sheet.key_items.iter().any(|(id, _)| d.names.item(*id) == "Crafting Kit");
-    v.set(l.find("labelItemHighlighted"), centre(if kit { "Crafting Kit" } else { "No Crafting Kit yet" }));
-    let mut list: Vec<(String, u32, u32)> = if st.cookbooks {
-        sheet.key_items.iter().map(|(id, n)| (d.names.item(*id), *n, *id)).filter(|(n, _, _)| n.contains("Cookbook")).collect()
-    } else {
-        sheet.items.iter().filter(|(id, _)| is_material(*id)).map(|(id, n)| (d.names.item(*id), *n, *id)).collect()
-    };
+    let mut list: Vec<(String, u32, u32)> =
+        sheet.items.iter().filter(|(id, _)| is_material(*id)).map(|(id, n)| (d.names.item(*id), *n, *id)).collect();
     list.sort();
-    if st.cookbooks && !list.is_empty() {
-        // The chosen cookbook (click one on the right), open on the left page: its text and recipes.
-        st.cookbook = st.cookbook.min(list.len() - 1);
-        let (name, _, id) = &list[st.cookbook];
-        hide(l, v, &["portrait_background", "card_background", "IngredientBackground"]);
-        // The potion doodle down the left edge would sit under the text.
-        for (i, n) in l.nodes.iter().enumerate() {
-            if n.name == "Doodle" && n.rect[2] < 200.0 {
-                v.show(Some(i), false);
-            }
+    // ReagentWindow's category tabs (REAGENT_TABS): all, harvested, rare harvested, bought, dropped. Elden
+    // Ring's own sort groups say what a material is: creature parts (10, 15) are dropped, plants and stones
+    // (20-50) harvested, rare ones (rarity above 0) rare harvested; bought is what a shop sells.
+    st.subs = REAGENT_TABS.len() - 1;
+    let tab = st.sub % st.subs;
+    list.retain(|(_, _, id)| {
+        let raw = id & 0x0FFF_FFFF;
+        let source = d.items.source(raw);
+        let creature = source.is_some_and(|(sg, _)| sg == 10 || sg == 15);
+        match tab {
+            1 => source.is_some() && !creature && d.items.rank(raw) == 1,
+            2 => source.is_some() && !creature && d.items.rank(raw) > 1,
+            3 => source.is_some_and(|(_, shop)| shop),
+            4 => creature,
+            _ => true,
         }
-        v.set(l.find("labelItemHighlighted"), centre(name));
-        // Inside the banner's frame.
-        if let Some(t) = l.find("labelItemHighlighted") {
-            let r = l.nodes[t].rect;
-            v.rect.insert(t, [r[0] + 20.0, r[1], r[2] - 20.0, r[3]]);
-        }
-        // The book's description, then every recipe it teaches as a row with the item's picture.
-        let (about, recipes) = d.items.cookbook(id & 0x0FFF_FFFF)
-            .unwrap_or_else(|| ("This cookbook's pages are blank.".into(), vec![]));
-        let page = [80.0, 166.0, 340.0, 524.0];
-        let about_h = if recipes.is_empty() { page[3] - page[1] } else { 110.0 };
-        v.add([page[0], page[1], page[2], page[1] + about_h], about,
-              TextStyle::new("WizardNormal", 0.38, BLACK).centred().wrapped());
-        if !recipes.is_empty() {
-            let mut y = page[1] + about_h + 4.0;
-            v.add([page[0], y, page[2], y + 22.0], format!("Recipes ({})", recipes.len()),
-                  TextStyle::new("WizardFancy", 0.48, BLACK).centred());
-            y += 26.0;
-            let columns = if recipes.len() > 9 { 2 } else { 1 };
-            let rows = recipes.len().div_ceil(columns);
-            let row_h = ((page[3] - y) / rows as f32).min(26.0);
-            let col_w = (page[2] - page[0]) / columns as f32;
-            for (i, recipe) in recipes.iter().enumerate() {
-                let (cx, cy) = (page[0] + (i / rows) as f32 * col_w, y + (i % rows) as f32 * row_h);
-                let goods = d.names.goods_named(recipe).map(|g| 0x4000_0000 | g);
-                let recipe = recipe.as_str();
-                let side = row_h - 2.0;
-                let has = goods.is_some_and(|g| icon(v, d.items, g, [cx + 2.0, cy + 1.0, cx + 2.0 + side, cy + 1.0 + side]));
-                let left = if has { cx + side + 6.0 } else { cx + 4.0 };
-                let scale = if columns == 2 { 0.32 } else { 0.38 };
-                v.add([left, cy, cx + col_w - 2.0, cy + row_h], recipe.to_string(),
-                      TextStyle::new("WizardNormal", scale, BLACK));
-                if let Some(g) = goods {
-                    v.tip([cx, cy, cx + col_w, cy + row_h], d.items.tooltip(g, 1, d.names, false));
-                }
-            }
-        }
-    }
-    if !st.cookbooks {
-        // ReagentWindow's category tabs (REAGENT_TABS): all, harvested, rare harvested, bought, dropped. Elden
-        // Ring's own sort groups say what a material is: creature parts (10, 15) are dropped, plants and stones
-        // (20-50) harvested, rare ones (rarity above 0) rare harvested; bought is what a shop sells.
-        st.subs = REAGENT_TABS.len() - 1;
-        let tab = st.sub % st.subs;
-        list.retain(|(_, _, id)| {
-            let raw = id & 0x0FFF_FFFF;
-            let source = d.items.source(raw);
-            let creature = source.is_some_and(|(sg, _)| sg == 10 || sg == 15);
-            match tab {
-                1 => source.is_some() && !creature && d.items.rank(raw) == 1,
-                2 => source.is_some() && !creature && d.items.rank(raw) > 1,
-                3 => source.is_some_and(|(_, shop)| shop),
-                4 => creature,
-                _ => true,
-            }
-        });
-        reagents(l, d, st, v, &list, &rows);
-        return;
-    }
-    let page = paging(l, v, st, list.len(), rows.len(), ("PageNumber", "leftscroll", "rightscroll"));
-    for (i, row) in rows.iter().enumerate() {
-        match list.get(page * rows.len() + i) {
-            Some((name, _, id)) => {
-                let r = l.nodes[*row].rect;
-                v.tip(r, d.items.tooltip(*id, 1, d.names, false));
-                if page * rows.len() + i == st.cookbook {
-                    v.checked.insert(*row);
-                }
-                v.add([r[0] + 22.0, r[1], r[2] - 22.0, r[3]], name.clone(),
-                      TextStyle::new("WizardFancy", 0.42, LIGHT_YELLOW).centred());
-            }
-            None => v.show(Some(*row), false),
-        }
-    }
-    if list.is_empty() {
-        let r = l.nodes[rows.first().copied().unwrap_or(0)].rect;
-        v.add([r[0], r[1], r[2], r[1] + 40.0], if st.cookbooks { "No cookbooks yet" } else { "No materials yet" },
-              TextStyle::new("WizardFancy", 0.55, BLACK).centred());
-    }
+    });
+    reagents(l, d, st, v, &list, &rows);
 }
 
 /// Wizard101's reagents page (ReagentWindow.gui) on RecipeWindow's pages: its title, its category tabs on
 /// Art_CraftingTab (all reagents, harvested, rare harvested, bought, dropped, class project; only "all" applies),
 /// the reagents as Background_Reagent cards, four on each page at ReagentWindow's places (each with its picture
 /// on a dark band, its name on the paper below and the count in the sun badge), the page buttons under the left
-/// page, and the toggle to the cookbooks with Wizard101's book.
+/// page, and the toggle back to the recipes with Wizard101's book.
 fn reagents(l: &Layout, d: &Data, st: &mut State, v: &mut View, list: &[(String, u32, u32)], rows: &[usize]) {
     v.set(l.find("title"), centre("Materials"));
     hide(l, v, &["portrait_background", "card_background", "IngredientBackground", "TabLayoutEquipment",
@@ -1996,7 +1890,7 @@ const HELP: [(&str, (&str, &str), (&str, &str)); 4] = [
      ("More Pages",
       "Deck: your memory slots, and your spells by school. Click a spell to memorize it, a slot to forget it, \
        anywhere.\n\nQuests: the Unicorn Way quests you have taken on.\n\nWorld Map: Elden Ring's map.\n\n\
-       Crafting: materials by kind, and cookbooks with their recipes.\n\nSettings: the HUD's settings.")),
+       Crafting: Elden Ring's recipes by category; choose one and Create to craft it. Reagents shows your materials.\n\nSettings: the HUD's settings.")),
 ];
 
 /// The help spread's two pages (page pixels, inside the book's margins and clear of the spine).

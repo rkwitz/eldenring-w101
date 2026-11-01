@@ -10,6 +10,7 @@
 //! also made by tools/w101_hud_art.py); without those files they fall back to imgui's default font.
 
 mod book;
+mod crafting;
 mod font;
 mod game;
 mod input;

@@ -9,6 +9,8 @@
 
 #[path = "../../src/book.rs"]
 mod book;
+#[path = "../../src/crafting.rs"]
+mod crafting;
 #[path = "../../src/font.rs"]
 mod font;
 #[path = "../../src/layout.rs"]
@@ -245,7 +247,11 @@ fn main() {
         ("6d_map_roundtable", pages::Tab::Map, 0, [0.5, 0.5], "place:roundtable"),
         ("6b_map_open", pages::Tab::Map, 0, [0.0, 0.0], "map"),
         ("7_crafting", pages::Tab::Crafting, 0, [0.0, 0.0], ""),
-        ("7b_crafting_cookbook", pages::Tab::Crafting, 0, [0.0, 0.0], "cookbooks"),
+        ("7b_crafting_materials", pages::Tab::Crafting, 0, [0.0, 0.0], "materials"),
+        ("7c_crafting_pots_tip", pages::Tab::Crafting, 1, [0.62, 0.41], "recipe:3"),
+        ("7d_crafting_food_tip", pages::Tab::Crafting, 4, [0.314, 0.66], "recipe:44"),
+        ("7e_crafting_arrows", pages::Tab::Crafting, 3, [0.0, 0.0], "recipe:91"),
+        ("7f_crafting_made", pages::Tab::Crafting, 1, [0.0, 0.0], "made:1"),
         ("8_help", pages::Tab::Help, 1, [0.0, 0.0], ""),
         ("9_settings", pages::Tab::Settings, 0, [0.0, 0.0], ""),
         ("9a_settings_advvideo", pages::Tab::Settings, 0, [0.0, 0.0], "settings:1"),
@@ -294,8 +300,14 @@ fn main() {
         if show == "markers" {
             book.preview_closed();
         }
-        if show == "cookbooks" {
-            book.preview_cookbooks();
+        if show == "materials" {
+            book.preview_materials();
+        }
+        if let Some(r) = show.strip_prefix("recipe:") {
+            book.preview_recipe(r.parse().unwrap(), false);
+        }
+        if let Some(r) = show.strip_prefix("made:") {
+            book.preview_recipe(r.parse().unwrap(), true);
         }
         let load = show.strip_prefix("load:");
         if load.is_some() || show.starts_with("poof") {

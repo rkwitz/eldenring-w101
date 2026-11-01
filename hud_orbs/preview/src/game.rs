@@ -7,7 +7,8 @@ pub struct Game;
 
 /// Quest flags the preview pretends are on.
 const FLAGS: &[u32] = &[10000800, 14000800, 105, 110, 1042362000, 1042362001, 1042362009, 1042362010, 1042362500 + 2, 1042362040, 1042362540,
-                        1042362541, 1042362100, 1042362011, 1042362109];
+                        1042362541, 1042362100, 1042362011, 1042362109,
+                        67000, 67010, 67210]; // and three cookbooks (crafting page)
 
 pub fn event_flag(flag: u32) -> Option<bool> {
     Some(FLAGS.contains(&flag))
@@ -72,6 +73,7 @@ impl Game {
             (goods(6700), 1), (goods(7000), 1), (goods(7200), 1), (goods(6300), 1), (goods(7500), 1),
             (goods(200000), 1), (goods(201000), 1), (goods(240000 + 3), 1),
             (goods(15000), 12), (goods(15010), 4), (goods(20650), 7), (goods(20660), 2),
+            (goods(20760), 6), (goods(20802), 3), (goods(20800), 2), (goods(20801), 1), (goods(15340), 9), // crafting
         ];
         items.extend((0..30).map(|i| (goods(2900 + i), 1)));
         Some(Sheet {

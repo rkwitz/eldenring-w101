@@ -19,6 +19,8 @@ python emevd.py --bosses m60_42_36_00.emevd out.emevd
   all door warps (rideable up to the door, load-screen flag, camera turned) and all four bosses (see all_bosses).
 python emevd.py --book-warps common.emevd out.emevd
   the HUD spellbook map page's warp buttons (see book_warps).
+python emevd.py --crafting common.emevd er_recipes.tsv out.emevd
+  the HUD spellbook's crafting page: one event per recipe (see crafting; er_recipes.tsv from er_recipes.py).
 python emevd.py --no-leaves common.emevd|m60.emevd out.emevd
   every falling-leaf source of those events off, in place (see no_leaves).
 python emevd.py --midday m60_42_36_00.emevd out.emevd [first_id second_id]
@@ -648,6 +650,92 @@ def book_warps(d, warps=BOOK_WARPS):
     return build(e, events)
 
 
+# The HUD spellbook's crafting page (hud_orbs/src/crafting.rs: REQUEST, INDEX, DONE, FAILED, FULL); free flags of the
+# mod's 1042362xxx block (vanilla uses 1042362200/215/217 as event ids, BuddyStoneParam 1042362340).
+CRAFT_REQUEST = 1042362170  # the page turns it on to craft; the recipe's event turns it off
+CRAFT_INDEX = 1042362171  # the recipe's number, bit k in flag CRAFT_INDEX + k (8 flags)
+CRAFT_INDEX_BITS = 8
+CRAFT_DONE, CRAFT_FAILED, CRAFT_FULL = 1042362180, 1042362181, 1042362182
+CRAFT_GIVE = 1042362160  # event value (4 bits): how many to give (2003[43] gives that many)
+CRAFT_GIVE_BITS = 4
+CRAFT_COUNTS = 1042362350  # event values (10 bits each, 1042362350-399): materials 1-4 held, then the result held
+CRAFT_COUNT_BITS = 10
+CRAFT_EVENT = 1042365000  # + recipe number: one event per recipe
+CRAFTING_KIT = 8500  # goods: Elden Ring's Crafting Kit
+
+
+def read_recipes(path):
+    """er_recipes.tsv (tools/er_recipes.py): [(kind 0 weapon / 3 goods, item, set, max, release flag, [(goods, n)])]."""
+    out = []
+    for line in open(path, encoding="utf-8"):
+        f = line.rstrip("\n").split("\t")
+        if len(f) < 9:
+            continue
+        assert int(f[0]) == len(out), "er_recipes.tsv rows out of order"
+        mats = [tuple(int(x) for x in m.split(":")) for m in f[8].split(",") if m]
+        out.append((3 if f[2] == "G" else 0, int(f[3]), int(f[4]), int(f[5]), int(f[6]), mats))
+    return out
+
+
+def crafting(d, recipes):
+    """common.emevd: one event per crafting recipe for the HUD spellbook's crafting page (crafting.rs), all started
+    from the top of event 0 (rerunning replaces them). Event CRAFT_EVENT + n waits for CRAFT_REQUEST with n in the 8
+    CRAFT_INDEX flags (each flag tested on or off, so exactly one event answers), then: request off; the result flags
+    off; 2003[42] Store Item Amount Held in Event Value for each material (and the result, for goods) into the
+    CRAFT_COUNTS values; uncompiled condition group 2 = every material held >= needed (3[12] IF Event Value, as vanilla
+    common_func 90005620 counts its item), the Crafting Kit held (3[4]), the cookbook flag on (3[0], when it has one);
+    if not, CRAFT_FAILED on and restart, nothing changed. Goods: group 3 = result held <= max - set, else CRAFT_FULL on
+    and restart. Then 2003[24] Remove Item From Player for each material, CRAFT_GIVE counted up to the set size
+    (2003[32] clear, 2003[31] increment), 2003[43] Directly Give Player Item with that value (as vanilla common 701
+    gives back items), CRAFT_DONE on, restart."""
+    e = Emevd(d)
+    events = events_of(e)
+    for n, (kind, item, count, most, release, mats) in enumerate(recipes):
+        assert len(mats) <= 4 and count < 1 << CRAFT_GIVE_BITS and n < 1 << CRAFT_INDEX_BITS
+        event_id = CRAFT_EVENT + n
+        _start_once(events, event_id)
+        ins = [_i(3, 0, "<bBBxI", 1, 1, 0, CRAFT_REQUEST)]  # IF the request flag on (group 1)
+        ins += [_i(3, 0, "<bBBxI", 1, n >> k & 1, 0, CRAFT_INDEX + k) for k in range(CRAFT_INDEX_BITS)]
+        ins += [
+            _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
+            _i(2003, 66, "<BxxxIBxxx", 0, CRAFT_REQUEST, 0),
+            _i(2003, 66, "<BxxxIBxxx", 0, CRAFT_DONE, 0),
+            _i(2003, 66, "<BxxxIBxxx", 0, CRAFT_FAILED, 0),
+            _i(2003, 66, "<BxxxIBxxx", 0, CRAFT_FULL, 0),
+        ]
+        counts = [CRAFT_COUNTS + CRAFT_COUNT_BITS * k for k in range(5)]
+        for k, (mat, _) in enumerate(mats):  # Store Item Amount Held in Event Value
+            ins.append(_i(2003, 42, "<BxxxiII", 3, mat, counts[k], CRAFT_COUNT_BITS))
+        for k, (_, need) in enumerate(mats):  # IF Event Value >= need (group 2)
+            ins.append(_i(3, 12, "<bxxxIBBxxI", 2, counts[k], CRAFT_COUNT_BITS, 4, need))
+        ins.append(_i(3, 4, "<bBxxiBxxx", 2, 3, CRAFTING_KIT, 1))  # IF the player has the Crafting Kit
+        if release:
+            ins.append(_i(3, 0, "<bBBxI", 2, 1, 0, release))  # IF the cookbook flag on
+        ins += [
+            _i(1000, 1, "<BBbx", 2, 1, 2),  # SKIP 2 IF condition group 2 true (uncompiled)
+            _i(2003, 66, "<BxxxIBxxx", 0, CRAFT_FAILED, 1),
+            _i(1000, 4, "<Bxxx", 1),  # restart
+        ]
+        if kind == 3:
+            ins += [
+                _i(2003, 42, "<BxxxiII", 3, item, counts[4], CRAFT_COUNT_BITS),
+                _i(3, 12, "<bxxxIBBxxI", 3, counts[4], CRAFT_COUNT_BITS, 5, most - count),  # held <= max - set
+                _i(1000, 1, "<BBbx", 2, 1, 3),
+                _i(2003, 66, "<BxxxIBxxx", 0, CRAFT_FULL, 1),
+                _i(1000, 4, "<Bxxx", 1),
+            ]
+        ins += [_i(2003, 24, "<Bxxxii", 3, mat, need) for mat, need in mats]  # Remove Item From Player
+        ins.append(_i(2003, 32, "<II", CRAFT_GIVE, CRAFT_GIVE_BITS))  # Clear Event Value
+        ins += [_i(2003, 31, "<III", CRAFT_GIVE, CRAFT_GIVE_BITS, count) for _ in range(count)]  # Increment
+        ins += [
+            _i(2003, 43, "<BxxxiII", kind, item, CRAFT_GIVE, CRAFT_GIVE_BITS),  # Directly Give Player Item
+            _i(2003, 66, "<BxxxIBxxx", 0, CRAFT_DONE, 1),
+            _i(1000, 4, "<Bxxx", 1),  # restart
+        ]
+        events.append({"id": event_id, "rest": 0, "pars": [], "ins": ins})
+    return build(e, events)
+
+
 def build(e, events):
     """EMEVD bytes from `events` [{id, rest, ins: [{bank, id, args, layer}], pars: [(index, target, source, size, unk)]}]
     with the header flags, linked files and strings of the parsed file `e` (no layers)."""
@@ -690,6 +778,9 @@ if __name__ == "__main__":
     import sys
     if sys.argv[1] == "--book-warps":  # emevd.py --book-warps common.emevd out.emevd
         open(sys.argv[3], "wb").write(book_warps(open(sys.argv[2], "rb").read()))
+        sys.exit()
+    if sys.argv[1] == "--crafting":  # emevd.py --crafting common.emevd er_recipes.tsv out.emevd
+        open(sys.argv[4], "wb").write(crafting(open(sys.argv[2], "rb").read(), read_recipes(sys.argv[3])))
         sys.exit()
     if sys.argv[1] == "--no-leaf-gusts":  # emevd.py --no-leaf-gusts common.emevd out.emevd
         open(sys.argv[3], "wb").write(no_leaf_gusts(open(sys.argv[2], "rb").read()))

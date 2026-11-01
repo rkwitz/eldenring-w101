@@ -356,6 +356,7 @@ impl Book {
             }
         }
         self.items = ItemData::load(&folder.join("er"));
+        crate::crafting::load(&folder.join("er"));
         self.quests = Quests::load(&folder.join("quests.tsv"));
         self.quest_flags = self.quests.flags();
         self.quest_flags.extend(markers::flags());
@@ -552,10 +553,20 @@ impl Book {
         self.holding = false;
     }
 
-    /// Shows the crafting page's cookbooks (the preview renderer).
+    /// Shows the crafting page's materials (the preview renderer).
     #[allow(dead_code)]
-    pub fn preview_cookbooks(&mut self) {
-        self.state.cookbooks = true;
+    pub fn preview_materials(&mut self) {
+        self.state.craft.materials = true;
+    }
+
+    /// Shows the crafting page with recipe `recipe` chosen, and its "You made a" panel if `made` (the preview).
+    #[allow(dead_code)]
+    pub fn preview_recipe(&mut self, recipe: usize, made: bool) {
+        self.state.craft.materials = false;
+        self.state.craft.recipe = recipe;
+        if made {
+            self.state.craft.preview_made(recipe);
+        }
     }
 
     /// Shows tab `tab` of the Settings page (the preview renderer).
