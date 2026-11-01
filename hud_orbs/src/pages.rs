@@ -1825,9 +1825,8 @@ const MAP_GRACE_NUDGE: [f32; 2] = [-10.0, 0.0];
 const MAP_ZOOM_PLUS: &str = "GUI/Buttons/Button_Zoom_Plus.png";
 
 /// Wizard101's parchment name plates (_Shared-WorldData GUI/Nameplates): what a map icon shows while the mouse is on
-/// it (Elite purple for bosses, Shop tan), and the place labels that are always shown.
+/// it (Elite purple for bosses), and the place labels that are always shown.
 const MAP_PLATE_ELITE: &str = "GUI/Nameplates/NamePlate_128x64_Elite.png";
-const MAP_PLATE_SHOP: &str = "GUI/Nameplates/NamePlate_128x64_Shop.png";
 const MAP_LABEL_SCROLL: &str = "GUI/Nameplates/Location_Long_2_Line_52_pixels_high.png";
 const MAP_LABEL_POI: &str = "GUI/Nameplates/POI_128x64.png";
 /// The plates' text: Comic Sans bold (WizardNormal), the dark brown of Wizard101's own map labels (82,51,29, measured
@@ -1874,14 +1873,27 @@ const MAP_LABELS: [(&str, [f32; 4], &str); 4] = [
     (MAP_LABEL_POI, [282.0, 442.0, 365.0, 500.0], "Unicorn\nPark"),
 ];
 
-/// A parchment plate with its lines of text centred in it (the map's labels and hover plates).
+/// WizardNormal's cell is 47 font pixels high and its capitals fill rows 13 to 38 of it (WizardNormal.xml and its
+/// atlas): a line's box is one cell (at MAP_PLATE_SCALE), and the capitals' middle is this far down it.
+const MAP_PLATE_CELL: f32 = 47.0 * MAP_PLATE_SCALE;
+const MAP_PLATE_CAPS_MID: f32 = 25.5 * MAP_PLATE_SCALE;
+
+/// Where the parchment's middle is in a plate's art (0..1 of its height, measured on the 128 x 64 pictures' opaque
+/// rows): the scroll label's parchment is rows 3..54 (its curled ends hang below it), the others are centred.
+fn map_plate_mid(plate: &str) -> f32 {
+    if plate == MAP_LABEL_SCROLL { 28.5 / 64.0 } else { 32.5 / 64.0 }
+}
+
+/// A parchment plate with its lines of text centred in it (the map's labels and hover plates): the capitals' middle
+/// of the lines on the parchment's middle (round 17 A1: they sat low, each cell's top on its line's top).
 fn map_plate(v: &mut View, plate: &str, r: [f32; 4], text: &str) {
     v.image(r, plate);
     let lines: Vec<&str> = text.split('\n').collect();
-    let top = (r[1] + r[3]) / 2.0 - lines.len() as f32 * MAP_PLATE_LINE / 2.0;
+    let mid = r[1] + (r[3] - r[1]) * map_plate_mid(plate);
+    let first = mid - (lines.len() - 1) as f32 * MAP_PLATE_LINE / 2.0;
     for (i, line) in lines.iter().enumerate() {
-        let y = top + i as f32 * MAP_PLATE_LINE;
-        v.add([r[0], y, r[2], y + MAP_PLATE_LINE], line.trim(),
+        let y = first + i as f32 * MAP_PLATE_LINE - MAP_PLATE_CAPS_MID;
+        v.add([r[0], y, r[2], y + MAP_PLATE_CELL], line.trim(),
               TextStyle::new(MAP_PLATE_FONT, MAP_PLATE_SCALE, MAP_PLATE_INK).centred());
     }
 }
@@ -2022,10 +2034,9 @@ fn map(l: &Layout, d: &Data, v: &mut View, st: &mut State) {
     for icon in &MAP_BOSSES {
         map_icon(v, icon);
     }
-    // The grace: hover for its name on a tan parchment plate ("The First Step" 116 wide), click (or A) to travel there.
+    // The grace: click (or A) to travel there. Round 17 A2: nothing on hover (no name plate), only the icon.
     let grace = map_grace_rect();
-    map_icon(v, &MapIcon { picture: MAP_GRACE, rect: grace, plate: MAP_PLATE_SHOP, plate_size: [142.0, 32.0],
-                           text: "The First Step" });
+    v.image(grace, MAP_GRACE);
     st.hits.push((grace, Hit::Warp(WARP_UNICORN_WAY)));
     if let Some(uv) = player {
         let p = map_at(uv);
@@ -2445,11 +2456,16 @@ pub const SETTINGS_ROWS: [&str; 5] =
 /// Rows 6 and 7: their tops (page pixels), below OptionHardwareCursor (315) at Wizard101's 48-pixel row pitch.
 const EXTRA_ROWS: [f32; 2] = [363.0, 411.0];
 pub const SETTINGS_PAGE_ROWS: usize = 7;
-/// OptionValue's text: Settings.gui has WizardFancy 0.6 centred in the 22-pixel red box, but WizardFancy's capitals
-/// sit low in their cells, so at 0.6 they ran over the box's bottom rim (Ryan, round 15: text must stay inside its
-/// box). A little smaller and lifted, they sit inside the red.
+/// OptionValue's text: Settings.gui has WizardFancy 0.6 in a 22-pixel red box (Button_Red01's top quarter); the text
+/// size is 0.54 (Ryan, round 15/17: the size is right).
 const VALUE_SCALE: f32 = 0.54;
-const VALUE_LIFT: f32 = 2.5;
+/// The red value banner, the same on every row (Ryan, round 17 E1: Settings.gui's 22-pixel box was too short for the
+/// text and rows 6-7 drew their own): 462..654 wide as in Settings.gui, 28 high, centred on the row's arrow buttons
+/// (row top + 6..+48, middle +27). The value's text box is the banner itself: WizardFancy's capitals fill rows 5..36
+/// of its 43-pixel cell (WizardFancy.xml), the cell's middle, so the layout's vertical centring centres them in it.
+const VALUE_BANNER: [f32; 4] = [462.0, 13.0, 654.0, 41.0];
+/// The value text's sides: inside the banner, between the arrows (as before round 17).
+const VALUE_TEXT_X: [f32; 2] = [474.0, 642.0];
 
 /// One settings row as the page shows it: label and value.
 pub type SettingRow = (String, String);
@@ -2489,8 +2505,14 @@ fn settings(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 v.show(Some(r), shown);
                 // The label and value are drawn below instead (one line, fitted), so the layout's are left empty.
                 v.set(l.find_under(r, "OptionText"), "");
-                v.set(l.find_under(r, "OptionValue"), "");
-                l.nodes[r].rect[1]
+                let top = l.nodes[r].rect[1];
+                if let Some(value) = l.find_under(r, "OptionValue") {
+                    v.set(Some(value), "");
+                    // Its red back (drawn under the arrows) as the banner of every row.
+                    let b = VALUE_BANNER;
+                    v.rect.insert(value, [b[0], top + b[1], b[2], top + b[3]]);
+                }
+                top
             }
             None => EXTRA_ROWS[i - SETTINGS_ROWS.len()],
         };
@@ -2500,16 +2522,17 @@ fn settings(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         if i >= SETTINGS_ROWS.len() {
             let left = [436.0, top + 6.0, 478.0, top + 48.0];
             let right = [638.0, top + 6.0, 680.0, top + 48.0];
-            v.images.push(([462.0, top + 16.0, 654.0, top + 38.0], "GUI/Buttons/Button_Red01.png".into(),
+            let b = VALUE_BANNER;
+            v.images.push(([b[0], top + b[1], b[2], top + b[3]], "GUI/Buttons/Button_Red01.png".into(),
                            [0.0, 0.0, 1.0, 0.25]));
             v.images.push((left, "GUI/Buttons/Button_Arrow01.png".into(), [0.0, 0.0, 0.25, 0.5]));
             v.images.push((right, "GUI/Buttons/Button_Arrow01.png".into(), [0.0, 0.5, 0.25, 1.0]));
             st.hits.push((left, Hit::Setting(i, -1)));
             st.hits.push((right, Hit::Setting(i, 1)));
         }
-        // OptionText (136..386 at +12..+42) may run on to just before the left arrow (436); OptionValue's text stays
-        // inside the red box (462..654 at +16..+38) clear of the arrows' rims. Both are one line that shrinks to fit.
+        // OptionText (136..386 at +12..+42) may run on to just before the left arrow (436); OptionValue's text is
+        // centred in the red banner, clear of the arrows' rims. Both are one line that shrinks to fit.
         v.add([136.0, top + 12.0, 430.0, top + 42.0], label, label_style.clone());
-        v.add([474.0, top + 16.0 - VALUE_LIFT, 642.0, top + 38.0 - VALUE_LIFT], value, value_style.clone());
+        v.add([VALUE_TEXT_X[0], top + VALUE_BANNER[1], VALUE_TEXT_X[1], top + VALUE_BANNER[3]], value, value_style.clone());
     }
 }

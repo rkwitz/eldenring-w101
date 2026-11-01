@@ -365,9 +365,11 @@ fn recipes(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 let goods = 0x4000_0000 | m;
                 let have = held(d, goods);
                 let b = l.nodes[n].rect;
-                // Wizard101's ingredient thumbnail (the box's blue square, the star hidden): the material's picture
-                // filling all of it, the blank reagent medallion behind it.
-                reagent_picture(v, d.items, goods, b, 1.0);
+                // Round 17 D1: the material in Wizard101's own square box (IngredientLayout's art), inside its
+                // gold border and above the have/need plaque; no round medallion.
+                if let Some(layout) = l.find("IngredientLayout") {
+                    ingredient_picture(v, d.items, goods, l.nodes[layout].rect, slot);
+                }
                 v.set(num, centre(&format!("{have}/{need}")));
                 let mut tip = d.items.tooltip(goods, have.max(1), d.names, false);
                 tip.insert(1.min(tip.len()), format!("Needed: {need}, you have {have}"));
@@ -489,6 +491,37 @@ pub(crate) fn reagent_picture(v: &mut View, items: &crate::itemdata::ItemData, i
     let uv = crop(&art).unwrap_or([0.0, 0.0, 1.0, 1.0]);
     let (cx, cy, half) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0, (r[2] - r[0]).min(r[3] - r[1]) * fill / 2.0);
     v.images.push(([cx - half, cy - half, cx + half, cy + half], art, uv));
+}
+
+/// IngredientLayout's background (RecipeWindow.gui): Wizard101's eight square ingredient boxes, 4 x 2 cells of 64 x 64
+/// in its 256 x 128 picture, the picture stretched over the layout's rectangle.
+const INGREDIENT_BOXES: &str = "GUI/Backgrounds/Background_Crafting_Icons01.png";
+const INGREDIENT_ART: [f32; 2] = [256.0, 128.0];
+/// In each 64 x 64 cell (measured on the art): the blue window inside the gold border is x 11..53, y 7..43; the plaque
+/// (Art_Crafting_MiniPlaque02, RecipeWindow's IngredientNumber parent) covers the box's bottom from y 42 on.
+const INGREDIENT_WINDOW: [f32; 4] = [11.0, 7.0, 53.0, 42.0];
+/// A star-free patch of the window's painted blue (cell pixels), stretched over the star when a material is shown.
+const INGREDIENT_BLUE: [f32; 4] = [12.0, 8.0, 20.0, 18.0];
+/// Space between the picture and the border (page pixels).
+const INGREDIENT_MARGIN: f32 = 2.0;
+
+/// A material in ingredient box `slot` (0..8) of IngredientLayout (`layout`, its page rectangle): the box's own blue
+/// painted over its star, and the item's icon (cropped to its drawn part, see `crop`) as large as fits inside the
+/// blue window, clear of the gold border and of the have/need plaque under it.
+fn ingredient_picture(v: &mut View, items: &crate::itemdata::ItemData, item: u32, layout: [f32; 4], slot: usize) {
+    let (sx, sy) = ((layout[2] - layout[0]) / INGREDIENT_ART[0], (layout[3] - layout[1]) / INGREDIENT_ART[1]);
+    let (cx, cy) = ((slot % 4) as f32 * 64.0, (slot / 4) as f32 * 64.0);
+    let page = |p: [f32; 4]| [layout[0] + (cx + p[0]) * sx, layout[1] + (cy + p[1]) * sy,
+                              layout[0] + (cx + p[2]) * sx, layout[1] + (cy + p[3]) * sy];
+    let w = page(INGREDIENT_WINDOW);
+    let b = INGREDIENT_BLUE;
+    v.images.push((w, INGREDIENT_BOXES.into(),
+                   [b[0] / INGREDIENT_ART[0], b[1] / INGREDIENT_ART[1], b[2] / INGREDIENT_ART[0], b[3] / INGREDIENT_ART[1]]));
+    let Some(art) = items.icon(item) else { return };
+    let uv = crop(&art).unwrap_or([0.0, 0.0, 1.0, 1.0]);
+    let side = (w[2] - w[0]).min(w[3] - w[1]) - 2.0 * INGREDIENT_MARGIN;
+    let (mx, my) = ((w[0] + w[2]) / 2.0, (w[1] + w[3]) / 2.0);
+    v.images.push(([mx - side / 2.0, my - side / 2.0, mx + side / 2.0, my + side / 2.0], art, uv));
 }
 
 /// The result's name (er_item_names.tsv; er_recipes.tsv's own copy if that has none).
