@@ -287,6 +287,8 @@ pub struct View {
     /// Filled triangles and rectangles drawn over the images, under the text.
     pub over_tris: Vec<([[f32; 2]; 3], ImColor32)>,
     pub over_fills: Vec<([f32; 4], ImColor32)>,
+    /// Filled circles (the ellipse in each rect) drawn over the images, under the text.
+    pub over_discs: Vec<([f32; 4], ImColor32)>,
     /// Nine-piece frames (tl, t, tr, l, r, bl, b, br, centre) drawn over the fills, under the images.
     pub frames: Vec<([f32; 4], [Option<String>; 9])>,
     /// Images drawn after the nodes: (rect, image, uv).
@@ -862,6 +864,12 @@ pub fn draw_extra(view: &View, canvas: &Canvas) {
     for (r, colour) in &view.over_fills {
         canvas.draw.add_rect(canvas.at(r[0], r[1]), canvas.at(r[2], r[3]), fade(*colour, canvas.alpha))
             .filled(true).build();
+    }
+    for (r, colour) in &view.over_discs {
+        let (p0, p1) = (canvas.at(r[0], r[1]), canvas.at(r[2], r[3]));
+        let radius = ((p1[0] - p0[0]).min(p1[1] - p0[1]) / 2.0).max(0.0);
+        canvas.draw.add_circle([(p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0], radius, fade(*colour, canvas.alpha))
+            .filled(true).num_segments(32).build();
     }
     for (r, text, style) in &view.extra {
         canvas.text(text, *r, style, false);

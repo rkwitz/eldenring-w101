@@ -1538,12 +1538,26 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
         }
     }
     // What it does: Wizard101's type icon in the box at the picture's bottom right (98,97 .. 125,124).
-    let (y0, y1) = (card(100.0, 99.0), card(123.0, 122.0));
+    // Round 19 (Ryan D7): smaller, inside the box's frame as Wizard101's type symbol sits (the Sunbird and
+    // Lightning Bats help pictures: the fist covers about 70% of the grey box), not filling it.
     let kind = spell_type(d.items, raw);
+    let inset = (23.0 * (1.0 - CARD_TYPE_FILL)) / 2.0;
+    let (y0, y1) = (card(100.0 + inset, 99.0 + inset), card(123.0 - inset, 122.0 - inset));
     v.images.push(([y0[0], y0[1], y1[0], y1[1]], kind.into(), [0.0, 0.0, 1.0, 1.0]));
-    // The name inside the title band, clear of its edges (Ryan round 18 C1).
+    // The accuracy in the bottom-left circle (Ryan D6): Wizard101 prints the percentage over the frame's
+    // bullseye, which shows dimmed under it (Background_Tutorial_Card's Sunbird "100%",
+    // Background_Help_Combat_Card_Description's Lightning Bats "70%"): yellow, black-edged digits across the
+    // circle. Elden Ring's spells always land, so 100%.
+    let (a0, a1) = (card(2.0, 97.0), card(28.0, 123.0));
+    v.over_discs.push(([a0[0], a0[1], a1[0], a1[1]], ImColor32::from_rgba(20, 16, 40, 105)));
+    v.add([a0[0] - 2.0 * k, a0[1], a1[0] + 2.0 * k, a1[1]], "100%",
+          TextStyle::new("WizardFancy", CARD_ACCURACY_SCALE * k, PIP_YELLOW).centred().outlined());
+    // The name inside the title band (Ryan round 19 D4-D5): white with a black edge like Wizard101's card names,
+    // one size on every card (CARD_NAME_SCALE), one row; names too long for it use a chosen short name
+    // (CARD_SHORT_NAMES), never "...".
+    let name = card_name(name);
     let (t0, t1) = (card(CARD_NAME[0], CARD_NAME[1]), card(CARD_NAME[2], CARD_NAME[3]));
-    v.add([t0[0], t0[1], t1[0], t1[1]], name, TextStyle::new("WizardFancy", 0.34 * k, YELLOW).centred().outlined());
+    v.add([t0[0], t0[1], t1[0], t1[1]], name, TextStyle::new("WizardFancy", CARD_NAME_SCALE * k, WHITE).centred().outlined());
     if let Some(spell) = spell {
         // The cost in the pip triangle: Wizard101's yellow number with a black outline (its reagent card's rank,
         // w101_reference/reagent_card_balance_azoth.png: (239,233,111) inside a black edge, the digit about 14 of
@@ -1553,7 +1567,9 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
               TextStyle::new("WizardFancy", 0.3 * k, PIP_YELLOW).centred().outlined());
         let mut needs: Vec<String> = ["Int", "Fai", "Arc"].iter().zip(spell.requirements).filter(|(_, v)| *v > 0)
             .map(|(n, v)| format!("{n} {v}")).collect();
-        needs.insert(0, format!("{} slot{}", spell.slots.max(1), if spell.slots > 1 { "s" } else { "" }));
+        // The memory slots as the item tooltip shows them (Type_PowerPips and the count): with the words "2 slots"
+        // the longest line ("2 slots Fai 28 Arc 17") would not fit at the description's size (Ryan round 19 D1).
+        needs.insert(0, format!("<image;{SLOT_ICON}>{}", spell.slots.max(1)));
         // What it does, as Wizard101's cards say it (Spell.lang, e.g. Fire Elf "#1:$eA$ + #2:$eA4$
         // #3:$dT_image$#4:$Damage_image$ over 3 #5:$Rounds_image$"): the numbers from the cast's params
         // (tools/er_book_data.py), then the school symbol and the type symbol inline, at the text's size, one
@@ -1586,8 +1602,9 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
         v.add([b0[0], b0[1], b1[0], b1[1]], effect, style);
         let top = CARD_TEXT_TOP + 2.0 * pitch;
         let (n0, n1) = (card(CARD_NEEDS_X[0], top), card(CARD_NEEDS_X[1], top + line));
-        v.add([n0[0], n0[1], n1[0], n1[1]], needs.join(" "),
-              TextStyle::new("SpellDescription", CARD_NEEDS_SCALE * k, BLACK).centred());
+        let mut needs_style = TextStyle::new("SpellDescription", CARD_TEXT_SCALE * k, BLACK).centred();
+        needs_style.picture = CARD_SYMBOL_SIZE;
+        v.add([n0[0], n0[1], n1[0], n1[1]], needs.join(" "), needs_style);
     }
 }
 
@@ -1598,19 +1615,126 @@ const CARD_HOVER_SCALE: f32 = 1.08;
 const CARD_HIGHLIGHT: &str = "GUI/Art/Art_Card_Selection.png";
 const CARD_HIGHLIGHT_EDGE: f32 = 2.0;
 
-/// The name's box in the card art (128 x CARD_H): inside the title band (y 2..24), 14 px in from each side.
-const CARD_NAME: [f32; 4] = [14.0, 4.0, 114.0, 25.0];
+/// The name's box in the card art (128 x CARD_H): the title band (y 2..24) less 6 px each side; Wizard101's own
+/// names run nearly edge to edge (Lightning Bats: 90% of the card's width).
+const CARD_NAME: [f32; 4] = [6.0, 4.0, 122.0, 25.0];
+/// The name's WizardFancy scale on a 97 px card (Ryan round 19 D5: one size). Measured on Wizard101's cards in
+/// Background_Tutorial_Card (SUNBIRD: 49% of the card's width = 0.28) and Background_Help_Combat_Card_Description
+/// (LIGHTNING BATS 0.28, JUDGEMENT 0.30).
+const CARD_NAME_SCALE: f32 = 0.27;
+/// The accuracy's WizardFancy scale on a 97 px card ("100%" across the circle, as on the Sunbird picture).
+const CARD_ACCURACY_SCALE: f32 = 0.2;
+/// How much of the type box the type symbol covers (Ryan round 19 D7).
+const CARD_TYPE_FILL: f32 = 0.72;
+/// Short card names for the Elden Ring spells whose names do not fit one row at CARD_NAME_SCALE (wider than 320
+/// WizardFancy pixels, the box's 87.9 page px / 0.27): chosen by hand, every one checked against the font's glyph
+/// widths (Ryan round 19 D4: one row, never "...").
+const CARD_SHORT_NAMES: &[(&str, &str)] = &[
+    ("Great Glintstone Shard", "Great Shard"),
+    ("Swift Glintstone Shard", "Swift Shard"),
+    ("Glintstone Cometshard", "Cometshard"),
+    ("Founding Rain of Stars", "Rain of Stars"),
+    ("Glintblade Phalanx", "Glintblades"),
+    ("Greatblade Phalanx", "Greatblades"),
+    ("Rennala's Full Moon", "Full Moon"),
+    ("Ranni's Dark Moon", "Dark Moon"),
+    ("Loretta's Greatbow", "Greatbow"),
+    ("Loretta's Mastery", "Bow Mastery"),
+    ("Glintstone Icecrag", "Icecrag"),
+    ("Carian Greatsword", "Greatsword"),
+    ("Adula's Moonblade", "Moonblade"),
+    ("Scholar's Armament", "Scholar's Blade"),
+    ("Shattering Crystal", "Shatter Crystal"),
+    ("Carian Retaliation", "Retaliation"),
+    ("Meteorite of Astel", "Astel Meteor"),
+    ("Briars of Punishment", "Punishment"),
+    ("Ancient Death Rancor", "Death Rancor"),
+    ("Explosive Ghostflame", "Ghostflame"),
+    ("Great Oracular Bubble", "Great Bubble"),
+    ("Flame, Fall Upon Them", "Flamefall"),
+    ("Flame, Grant Me Strength", "Flame Strength"),
+    ("Flame, Protect Me", "Flame Ward"),
+    ("Giantsflame Take Thee", "Giantsflame"),
+    ("Flame of the Fell God", "Fell God Flame"),
+    ("Scouring Black Flame", "Scouring Flame"),
+    ("Black Flame Ritual", "Flame Ritual"),
+    ("Black Flame Blade", "Blackflame Blade"),
+    ("Black Flame's Protection", "Black Ward"),
+    ("Bloodflame Talons", "Blood Talons"),
+    ("Protection of the Erdtree", "Erdtree Ward"),
+    ("Blessing of the Erdtree", "Erdtree Blessing"),
+    ("Flame Fortification", "Fire Guard"),
+    ("Magic Fortification", "Magic Guard"),
+    ("Lightning Fortification", "Storm Guard"),
+    ("Divine Fortification", "Divine Guard"),
+    ("Lord's Divine Fortification", "Lord's Guard"),
+    ("Night Maiden's Mist", "Maiden's Mist"),
+    ("Assassin's Approach", "Assassin's Step"),
+    ("Triple Rings of Light", "Triple Rings"),
+    ("Radagon's Rings of Light", "Radagon's Rings"),
+    ("Law of Regression", "Regression"),
+    ("Litany of Proper Death", "Proper Death"),
+    ("Gurranq's Beast Claw", "Gurranq's Claw"),
+    ("Bestial Constitution", "Bestial Cure"),
+    ("Ancient Dragons' Lightning Strike", "Ancient Strike"),
+    ("Frozen Lightning Spear", "Frozen Spear"),
+    ("Ancient Dragons' Lightning Spear", "Ancient Spear"),
+    ("Fortissax's Lightning Spear", "Fortissax Spear"),
+    ("Lansseax's Glaive", "Lansseax Glaive"),
+    ("Electrify Armament", "Electrify"),
+    ("Vyke's Dragonbolt", "Vyke's Bolt"),
+    ("Dragonbolt Blessing", "Dragonbolt"),
+    ("Theodorix's Magma", "Theodorix"),
+    ("Glintstone Breath", "Glint Breath"),
+    ("Smarag's Glintstone Breath", "Smarag's Breath"),
+    ("Placidusax's Ruin", "Placidusax"),
+    ("Inescapable Frenzy", "Frenzy Grip"),
+    ("The Flame of Frenzy", "Frenzy Flame"),
+    ("Unendurable Frenzy", "Wild Frenzy"),
+    ("Aspects of the Crucible: Tail", "Crucible Tail"),
+    ("Aspects of the Crucible: Horns", "Crucible Horns"),
+    ("Aspects of the Crucible: Breath", "Crucible Breath"),
+    ("Golden Lightning Fortification", "Golden Guard"),
+    ("Miriam's Vanishing", "Vanishing"),
+    ("Rellana's Twin Moons", "Twin Moons"),
+    ("Gravitational Missile", "Gravity Missile"),
+    ("Impenetrable Thorns", "Iron Thorns"),
+    ("Rings of Spectral Light", "Spectral Rings"),
+    ("Vortex of Putrescence", "Putrid Vortex"),
+    ("Mass of Putrescence", "Putrid Mass"),
+    ("Furious Blade of Ansbach", "Ansbach's Blade"),
+    ("Aspects of the Crucible: Thorns", "Crucible Thorns"),
+    ("Aspects of the Crucible: Bloom", "Crucible Bloom"),
+    ("Wrath from Afar", "Distant Wrath"),
+    ("Multilayered Ring of Light", "Layered Rings"),
+    ("Knight's Lightning Spear", "Knight's Spear"),
+    ("Dragonbolt of Florissax", "Florissax Bolt"),
+    ("Bayle's Flame Lightning", "Bayle's Fury"),
+    ("Ghostflame Breath", "Ghost Breath"),
+    ("Rotten Butterflies", "Rot Butterflies"),
+    ("Pest-Thread Spears", "Thread Spears"),
+    ("Midra's Flame of Frenzy", "Midra's Frenzy"),
+    ("Fleeting Microcosm", "Microcosm"),
+    ("Cherishing Fingers", "Fingers"),
+    ("Divine Beast Tornado", "Beast Tornado"),
+    ("Divine Bird Feathers", "Bird Feathers"),
+];
+
+/// The name a card shows: its short name if it has one.
+fn card_name(name: &str) -> &str {
+    CARD_SHORT_NAMES.iter().find(|(long, _)| *long == name).map_or(name, |(_, short)| short)
+}
 /// The parchment box (School_*_Blnk: x 8..120, y 129..188 of the art) and the text in it: the first line's top
 /// (its letters start about 5 px under the box's top edge), the description's and the needs line's sides.
 const CARD_TEXT_TOP: f32 = 128.0;
 const CARD_TEXT_X: [f32; 2] = [12.0, 116.0];
-const CARD_NEEDS_X: [f32; 2] = [11.0, 117.0];
+const CARD_NEEDS_X: [f32; 2] = [8.0, 120.0];
+/// The memory slots symbol on the needs line (the item tooltip's "Memory Slots" icon).
+const SLOT_ICON: &str = "GUI/Icons/Type_PowerPips.png";
 /// Line pitch of the card text in line heights: three lines in the box (SpellDescription's 21 px cells have
-/// about 5 px of space over the capitals).
-const CARD_LEADING: f32 = 0.66;
-/// The slots and needs line's scale, the same on every card: the longest ("2 slots Fai 28 Arc 17", 141
-/// SpellDescription px) fits the box's 80 px at 0.57; shorter ones would otherwise come out larger.
-const CARD_NEEDS_SCALE: f32 = 0.6;
+/// about 5 px of space over the capitals); round 19: 0.8 at the smaller one-size text, the three rows evenly
+/// spaced down the box.
+const CARD_LEADING: f32 = 0.8;
 
 /// SpellDescription's line height (its 21 px glyph cells) at `scale`, in page pixels.
 fn font_line(scale: f32) -> f32 {
@@ -1652,8 +1776,10 @@ fn card_symbols(text: &str, school: &str) -> String {
 /// "105-145" is 58% of the card's width = 56 SpellDescription pixels on 97 px, scale 1.0; Background_Tutorial_Card's
 /// Sunbird: digits 11% of the card's width, 1.06; the help card description 0.9 to 1.4): 0.9, the largest at
 /// which three lines (two of text, the slots and needs) fit the parchment box. Round 17's 0.64 came from a
-/// reagent card's name, which Wizard101 draws smaller.
-const CARD_TEXT_SCALE: f32 = 0.9;
+/// reagent card's name, which Wizard101 draws smaller. Round 19 (Ryan D1, from playing Wizard101): that was too
+/// big for the two description lines and the needs line (0.6) too small; all three lines now share one size,
+/// 0.72, which keeps the longest needs line ("2 Fai 28 Arc 17" with the slot symbol) on one row.
+const CARD_TEXT_SCALE: f32 = 0.72;
 
 fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.subs = DECK_TABS.len();
@@ -1740,8 +1866,8 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                     // it), the size of the list's cards (Ryan, round 16), above the slot and the cursor, as
                     // Wizard101's card tips sit (Ryan round 18 C8; it was under the slot).
                     let [cw, ch] = l.find("AllPageSpellList").and_then(|n| l.nodes[n].card).unwrap_or([97.0, 148.0]);
-                    let gx = ((cell[0] + cell[2]) / 2.0 - cw / 2.0).clamp(r[0], r[2] - cw);
-                    let gy = cell[1] - 6.0 - ch;
+                    // Round 19 (Ryan D2): directly on top of the slot, no gap, its left edge on the slot's.
+                    let (gx, gy) = (cell[0], cell[1] - ch);
                     let mut card = View::default();
                     spell_card(l, d, &mut card, id, &d.names.item(id), [gx, gy, gx + cw, gy + ch]);
                     v.hovers.push((cell, Box::new(card)));
@@ -2366,8 +2492,7 @@ type HelpPage = (&'static str, &'static str, &'static [(&'static str, &'static s
 const HELP: [(&str, &[(HelpPage, HelpPage)]); 6] = [
     ("Tab_Questing", &[
         (("The Spellbook",
-          "Open and close the book with B on the keyboard or the View button on the controller (Elden Ring's map \
-           button).\n\nEsc or the controller's B button also close it.", &[]),
+          "Open and close the book with Elden Ring's map button (B on the keyboard).\n\nEsc also closes it.", &[]),
          ("Tabs and Categories",
           "The tabs down the right edge are the book's pages, as in Wizard101.\n\nThe round buttons along the top of \
            a page are its categories.\n\nPoint at an item for its stats.", &[])),
@@ -2393,12 +2518,7 @@ const HELP: [(&str, &[(HelpPage, HelpPage)]); 6] = [
            Backpack.", &[])),
     ]),
     ("Tab_Combat", &[
-        (("Controller",
-          "LT / RT or D-pad up and down: previous / next page of the book.\n\nLB / RB: previous / next category \
-           along the top of the page.\n\nD-pad left and right: turn the page of a list.", &[]),
-         ("More Buttons",
-          "Right stick: turn your character in the Backpack (it turns by itself; a click on it stops it).\n\nA: \
-           use the tab, or click what the cursor is on (on the World Map, either stick moves the cursor).\n\nB or View: close the book.", &[])),
+        // (Round 19 B1: no controller button page in the book.)
         // HelpInterfaceIcons2-3: the schools and stat icons, as the item tooltips use them.
         (("Schools",
           "Item stats show Elden Ring's damage types with Wizard101's school symbols:", &[

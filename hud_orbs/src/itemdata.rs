@@ -323,7 +323,7 @@ impl ItemData {
                 if let Some(a) = self.armour.get(&row) {
                     for (t, i) in [(0, 0), (1, 4), (2, 5), (3, 6), (4, 7)] {
                         if a.absorption[i] > 0.0 {
-                            sub.push(stat_row(&format!("+{:.1}%", a.absorption[i]), TYPES[t].1, TYPE_RESIST,
+                            sub.push(stat_row(&format!("+{:.1}", a.absorption[i]), TYPES[t].1, TYPE_RESIST,
                                               &format!("{} Resist", TYPES[t].0)));
                         }
                     }

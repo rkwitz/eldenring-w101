@@ -4,7 +4,7 @@
 //!
 //! Open and close with B on the keyboard or View on the controller (instead of Elden Ring's map), close with Esc or
 //! the controller's B too. Book tabs: click, Up/Down, D-pad up/down or LT/RT; a page's own category tabs along its
-//! top: click, Q/E or LB/RB (the hints next to them show which); list pages: the page's arrows, Left/Right, D-pad
+//! top: click, Q/E or LB/RB (no hints are drawn); list pages: the page's arrows, Left/Right, D-pad
 //! left/right or the mouse wheel. The mouse works as in a menu: the book draws its own cursor and follows the system
 //! cursor, or DirectInput's mouse movement when Elden Ring keeps the system cursor locked.
 //!
@@ -53,7 +53,7 @@ const MAP_STICK_SPEED: f32 = 0.8;
 /// Wizard101's item tooltip (itemStatsInfoViewed.gui / itemStatsInfoEquipped.gui): Art_Message_Box's frame
 /// pieces (the blue ones for what is worn) around Background_Message_Box04 (black, at alpha A0), the name in
 /// WizardFancy 0.55 light blue centred at 15..38, the stat lines from y 40 with 15 px margins, and for equipped items
-/// the fist (Button_Equip) over the top right corner (181,-14 .. 220,22 of the 200-wide window).
+/// the fist (Button_Equip) over the top left corner (round 19 C4; it was the top right).
 fn tip_frame(blue: bool) -> [Option<String>; 9] {
     let kind = if blue { "Art_Message_Box_Blue" } else { "Art_Message_Box" };
     let mut out: [Option<String>; 9] = Default::default();
@@ -100,7 +100,6 @@ const QUEST_POLL: Duration = Duration::from_millis(250);
 
 const GOLD: ImColor32 = ImColor32::from_rgb(214, 170, 72);
 const PARCHMENT_DARK: ImColor32 = ImColor32::from_rgba(28, 18, 10, 236);
-const YELLOW: ImColor32 = ImColor32::from_rgb(255, 255, 0);
 const WHITE: ImColor32 = ImColor32::from_rgb(255, 255, 255);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -243,18 +242,6 @@ fn tab_index(tab: Tab) -> usize {
 /// The layout a tab shows: its page, or on the Backpack the Equipment Sets page while that is open.
 fn page_of(tab: Tab, state: &pages::State) -> &'static str {
     if tab == Tab::Backpack && state.gear_view { pages::GEAR_PAGE } else { TABS[tab_index(tab)].2 }
-}
-
-/// A small button hint (LB, RB, Q, ...) in page pixels.
-fn badge(canvas: &Canvas, r: [f32; 4], text: &str) {
-    let a = canvas.alpha;
-    let fade = |c: ImColor32| ImColor32::from_rgba(c.r, c.g, c.b, (c.a as f32 * a) as u8);
-    let (p0, p1) = (canvas.at(r[0], r[1]), canvas.at(r[2], r[3]));
-    let round = 5.0 * canvas.s;
-    canvas.draw.add_rect(p0, p1, fade(PARCHMENT_DARK)).filled(true).rounding(round).build();
-    canvas.draw.add_rect(p0, p1, fade(GOLD)).rounding(round).thickness(1.5 * canvas.s).build();
-    canvas.text(&format!("<center>{text}</center>"), [r[0] + 2.0, r[1], r[2] - 2.0, r[3]],
-                &TextStyle::new("WizardFancy", 0.0, fade(YELLOW)), false);
 }
 
 /// Wizard101's plain tooltip (ToolTip.gui): the ToolTip_Bckgrnd widget's nine bubble pieces (16 px each, white,
@@ -1555,21 +1542,7 @@ impl Book {
         canvas.hole.set(None);
 
         if !map_view {
-            // Hints: LB / RB (Q / E) beside the page's category tabs, LT / RT (Up / Down) at the ends of the book's tabs.
-            let pad = input::pad_connected();
-            if let Some(r) = view.tab_row {
-                let mid = (r[1] + r[3]) / 2.0;
-                let (l, rr) = if pad { ("LB", "RB") } else { ("Q", "E") };
-                badge(&canvas, [r[0] - 36.0, mid - 12.0, r[0] - 4.0, mid + 12.0], l);
-                badge(&canvas, [r[2] + 4.0, mid - 12.0, r[2] + 36.0, mid + 12.0], rr);
-            }
-            let first = prefs.find(TABS[0].1).map(|i| prefs.nodes[i].rect);
-            let close = prefs.find(TABS[TABS.len() - 1].1).map(|i| prefs.nodes[i].rect);
-            let (up, down) = if pad { ("LT", "RT") } else { ("Up", "Down") };
-            if let (Some(f), Some(c)) = (first, close) {
-                badge(&canvas, [f[0] - 2.0, f[1] - 24.0, f[2] + 2.0, f[1] - 2.0], up);
-                badge(&canvas, [c[0] - 2.0, c[3] + 2.0, c[2] + 2.0, c[3] + 24.0], down);
-            }
+            // No button hints on the book (Ryan, round 19 B1): Wizard101 shows none.
             // What the mouse is over: an enlarged card (the deck), Wizard101's plain tooltip (badges), or the item
             // tooltip.
             if let Some((_, hv)) = view.hovers.iter().rev().find(|(r, _)| layout::inside(mouse, *r)) {
@@ -1645,7 +1618,10 @@ impl Book {
         let width = (widest + 2.0 * margin + 6.0).clamp(TIP_WIDTH, MAX_TIP);
         let inner = width - 2.0 * margin;
         let rows = |w: f32| (w / inner * 1.08).ceil().max(1.0);
-        let title_rows = rows(fancy.width(title) * title_scale);
+        // One row when the name fits the window's width (the 1.08 slack of `rows` made a name that just fits
+        // two rows tall, a gap under it: Ryan round 19 C2).
+        let title_w = fancy.width(title) * title_scale;
+        let title_rows = if title_w <= inner { 1.0 } else { rows(title_w) };
         let heights: Vec<f32> = rest.iter().enumerate().map(|(i, l)| {
             if l.starts_with('@') {
                 row_h
@@ -1656,14 +1632,16 @@ impl Book {
             }
         }).collect();
         let title_bottom = margin + (title_rows * title_h).max(23.0);
-        let height = title_bottom + 2.0 + heights.iter().sum::<f32>() + 4.0 * (rest.len() > 1) as u8 as f32 + margin;
+        let height = title_bottom + heights.iter().sum::<f32>() + 4.0 * (rest.len() > 1) as u8 as f32 + margin;
         // Page pixels of the screen's edges.
         let right = (screen[0] - canvas.origin[0]) / canvas.s;
         let bottom = (screen[1] - canvas.origin[1]) / canvas.s;
         let top = -canvas.origin[1] / canvas.s + if equipped { 14.0 } else { 0.0 };
-        let mut x = mouse[0] + 22.0;
-        if x + width + 20.0 > right {
-            x = mouse[0] - 12.0 - width;
+        // Left of the cursor (Ryan round 19 C3); to its right only where the screen's left edge is in the way.
+        let left = -canvas.origin[0] / canvas.s;
+        let mut x = mouse[0] - 12.0 - width;
+        if x < left + 4.0 + if equipped { 14.0 } else { 0.0 } {
+            x = (mouse[0] + 22.0).min(right - width - 4.0);
         }
         let y = (mouse[1] + 8.0).min(bottom - height).max(top);
         let (p0, p1) = (canvas.at(x + 4.0, y + 4.0), canvas.at(x + width - 4.0, y + height - 4.0));
@@ -1672,7 +1650,8 @@ impl Book {
         canvas.border(&tip_frame(equipped), [x, y, x + width, y + height], ImColor32::WHITE);
         canvas.text(title, [x + margin, y + margin, x + width - margin, y + title_bottom],
                     &TextStyle::new("WizardFancy", title_scale, TIP_TITLE).centred().wrapped(), false);
-        let mut ly = y + title_bottom + 2.0;
+        // The stats start right under the name (Ryan round 19 C2).
+        let mut ly = y + title_bottom;
         for (i, (line, h)) in rest.iter().zip(heights).enumerate() {
             if let Some((value, icons)) = row_of(line) {
                 // "+45" then the icons, on one line, centred as a whole.
@@ -1702,7 +1681,8 @@ impl Book {
             ly += h;
         }
         if equipped {
-            canvas.image(EQUIP_FIST, [x + width - 25.0, y - 14.0, x + width + 14.0, y + 22.0],
+            // At the window's top left (Ryan round 19 C4).
+            canvas.image(EQUIP_FIST, [x - 14.0, y - 14.0, x + 25.0, y + 22.0],
                          [0.0, 0.0, 0.5, 0.5], ImColor32::WHITE);
         }
     }
