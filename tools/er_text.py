@@ -9,6 +9,11 @@ python er_text.py --npc-name item.msgbnd.dcx out.msgbnd.dcx
   item_dlc02.msgbnd (the game reads the latter when the DLC is installed).
 python er_text.py --npc-names item.msgbnd.dcx out.msgbnd.dcx
   adds all four boss bar names (NPC_NAMES: Rattlebones, Lady Blackhope, Fear of Fire, Seraph; emevd.py --bosses).
+python er_text.py --dialogue npc_dialogue.json menu.msgbnd out.msgbnd.dcx [dflt_header.dcx]
+  (round 15) adds the street NPCs' dialog pages to EventTextForMap (the FMG ER's generic dialog, EMEVD 2007[10],
+  reads; emevd_quests.py --dialogue shows them). The dialogue file holds Wizard101 text and lives outside the repo.
+  Do both menu.msgbnd and menu_dlc02.msgbnd. Vanilla menu msgbnds are KRAK-compressed: unpack them first (input then
+  uncompressed) and give any DFLT .dcx of the project as the header to copy; the output is DFLT DCX.
 """
 import struct
 def bnd4(b):
@@ -100,7 +105,42 @@ def add_place_name(msgbnd, text_id=PLACE_NAME_ID, text="Unicorn Way"):
     return add_text(msgbnd, "PlaceName", text_id, text)
 
 
+def add_dialogue(msgbnd, path):
+    """msgbnd bytes with every page of dialogue file `path` in EventTextForMap; refuses to overwrite vanilla text."""
+    import json
+    pages = json.load(open(path, encoding="utf-8"))["pages"]
+    suffix = "\\EventTextForMap.fmg"
+    old = next(v for k, v in bnd4(msgbnd).items() if k.endswith(suffix))
+    entries = read_fmg(old)
+    vanilla = dict(entries)
+    for key, items in pages.items():
+        for text_id, text in items:
+            assert vanilla.get(text_id) is None or vanilla[text_id] == text, f"EventTextForMap {text_id} is taken"
+            entries[text_id] = text
+    return replace_entry(msgbnd, suffix, write_fmg(entries, old))
+
+
+def dialogue_main(argv):
+    import zlib
+    dialogue, src, dst = argv[:3]
+    data = open(src, "rb").read()
+    if data[:4] == b"DCX\0":
+        assert data[0x28:0x2C] == b"DFLT", "KRAK input: unpack it first and pass a DFLT header file"
+        raw, head = zlib.decompress(data[0x4C:]), data[:0x4C]
+    else:
+        raw, head = data, open(argv[3], "rb").read()[:0x4C]
+        assert head[:4] == b"DCX\0" and head[0x28:0x2C] == b"DFLT", "header file must be DFLT DCX"
+    out = add_dialogue(raw, dialogue)
+    assert read_fmg(next(v for k, v in bnd4(out).items() if k.endswith("\\EventTextForMap.fmg")))
+    packed = zlib.compress(out, 9)
+    head = bytearray(head)
+    struct.pack_into(">II", head, 0x1C, len(out), len(packed))
+    open(dst, "wb").write(bytes(head) + packed)
+
+
 def main(argv):
+    if argv[0] == "--dialogue":
+        return dialogue_main(argv[1:])
     """er_text.py in.msgbnd out.msgbnd                      PlaceName 610900 "Unicorn Way"
     er_text.py --npc-name in.msgbnd out.msgbnd           NpcName 904969000 "Rattlebones"
     er_text.py --npc-names in.msgbnd out.msgbnd          NpcName NPC_NAMES (all four boss bars)

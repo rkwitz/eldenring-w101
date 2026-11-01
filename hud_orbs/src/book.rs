@@ -695,14 +695,17 @@ impl Book {
         let Some(game) = cx.game else { return };
         let Some(camera) = game.camera() else { return };
         let enemies = game.enemies(&nameplates::models());
-        if enemies.is_empty() {
+        let screen = ui.io().display_size;
+        let mut plates = nameplates::plates(&camera, &enemies, screen);
+        // w101_quests: the street NPCs' names (markers.rs), as the creature plates without the rank line
+        plates.extend(game.position().map(|p| markers::npc_plates(&camera, p, screen)).unwrap_or_default());
+        if plates.is_empty() {
             return;
         }
-        let screen = ui.io().display_size;
         let draw = ui.get_background_draw_list();
         let Some(fancy) = self.fonts.get("WizardFancy") else { return };
         let mut icons = Vec::new();
-        for plate in nameplates::plates(&camera, &enemies, screen) {
+        for plate in plates {
             // As Wizard101 shows them (reference nameplate_lost_soul.png): no plate, the name in big yellow
             // WizardFancy capitals with a dark outline, and under it the school's icon and "RANK n", also yellow.
             let icon = (!plate.school.is_empty()).then(|| format!("GUI/Icons/Icon_{}.png", plate.school));

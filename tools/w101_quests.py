@@ -13,12 +13,12 @@ They now live in 1042362xxx, clear of 1042362732-734:
                                 last one done), +9 complete
   counters: kill counts as 4-bit event values (2003[31] / 3[12]), COUNTER_BASE + 4*k
   cages:    one flag per Bone Cage opened, CAGE_FLAG + c
-  talk:     TALK_FLAG + npc index, set by the game each time the player talks to that quest giver (action button);
-            the HUD shows the dialogue and clears it (EMEVD never clears it)
+  talk:     TALK_FLAG + npc index: rounds 10-14 set it on a talk press for the HUD's dialogue box; unused since round 15
+            (ER's dialog box, DIALOG_OK / DIALOG_CANCEL = 1042362620 / 621, see emevd_quests.py)
 No flag is on in a new save, so the player starts with no quests: Unicorn Way is assigned on reaching Private
 Connelly at the street entrance, every other quest by the quest before it or by talking to its giver.
 
-Goal types: talk (action button on the giver's asset), goto (player inside a sphere region), defeat (count kills of
+Goal types: talk ("Talk" on the NPC character, CHARACTERS), goto (player inside a sphere region), defeat (count kills of
 the listed enemies while the goal is current, then the count reaches `count`; one kill counts for every current goal
 that wants that enemy), boss (one kill of the boss while the goal is current), cages (all Bone Cages opened while the
 quest is active). A goal is current when its quest is assigned, it is not done, and the goals in `after` (default:
@@ -68,6 +68,43 @@ NPCS = [  # (slug, frame, position, facing degrees, asset model, entity id)
 ]
 OLD_GIVER_MODELS = ["AEG217_220", "AEG110_324", "AEG024_169", "AEG099_010", "AEG217_220"]  # same order as NPCS
 NPC_INDEX = {slug: k for k, (slug, *_rest) in enumerate(NPCS)}
+
+# Round 15: the street's Wizard101 NPCs as Elden Ring characters (msb_add_npcs.py), talked to with ER's own "Talk"
+# button and answered in ER's own dialog box (emevd_quests.py; text in the map's EventTextForMap entries, er_text.py
+# --dialogue). The invisible giver assets above stay in the map unused, so nothing else's part indices move.
+# Rows are vanilla tuples (model, Think, NpcParam as some vanilla map places them; no regulation edits):
+#   c0000 humans: Think 523011000 / NpcParam 523010010 = White Mask Varre as vanilla m60_42_36_00 places him at The
+#     First Step (friendly NPC team 26, Limgrave), the look from the CharaInitParam row (equipment, face, sex)
+#   c3200 Merchant Kale (vanilla m60_42_36_00), c2010 Blaidd (m60_44_34_00), c4110 Boc the Seamster (m60_39_40_00),
+#   c2180 Melina (base row 21800000, team 26; vanilla places only her Leyndell row 21801034)
+# (slug, W101 name, frame, FLVER-frame position, W101 yaw degrees, model, Think, NpcParam, CharaInit, entity)
+# Positions/yaws: the zone gamedata.bin (WC_Unicorn, WC_Unicorn_HedgeMaze), W101 (x, z, y) * 0.01, y lifted 0.2 m so
+# the character drops onto the collision. O'Ryan stands at house H1's door (the house is not built), Lady Oriel on the
+# maze's sunken floor (W101 floats her 4 m up).
+HUMAN_THINK, HUMAN_NPC = 523011000, 523010010
+CHARACTERS = [
+    ("private_connelly", "Private Connelly", "street", (26.543, 0.184, 22.200), 55.86, "c0000",
+     HUMAN_THINK, HUMAN_NPC, 6194, 1042360820),
+    ("ceren_nightchant", "Ceren Nightchant", "street", (-41.857, 0.489, 85.837), -24.23, "c0000",
+     HUMAN_THINK, HUMAN_NPC, 6164, 1042360821),
+    ("olivia_dawnwillow", "Olivia Dawnwillow", "street", (-20.198, -1.174, 86.550), -177.30, "c0000",
+     HUMAN_THINK, HUMAN_NPC, 23201, 1042360822),
+    ("lady_oriel", "Lady Oriel", "garden", (5.974, -0.500, 0.940), 179.62, "c2180",
+     21800000, 21800000, -1, 1042360823),
+    ("private_oryan", "Private O'Ryan", "street", (-125.714, -0.511, 88.655), None, "c0000",
+     HUMAN_THINK, HUMAN_NPC, 6194, 1042360824),
+    ("diego", "Diego the Duelmaster", "street", (-12.534, 0.503, 22.119), -55.16, "c2010",
+     20100000, 20109110, -1, 1042360825),
+    ("ugo_kalahad", "Ugo Kalahad", "street", (33.824, -3.509, 84.236), 114.99, "c3200",
+     32000000, 32000010, -1, 1042360826),
+    ("aegon_statz", "Aegon Statz", "street", (-21.709, -1.097, 94.374), -16.74, "c4110",
+     41109000, 41109020, -1, 1042360827),
+]
+ORYAN_FACING = 90.0  # O'Ryan has no street yaw at H1's door: the giver asset's facing (away from the door)
+CHARACTER_PART_ID = 9100  # part header 0x08 / name suffix of the first character (<model>_9100..)
+TALK_NPC_BUTTON = 6000  # ActionButtonParam "Talk" (category 4, radius 2.5 m), as vanilla m60_51_36 1051360734 on a character
+DIALOG_OK, DIALOG_CANCEL = 1042362620, 1042362621  # set by a dialog page's OK / back (2007[10])
+CHARACTER = {c[0]: c for c in CHARACTERS}
 
 # The four quest Bone Cages (W101 WC-FairyCage02..05), placeholder cage asset, entity ids. The cage events keep them
 # disabled (not drawn, no collision) except while Finding Out Why's cage goal is current.
