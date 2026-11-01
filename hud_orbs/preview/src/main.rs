@@ -253,6 +253,19 @@ fn main() {
         ("7e_crafting_arrows", pages::Tab::Crafting, 3, [0.0, 0.0], "recipe:91"),
         ("7f_crafting_made", pages::Tab::Crafting, 1, [0.0, 0.0], "made:1"),
         ("8_help", pages::Tab::Help, 1, [0.0, 0.0], ""),
+        // Round 15 (book): badge hover, a memory slot's card, the help topics' added spreads.
+        ("1d_badge_tip", pages::Tab::Character, 1, [0.63, 0.33], ""),
+        ("4d_deck_slot_card", pages::Tab::Deck, 0, [0.26, 0.336], ""),
+        ("8b_help_questing_2", pages::Tab::Help, 0, [0.0, 0.0], "page:1"),
+        ("8c_help_questing_3", pages::Tab::Help, 0, [0.0, 0.0], "page:2"),
+        ("8d_help_combat_2", pages::Tab::Help, 1, [0.0, 0.0], "page:1"),
+        ("8e_help_combat_3", pages::Tab::Help, 1, [0.0, 0.0], "page:2"),
+        ("8f_help_interface_2", pages::Tab::Help, 2, [0.0, 0.0], "page:1"),
+        ("8g_help_character_2", pages::Tab::Help, 3, [0.0, 0.0], "page:1"),
+        ("8h_help_crafting", pages::Tab::Help, 4, [0.0, 0.0], ""),
+        ("8i_help_crafting_2", pages::Tab::Help, 4, [0.0, 0.0], "page:1"),
+        ("8j_help_pets", pages::Tab::Help, 5, [0.0, 0.0], ""),
+        ("8k_help_pets_2", pages::Tab::Help, 5, [0.0, 0.0], "page:1"),
         ("9_settings", pages::Tab::Settings, 0, [0.0, 0.0], ""),
         ("9a_settings_advvideo", pages::Tab::Settings, 0, [0.0, 0.0], "settings:1"),
         ("9b_settings_audio", pages::Tab::Settings, 0, [0.0, 0.0], "settings:2"),
@@ -315,6 +328,9 @@ fn main() {
         }
         if let Some(tab) = show.strip_prefix("settings:") {
             book.preview_settings(tab.parse().unwrap());
+        }
+        if let Some(page) = show.strip_prefix("page:") {
+            book.preview_page(page.parse().unwrap());
         }
         if let Some(pet) = show.strip_prefix("pet:") {
             book.preview_pet(pet.parse().unwrap());

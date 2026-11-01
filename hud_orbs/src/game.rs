@@ -756,6 +756,15 @@ pub fn quit_to_title() -> bool {
     true
 }
 
+/// Elden Ring's quit-out byte (quit_to_title's) is set: a quit to the title screen is under way. Its system menu's
+/// quit-out sets it too (the practice tool's "quitout" relies on that). The teleport poof skips that loading screen.
+pub fn quitting_out() -> bool {
+    let Some(menu) = from_singleton::static_of::<eldenring::cs::CSMenuManImp>() else { return false };
+    let Some(menu) = read::<usize>(menu.as_ptr() as usize).filter(|p| *p != 0) else { return false };
+    let Some(data) = read::<usize>(menu + 0x8).filter(|p| *p != 0) else { return false };
+    read::<u8>(data + 0x5D).is_some_and(|b| b != 0)
+}
+
 /// Asks Elden Ring's window to close (WM_CLOSE: the game's own exit, as Alt+F4). Used from the title screen only.
 pub fn close_window() -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};

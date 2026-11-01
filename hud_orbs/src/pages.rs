@@ -172,9 +172,10 @@ pub struct Data<'a> {
     pub achieved: &'a [Option<bool>],
 }
 
-/// Elden Ring's achievements, in the game's own order (AwardAchievement IDs 0-41), with the event flag that awards
-/// it (common.emevd event 9300 is run per achievement with its flag: the bosses), 0 where the game awards it some
-/// other way (endings, collections) that the book doesn't follow.
+/// Elden Ring's achievements in Steam's own order (API names ACH00-ACH41) and with Steam's own display names (the log's
+/// "steam: 42 achievements" line, 2026-11-01), with the event flag that awards it (common.emevd event 9300 is run per
+/// achievement with its flag: the bosses), 0 where the game awards it some other way (endings, collections, the
+/// upgrade) that the book doesn't follow. Steam's list is matched by API name (index), then by display name.
 pub const ACHIEVEMENTS: [(&str, &str, u32); 42] = [
     ("Elden Ring", "Obtained all achievements", 0),
     ("Elden Lord", "Achieved the \"Elden Lord\" ending", 0),
@@ -187,26 +188,26 @@ pub const ACHIEVEMENTS: [(&str, &str, u32); 42] = [
     ("Shardbearer Malenia", "Defeated Shardbearer Malenia", 15000800),
     ("Shardbearer Mohg", "Defeated Shardbearer Mohg", 12050800),
     ("Maliketh the Black Blade", "Defeated Maliketh the Black Blade", 13000800),
-    ("Hoarah Loux the Warrior", "Defeated Hoarah Loux the Warrior", 11050800),
+    ("Hoarah Loux, Warrior", "Defeated Hoarah Loux, Warrior", 11050800),
     ("Dragonlord Placidusax", "Defeated Dragonlord Placidusax", 13000830),
-    ("Great Rune", "Restored the power of a Great Rune", 0),
-    ("Erdtree Aflame", "Used the Rune of Death to set the Erdtree aflame", 0),
+    ("God-Slaying Armament", "Upgraded any armament to the maximum degree", 0),
     ("Legendary Armaments", "Acquired all legendary armaments", 0),
     ("Legendary Ashen Remains", "Acquired all legendary ashen remains", 0),
     ("Legendary Sorceries and Incantations", "Acquired all legendary sorceries and incantations", 0),
+    ("Legendary Talismans", "Acquired all legendary talismans", 0),
     ("Rennala, Queen of the Full Moon", "Defeated Rennala, Queen of the Full Moon", 14000800),
     ("Lichdragon Fortissax", "Defeated Lichdragon Fortissax", 12030850),
     ("Godskin Duo", "Defeated the Godskin Duo", 13000850),
     ("Fire Giant", "Defeated the Fire Giant", 1052520800),
     ("Dragonkin Soldier of Nokstella", "Defeated the Dragonkin Soldier of Nokstella", 12010800),
     ("Regal Ancestor Spirit", "Defeated the Regal Ancestor Spirit", 12090800),
-    ("Valiant Gargoyle", "Defeated the Valiant Gargoyle", 12020800),
+    ("Valiant Gargoyles", "Defeated the Valiant Gargoyles", 12020800),
     ("Margit, the Fell Omen", "Defeated Margit, the Fell Omen", 10000850),
     ("Red Wolf of Radagon", "Defeated the Red Wolf of Radagon", 14000850),
     ("Godskin Noble", "Defeated the Godskin Noble", 16000850),
     ("Magma Wyrm Makar", "Defeated Magma Wyrm Makar", 39200800),
-    ("Godfrey the First Lord", "Defeated Godfrey the First Lord", 11000850),
-    ("Mohg the Omen", "Defeated Mohg the Omen", 35000800),
+    ("Godfrey, First Elden Lord", "Defeated Godfrey, First Elden Lord", 11000850),
+    ("Mohg, the Omen", "Defeated Mohg, the Omen", 35000800),
     ("Mimic Tear", "Defeated the Mimic Tear", 12020850),
     ("Loretta, Knight of the Haligtree", "Defeated Loretta, Knight of the Haligtree", 15000850),
     ("Astel, Naturalborn of the Void", "Defeated Astel, Naturalborn of the Void", 12040800),
@@ -216,8 +217,8 @@ pub const ACHIEVEMENTS: [(&str, &str, u32); 42] = [
     ("Ancestor Spirit", "Defeated the Ancestor Spirit", 12080800),
     ("Commander Niall", "Defeated Commander Niall", 1051570800),
     ("Roundtable Hold", "Arrived at the Roundtable Hold", 105),
-    ("Legendary Talismans", "Acquired all legendary talismans", 0),
-    ("Spirit Ashes", "Acquired spirit ashes", 110),
+    ("Great Rune", "Restored the power of a Great Rune", 0),
+    ("Erdtree Aflame", "Used the Rune of Death to set the Erdtree aflame", 0),
 ];
 
 /// The Wizard101 badge picture for achievement `index`: the endings and "Elden Ring" the blue-ribboned medal, the
@@ -228,10 +229,10 @@ fn badge_art(index: usize) -> &'static str {
                             "GUI/Art/Art_Badge04.png", "GUI/Art/Art_Badge05.png", "GUI/Art/Art_Badge06.png"];
     let name = ACHIEVEMENTS[index].0;
     match index {
-        0..=3 | 13 | 14 => ART[5],
+        0..=3 | 40 | 41 => ART[5],
         _ if name.starts_with("Shardbearer") => ART[3],
-        _ if name.starts_with("Legendary") => ART[2],
-        39 | 41 => ART[4],
+        _ if name.starts_with("Legendary") || index == 13 => ART[2],
+        39 => ART[4],
         _ => ART[index % 2],
     }
 }
@@ -482,7 +483,7 @@ pub fn click(tab: Tab, l: &Layout, id: usize, st: &mut State) -> Action {
         (Tab::Map, "GotoDormButton") => return Action::Warp(WARP_ROUNDTABLE),
         (Tab::Crafting, _) if crate::crafting::click(l, id, st) => {}
         (Tab::Help, _) if name.starts_with("Tab_") => {
-            if let Some(i) = HELP.iter().position(|(n, _, _)| *n == name) {
+            if let Some(i) = HELP.iter().position(|(n, _)| *n == name) {
                 (st.sub, st.page) = (i, 0);
             }
         }
@@ -758,18 +759,14 @@ fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             let state = d.achieved.get(a).copied().flatten();
             let r = l.nodes[*row].rect;
             v.set(Some(*row), String::new());
-            let status = match state {
-                Some(true) => "Earned",
-                Some(false) => "Not yet earned",
-                None => "Not tracked",
-            };
+            // Earned or not shows only as the row being greyed out (Ryan, round 15: no status line).
             if state != Some(true) {
                 v.greyed.insert(*row);
             }
             let fade = |c: ImColor32| if state == Some(true) { c } else { ImColor32::from_rgba(c.r, c.g, c.b, 140) };
             // The row's own button art (Button_Item) lies on the background's bar, the badge's medal
-            // (Art_Badge01-06) exactly over the background's badge outline, the status and name inside the
-            // frame's gold line (one small line over one larger, both shrunk to fit its width).
+            // (Art_Badge01-06) exactly over the background's badge outline, the name inside the frame's gold
+            // line, centred (shrunk to fit its width).
             let bar = [BADGE_BAR[0], r[1] + BADGE_BAR[1], BADGE_BAR[2], r[1] + BADGE_BAR[3]];
             v.rect.insert(*row, bar);
             let medal = [r[0] + BADGE_MEDAL[0], r[1] + BADGE_MEDAL[1], r[0] + BADGE_MEDAL[2], r[1] + BADGE_MEDAL[3]];
@@ -779,12 +776,15 @@ fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             let (bw, bh) = (bar[2] - bar[0], bar[3] - bar[1]);
             let inner = [bar[0] + BADGE_TEXT[0] * bw, bar[1] + BADGE_TEXT[1] * bh,
                          bar[0] + BADGE_TEXT[2] * bw, bar[1] + BADGE_TEXT[3] * bh];
-            let split = inner[1] + (inner[3] - inner[1]) * 0.4;
-            v.add([inner[0] + 2.0, inner[1] + 0.5, inner[2] - 2.0, split], status.to_string(),
-                  TextStyle::new("WizardFancy", 0.0, fade(LIGHT_YELLOW)).centred());
-            v.add([inner[0] + 2.0, split, inner[2] - 2.0, inner[3] - 0.5], name.to_string(),
+            let pad = (inner[3] - inner[1]) * 0.12;
+            v.add([inner[0] + 2.0, inner[1] + pad, inner[2] - 2.0, inner[3] - pad], name.to_string(),
                   TextStyle::new("WizardFancy", 0.0, fade(YELLOW)).centred());
-            v.tip(r, vec![name.to_string(), about.to_string(), status.to_string()]);
+            // Hovering a badge: Wizard101's plain tooltip (ToolTip.gui) with the badge's description, centred, as
+            // its badge list shows the WizardBadges.lang text under each title.
+            let mut row_rect = r;
+            row_rect[0] = medal[0].min(r[0]);
+            row_rect[2] = bar[2].max(r[2]);
+            v.bubbles.push((row_rect, about.to_string()));
         }
     }
 }
@@ -979,6 +979,18 @@ const PET_PORTRAIT: [f32; 4] = [127.0, 56.0, 317.0, 246.0];
 /// PetTalentControl.gui's row background and Wizard101's talent icon sheet (8 x 8 cells of 64 px).
 const TALENT_ROW: &str = "GUI/Backgrounds/Background_Pet_Talent.png";
 const TALENT_ICONS: &str = "GUI/Talents/PetTalent_Complete_Color01.png";
+/// PetTalentControl.gui's sprtFrame art.
+const TALENT_FRAME: &str = "GUI/Art/Art_Text03.png";
+/// Wizard101's pet ages (GUI.lang PetAge1-7), over the page's aging bar (wndAgingBkg: lblBaby .. lblUltra).
+const PET_AGES: [(&str, &str); 7] = [("lblBaby", "Baby"), ("lblTeen", "Teen"), ("lblAdult", "Adult"),
+                                     ("lblAncient", "Ancient"), ("lblEpic", "Epic"), ("lblMega", "Mega"),
+                                     ("lblUltra", "Ultra")];
+
+/// A spirit ash's upgrade level (+0 .. +10) as a Wizard101 pet age (index into PET_AGES): the eleven levels spread
+/// over the seven ages, +10 alone being Ultra (+0-1 Baby, +2-3 Teen, +4 Adult, +5-6 Ancient, +7 Epic, +8-9 Mega).
+pub fn pet_age(level: u32) -> usize {
+    (level.min(10) as usize * 7 / 11).min(6)
+}
 
 fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.subs = 1;
@@ -1094,15 +1106,22 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     } else {
         vec![("Double jump", 19), ("Rides spiritsprings", 26), ("Outdoors only", 25), ("Heals on Rowa Raisins", 0)]
     };
-    let tab = [ox, oy - 3.0, ox + 149.0, oy + 28.0];
+    // No Pet Derby here (Wizard101 puts the Derby tab beside it), so the Talents tab runs the column's full width
+    // (the talent rows' 293).
+    let tab = [ox, oy - 3.0, ox + 293.0, oy + 28.0];
     v.backs.push((tab, "GUI/Shopping/Button_Item.png".into(), [0.0, 0.0, 1.0, 0.125]));
     let gold = TextStyle::new("WizardFancy", 0.45, YELLOW);
-    v.add([ox + 7.0, oy + 2.0, ox + 79.0, oy + 21.0], "Talents", gold.clone());
-    v.add([ox + 85.0, oy + 2.0, ox + 140.0, oy + 21.0], format!("{0}/{0}", talents.len()), gold.right());
+    v.add([ox + 9.0, oy + 2.0, ox + 140.0, oy + 21.0], "Talents", gold.clone());
+    v.add([ox + 150.0, oy + 2.0, ox + 284.0, oy + 21.0], format!("{0}/{0}", talents.len()), gold.right());
     let mut y = oy + 24.0;
     for (t, cell) in &talents {
+        // PetTalentControl.gui, in its own drawing order: the window's Background_Pet_Talent, then sprtFrame
+        // (0,0 - 295,35: Art_Text03, the dark red panel with its thin gold line and ragged red edge, which the
+        // client shows on a manifested talent), the name on top in the control's yellow WizardFancy 0.4
+        // (m_Color FF00FFFF), then the icon.
         let row = [ox, y, ox + 293.0, y + 35.0];
         v.backs.push((row, TALENT_ROW.into(), [0.0, 0.0, 1.0, 1.0]));
+        v.images.push(([ox, y, ox + 295.0, y + 35.0], TALENT_FRAME.into(), [0.0, 0.0, 1.0, 1.0]));
         v.add([ox + 5.0, y + 9.0, ox + 249.0, y + 26.0], *t, TextStyle::new("WizardFancy", 0.4, YELLOW).centred());
         let (cx, cy) = ((cell % 8) as f32 / 8.0, (cell / 8) as f32 / 8.0);
         v.images.push(([ox + 258.0, y - 1.0, ox + 293.0, y + 34.0], TALENT_ICONS.into(),
@@ -1116,14 +1135,23 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     let about = tip.last().filter(|_| tip.len() > 1).cloned().unwrap_or_default();
     v.add([column[0] + 12.0, y, column[2] - 10.0, column[3]], about, prose.clone().centred());
 
-    // The stage line over the bars, as Wizard101 names a pet's age there.
-    v.show(l.find("wndAgingBkg"), true);
-    hide(l, v, &["lblBaby", "lblTeen", "lblAdult", "lblAncient", "lblEpic", "lblMega", "lblUltra"]);
-    if let Some(bar) = l.find("prgrAging").and_then(|b| l.nodes[b].parent) {
-        v.show(Some(bar), false);
+    // Wizard101's pet age bar over the experience (hat) bar: the age's name (lblCurrentLevel, WizardFancy 0.4),
+    // the seven-cell bar (Art_Bar_Exp07 over prgrAging's fill) filled to the age, and each cell's age name on
+    // hover (lblBaby .. lblUltra). A spirit ash's age is its upgrade level (pet_age); Torrent has none.
+    match level {
+        Some(level) => {
+            let age = pet_age(*level);
+            v.show(l.find("wndAgingBkg"), true);
+            v.set(l.find("lblCurrentLevel"), centre(PET_AGES[age].1));
+            v.progress.extend(l.find("prgrAging").map(|p| (p, (age + 1) as f32 / PET_AGES.len() as f32)));
+            for (node, name) in PET_AGES {
+                if let Some(n) = l.find(node) {
+                    v.bubbles.push((l.nodes[n].rect, name.to_string()));
+                }
+            }
+        }
+        None => v.show(l.find("wndAgingBkg"), false),
     }
-    // (Wizard101's stage name; the upgrade bar below says it.)
-    v.show(l.find("lblCurrentLevel"), false);
 
     // The stat block: label left, value right, a rule under each, as PetStatBlockControl draws its stats.
     if let Some(block) = l.find("ctrlStatBlock") {
@@ -1131,8 +1159,9 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         v.add([r[0], r[1] + 12.0, r[2], r[1] + 36.0], "Stats", heading.clone());
         let owned = pets.iter().filter(|p| p.2.is_some()).count();
         let rows: Vec<(&str, String)> = match level {
+            // (The upgrade level is the hat bar's alone, Ryan round 15; the age is the age bar's.)
             Some(level) => vec![
-                ("Upgrade", format!("+{level} / 10")),
+                ("Age", PET_AGES[pet_age(*level)].1.to_string()),
                 ("Summoned", "Rebirth Monuments".into()),
                 ("Upgraded by", "Roderika".into()),
                 ("Spirit ashes", owned.to_string()),
@@ -1272,14 +1301,89 @@ fn school(items: &ItemData, item_id: u32) -> String {
     }
 }
 
+/// The count at the deck's bottom right: a normal spell card's symbol (Button_Item_Cards' normal frame: the spell
+/// card in the gold ring, Wizard101's own "Spells" symbol) where Wizard101 shows its treasure card one.
+const SPELL_COUNT_ICON: &str = "GUI/Buttons/Button_Item_Cards.png";
+
+/// A spell card as Wizard101 builds one (the School_<school>_Blnk frame, 128 x CARD_H of its 256 art): the name
+/// across the top band, the cost in the pip triangle, the school symbol in the corner circle, the picture in the
+/// window with the type icon in its box, and on the parchment below what it does, in Wizard101's card text font
+/// (SpellDescription, black, centred): Elden Ring's effect line for the spell, then its memory slots and the
+/// attributes it needs. `r` is the card's rectangle (any size; everything scales with it).
+fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 4]) {
+    let [x, y, x1, y1] = r;
+    let (cw, ch) = (x1 - x, y1 - y);
+    let k = cw / 97.0;
+    let raw = id & 0x0FFF_FFFF;
+    let spell = d.items.spell(raw);
+    // The class's Wizard101 school: its card frame, and its tab button's symbol in the frame's corner.
+    let class = school(d.items, id);
+    let tab = DECK_TABS.iter().position(|t| t.1 == class).unwrap_or(1);
+    let frame = card_frame(DECK_TABS[tab].0);
+    let card = |fx: f32, fy: f32| [x + fx / 128.0 * cw, y + fy / CARD_H * ch];
+    // The picture: the spell's icon in the frame's window, on a dark backing.
+    let (w0, w1) = (card(10.0, 33.0), card(119.0, 117.0));
+    v.fills.push(([w0[0], w0[1], w1[0], w1[1]], ImColor32::from_rgb(28, 22, 34)));
+    let side = (w1[1] - w0[1]).min(w1[0] - w0[0]);
+    let ix = (w0[0] + w1[0] - side) / 2.0;
+    icon(v, d.items, id, [ix, w0[1], ix + side, w0[1] + side]);
+    v.images.push(([x, y, x1, y1], frame.into(), [0.0, 0.0, 1.0, CARD_H / 256.0]));
+    // The school symbol in the corner circle: the reagent cards' Icon_<School> art (Ryan, round 10: use those
+    // symbols everywhere); Astral has none, so its tab button's own symbol.
+    let (c0, c1) = (card(101.0, 28.0), card(125.0, 52.0));
+    match deck_school_icon(DECK_TABS[tab].0) {
+        Some(icon) => {
+            let inset = (c1[0] - c0[0]) * 0.12;
+            v.images.push(([c0[0] + inset, c0[1] + inset, c1[0] - inset, c1[1] - inset], icon, [0.0, 0.0, 1.0, 1.0]));
+        }
+        None => {
+            if let Some(n) = l.find(DECK_TABS[tab].0).map(|b| &l.nodes[b]) {
+                if let Some(img) = &n.img {
+                    v.images.push(([c0[0], c0[1], c1[0], c1[1]], img.clone(), n.frames[0].unwrap_or(n.uv)));
+                }
+            }
+        }
+    }
+    // What it does: Wizard101's type icon in the box at the picture's bottom right (98,97 .. 125,124).
+    let (y0, y1) = (card(100.0, 99.0), card(123.0, 122.0));
+    v.images.push(([y0[0], y0[1], y1[0], y1[1]], spell_type(d.items, raw).into(), [0.0, 0.0, 1.0, 1.0]));
+    let (t0, t1) = (card(8.0, 4.0), card(120.0, 28.0));
+    v.add([t0[0], t0[1], t1[0], t1[1]], name, TextStyle::new("WizardFancy", 0.34 * k, YELLOW).centred().outlined());
+    if let Some(spell) = spell {
+        let (p0, p1) = (card(2.0, 28.0), card(32.0, 46.0));
+        v.add([p0[0], p0[1], p1[0], p1[1]], spell.fp.to_string(),
+              TextStyle::new("WizardFancy", 0.36 * k, WHITE).centred().outlined());
+        let effect = d.items.info(raw).unwrap_or("").trim().to_string();
+        let mut needs: Vec<String> = ["Int", "Fai", "Arc"].iter().zip(spell.requirements).filter(|(_, v)| *v > 0)
+            .map(|(n, v)| format!("{n} {v}")).collect();
+        needs.insert(0, format!("{} slot{}", spell.slots.max(1), if spell.slots > 1 { "s" } else { "" }));
+        let text = if effect.is_empty() { needs.join("  ") } else { format!("{effect}\n{}", needs.join("  ")) };
+        let (b0, b1) = (card(10.0, 124.0), card(118.0, 190.0));
+        v.add([b0[0], b0[1], b1[0], b1[1]], text,
+              TextStyle::new("SpellDescription", CARD_TEXT_SCALE * k, BLACK).centred().wrapped());
+    }
+}
+
+/// SpellDescription's scale on a list-sized (97 px) card; wrapped text shrinks from it to fit the parchment.
+const CARD_TEXT_SCALE: f32 = 0.42;
+/// How much bigger the card is that shows while the mouse is over a memorised spell in the deck.
+const HOVER_CARD: f32 = 1.9;
+
 fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.subs = DECK_TABS.len();
     hide(l, v, &["FusionBackground", "TieredSpellMPUnlockedBackground", "TieredSpellMPUnlockedList", "SpellFusionList",
                  "SchoolPipPanel", "CloseTSMPUnlockedPageButton", "SpellTreasureList", "SchoolPageSpellList",
                  "TutorialLogBackground1", "EquipBorder"]);
-    // One deck (Elden Ring's memory slots): no deck arrows, no renaming, no equip button.
-    hide(l, v, &["PrevDeck", "NextDeck", "NewDeckName", "EquipButton", "equipFist"]);
-    grey(l, v, &["Help", "QuickSellButton", "NextItemSpells", "PrevItemSpells", "TreasureCardButton", "FusionCardButton"]);
+    // One deck (Elden Ring's memory slots): no deck arrows, no renaming, no equip button. No help button, quick
+    // sell, treasure cards or spell fusion either (Ryan, round 15: not even greyed).
+    hide(l, v, &["PrevDeck", "NextDeck", "NewDeckName", "EquipButton", "equipFist", "Help", "QuickSellButton",
+                 "TreasureCardButton", "FusionCardButton"]);
+    grey(l, v, &["NextItemSpells", "PrevItemSpells"]);
+    // The spell count's symbol: a normal spell card, not Wizard101's treasure card one.
+    if let Some(c) = l.find("TreasureCardIcon") {
+        v.show(Some(c), false);
+        v.images.push((l.nodes[c].rect, SPELL_COUNT_ICON.into(), [0.0, 0.0, 0.5, 0.5]));
+    }
     // The class buttons, in order (Shadow and Monster Magic are hidden in Wizard101's layout).
     let mut row = None;
     for (i, (button, class, title)) in DECK_TABS.iter().enumerate() {
@@ -1343,9 +1447,15 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                         // The rest of a spell that takes several slots.
                         v.over_fills.push((inner, ImColor32::from_rgba(40, 25, 10, 140)));
                     }
-                    let mut tip = d.items.tooltip(id, 1, d.names, false);
-                    tip.push("Click: forget this spell".into());
-                    v.tip(cell, tip);
+                    // Hovering it shows the spell's card (as Wizard101's deck shows a card when you point at
+                    // it), enlarged, on the deck beside the slots, not a stats tooltip.
+                    let (cw, ch) = (97.0 * HOVER_CARD, 148.0 * HOVER_CARD);
+                    // Under the slot, kept on the deck's page (InvBorder: 39,101 - 382,566).
+                    let gx = ((cell[0] + cell[2]) / 2.0 - cw / 2.0).clamp(r[0], r[2] - cw);
+                    let gy = (cell[3] + 6.0).min(560.0 - ch);
+                    let mut card = View::default();
+                    spell_card(l, d, &mut card, id, &d.names.item(id), [gx, gy, gx + cw, gy + ch]);
+                    v.hovers.push((cell, Box::new(card)));
                     st.hits.push((cell, Hit::Forget(i)));
                 }
                 None => v.tip(cell, vec![format!("Memory slot {}", c + 1), "Empty".into(),
@@ -1384,49 +1494,7 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         let x = r[0] + cx * (cw + gx);
         let y = r[1] + cy * (ch + gy);
         let raw = id & 0x0FFF_FFFF;
-        let spell = d.items.spell(raw);
-        // The class's Wizard101 school: its card frame, and its tab button's symbol in the frame's corner.
-        let class = school(d.items, *id);
-        let tab = DECK_TABS.iter().position(|t| t.1 == class).unwrap_or(1);
-        let frame = card_frame(DECK_TABS[tab].0);
-        let card = |fx: f32, fy: f32| [x + fx / 128.0 * cw, y + fy / CARD_H * ch];
-        // The picture: the spell's icon in the frame's window, on a dark backing.
-        let (w0, w1) = (card(10.0, 33.0), card(119.0, 117.0));
-        v.fills.push(([w0[0], w0[1], w1[0], w1[1]], ImColor32::from_rgb(28, 22, 34)));
-        let side = (w1[1] - w0[1]).min(w1[0] - w0[0]);
-        let ix = (w0[0] + w1[0] - side) / 2.0;
-        icon(v, d.items, *id, [ix, w0[1], ix + side, w0[1] + side]);
-        v.images.push(([x, y, x + cw, y + ch], frame.into(), [0.0, 0.0, 1.0, CARD_H / 256.0]));
-        // The school symbol in the corner circle: the reagent cards' Icon_<School> art (Ryan, round 10: use those
-        // symbols everywhere); Astral has none, so its tab button's own symbol.
-        let (c0, c1) = (card(101.0, 28.0), card(125.0, 52.0));
-        match deck_school_icon(DECK_TABS[tab].0) {
-            Some(icon) => {
-                let inset = (c1[0] - c0[0]) * 0.12;
-                v.images.push(([c0[0] + inset, c0[1] + inset, c1[0] - inset, c1[1] - inset], icon, [0.0, 0.0, 1.0, 1.0]));
-            }
-            None => {
-                if let Some(n) = l.find(DECK_TABS[tab].0).map(|b| &l.nodes[b]) {
-                    if let Some(img) = &n.img {
-                        v.images.push(([c0[0], c0[1], c1[0], c1[1]], img.clone(), n.frames[0].unwrap_or(n.uv)));
-                    }
-                }
-            }
-        }
-        // What it does: Wizard101's type icon in the box at the picture's bottom right (98,97 .. 125,124).
-        let (y0, y1) = (card(100.0, 99.0), card(123.0, 122.0));
-        v.images.push(([y0[0], y0[1], y1[0], y1[1]], spell_type(d.items, raw).into(), [0.0, 0.0, 1.0, 1.0]));
-        let (t0, t1) = (card(8.0, 4.0), card(120.0, 28.0));
-        v.add([t0[0], t0[1], t1[0], t1[1]], name.clone(), TextStyle::new("WizardFancy", 0.34, YELLOW).centred().outlined());
-        if let Some(spell) = spell {
-            // The cost in the pip triangle, the class and kind on the parchment.
-            let (p0, p1) = (card(2.0, 28.0), card(32.0, 46.0));
-            v.add([p0[0], p0[1], p1[0], p1[1]], spell.fp.to_string(),
-                  TextStyle::new("WizardFancy", 0.36, WHITE).centred().outlined());
-            let (b0, b1) = (card(8.0, 124.0), card(120.0, 188.0));
-            v.add([b0[0], b0[1], b1[0], b1[1]], format!("{}\n{}", spell.er_school, spell.kind),
-                  TextStyle::new("WizardNormal", 0.3, BLACK).centred());
-        }
+        spell_card(l, d, v, *id, name, [x, y, x + cw, y + ch]);
         let memorised = sheet.spells.contains(&(raw as i32));
         let mut tip = d.items.tooltip(*id, 1, d.names, false);
         tip.push(if memorised { "Memorised (click it in the deck to forget it)".into() } else { "Click: memorise".into() });
@@ -1857,48 +1925,165 @@ const REAGENT_TEXT_SCALE: f32 = 0.73;
 // Help: HelpSpellbookPage.gui. Its topic buttons pick the help text (Wizard101 loads its help pages from other
 // layouts; here the text is drawn on the book's pages in Wizard101's fonts).
 
-/// (topic button, left page (heading, text), right page (heading, text)): each topic laid out as a spread, one
-/// heading and its text on each page, as Wizard101's help book does.
-const HELP: [(&str, (&str, &str), (&str, &str)); 4] = [
-    ("Tab_Questing",
-     ("The Spellbook",
-      "Open and close the book with B on the keyboard or the View button on the controller (Elden Ring's map \
-       button).\n\nEsc or the controller's B button also close it."),
-     ("Tabs and Categories",
-      "The tabs down the right edge are the book's pages, as in Wizard101.\n\nThe round buttons along the top of a \
-       page are its categories.\n\nPoint at an item for its stats.")),
-    ("Tab_Combat",
-     ("Controller",
-      "LT / RT or D-pad up and down: previous / next page of the book.\n\nLB / RB: previous / next category along \
-       the top of the page.\n\nD-pad left and right: turn the page of a list."),
-     ("More Buttons",
-      "Right stick: turn your character in the Backpack (it turns by itself; a click on it stops it).\n\nA: use \
-       the tab (the World Map tab opens Elden Ring's map).\n\nB or View: close the book.")),
-    ("Tab_Interface",
-     ("Keyboard",
-      "Up / Down arrows: previous / next page of the book.\n\nQ / E: previous / next category.\n\nLeft / Right \
-       arrows: turn the page of a list.\n\nEnter: use the tab.\n\nB or Esc: close the book."),
-     ("Mouse",
-      "Click a tab or a button; point at an item for its stats.\n\nThe mouse wheel turns the page of a list.\n\n\
-       Drag your character in the Backpack to turn it.\n\nClick an item to choose it; double-click it to equip it, \
-       or to take it off when it is equipped.")),
-    ("Tab_Character",
-     ("The Pages",
-      "Character: level, health, mana (FP), energy (stamina), flasks, attributes and badges.\n\nBackpack: \
-       everything you carry. The fist equips the chosen item, the open hand takes it off.\n\nPets: Torrent and your \
-       spirit ashes (the fist puts one in your quick items)."),
-     ("More Pages",
-      "Deck: your memory slots, and your spells by school. Click a spell to memorize it, a slot to forget it, \
-       anywhere.\n\nQuests: the Unicorn Way quests you have taken on.\n\nWorld Map: Elden Ring's map.\n\n\
-       Crafting: Elden Ring's recipes by category; choose one and Create to craft it. Reagents shows your materials.\n\nSettings: the HUD's settings.")),
+/// One help page: heading, text, and an icon list under the text (icon art, what it means), as Wizard101's Icon
+/// Dictionary pages (HelpInterfaceIcons*.gui) lay theirs out.
+type HelpPage = (&'static str, &'static str, &'static [(&'static str, &'static str)]);
+
+/// (topic button, spreads (left page, right page)). The spreads are Wizard101's own help pages (Help*.gui and
+/// Help.lang, round 15 survey) wherever Elden Ring has the same thing, told in Elden Ring's terms; the book's own
+/// controls come first. Topics with nothing in Elden Ring (Housing, Crown Shop, Gardening, Fishing) stay greyed;
+/// Wizard101's Mounts and Socketing tips are under Pets and Crafting.
+const HELP: [(&str, &[(HelpPage, HelpPage)]); 6] = [
+    ("Tab_Questing", &[
+        (("The Spellbook",
+          "Open and close the book with B on the keyboard or the View button on the controller (Elden Ring's map \
+           button).\n\nEsc or the controller's B button also close it.", &[]),
+         ("Tabs and Categories",
+          "The tabs down the right edge are the book's pages, as in Wizard101.\n\nThe round buttons along the top of \
+           a page are its categories.\n\nPoint at an item for its stats.", &[])),
+        // HelpQuestingTips1: the quest markers.
+        (("Quest Markers",
+          "A yellow exclamation point over someone's head means that person has a quest for you.\n\nA yellow \
+           question mark means you should talk to that person: they are part of a quest you are working on.\n\n\
+           The Quests page lists the Unicorn Way quests you have taken on.", &[]),
+         // HelpInterfaceTips1: the Commons and Go Home buttons.
+         ("Getting Around",
+          "The World Map page shows Wizard101's map of Unicorn Way (Wizard City at the Roundtable Hold). Click the \
+           grace on it, or press A with the stick cursor on it, to travel there.\n\nThe arrows take you to Unicorn \
+           Way, as Wizard101's Commons button does, and the house takes you home, to the Roundtable Hold.\n\nThe \
+           magnifier opens Elden Ring's map, for fast travel to any other Site of Grace you have found.", &[])),
+        // HelpQuestingTips1 (wisps) and HelpInterfaceTips1 (potions), HelpCrownShop2-3 (elixirs).
+        (("Health and Mana",
+          "The Flask of Crimson Tears restores Health and the Flask of Cerulean Tears restores Mana (FP), as \
+           Wizard101's potions do.\n\nResting at a Site of Grace refills your flasks, your Health and your Mana.\
+           \n\nThe Character page shows how many drinks are left.", &[]),
+         ("Elixirs",
+          "Wizard101's elixirs are Elden Ring's Flask of Wondrous Physick: mix two Crystal Tears into it at a Site \
+           of Grace, then drink it for their effects.\n\nOther boosts come from the consumables in your \
+           Backpack.", &[])),
+    ]),
+    ("Tab_Combat", &[
+        (("Controller",
+          "LT / RT or D-pad up and down: previous / next page of the book.\n\nLB / RB: previous / next category \
+           along the top of the page.\n\nD-pad left and right: turn the page of a list.", &[]),
+         ("More Buttons",
+          "Right stick: turn your character in the Backpack (it turns by itself; a click on it stops it).\n\nA: \
+           use the tab, or click what the cursor is on (on the World Map, either stick moves the cursor).\n\nB or View: close the book.", &[])),
+        // HelpInterfaceIcons2-3: the schools and stat icons, as the item tooltips use them.
+        (("Schools",
+          "Item stats show Elden Ring's damage types with Wizard101's school symbols:", &[
+              ("GUI/Icons/Icon_All.png", "Physical: all schools"),
+              ("GUI/Icons/Icon_Myth.png", "Magic: Myth"),
+              ("GUI/Icons/Icon_Fire.png", "Fire"),
+              ("GUI/Icons/Icon_Storm.png", "Lightning: Storm"),
+              ("GUI/Icons/Icon_Life.png", "Holy: Life"),
+          ]),
+         // HelpCombatTips2 (criticals) and HelpCombatTips5 (stuns).
+         ("Criticals and Stuns",
+          "A Critical in Elden Ring is a backstab, a riposte after a parry, or a hit on a staggered foe: it does \
+           bonus damage.\n\nStun Resist is poise: the more you have, the less you flinch when you are hit.\n\n\
+           Heavy hits break a foe's stance and stun it.", &[])),
+        // HelpCombatTips1: fallen combatants.
+        (("Defeat",
+          "If your Health reaches zero you wake at the last Site of Grace you rested at, and your runes stay where \
+           you fell.\n\nGo back and touch the glow to take them back. Fall again on the way and they are lost.", &[]),
+         // HelpCrownShop5: henchmen.
+         ("Spirit Allies",
+          "Wizard101's henchmen are Elden Ring's spirit ashes: near a Rebirth Monument, use one from your quick \
+           items and its spirits fight beside you until the fight is over.", &[])),
+    ]),
+    ("Tab_Interface", &[
+        (("Keyboard",
+          "Up / Down arrows: previous / next page of the book.\n\nQ / E: previous / next category.\n\nLeft / Right \
+           arrows: turn the page of a list.\n\nEnter: use the tab.\n\nB or Esc: close the book.", &[]),
+         ("Mouse",
+          "Click a tab or a button; point at an item for its stats.\n\nThe mouse wheel turns the page of a list.\n\n\
+           Drag your character in the Backpack to turn it.\n\nClick an item to choose it; double-click it to equip \
+           it, or to take it off when it is equipped.", &[])),
+        // HelpInterfaceIcons3-6: the stat icons.
+        (("Icon Dictionary", "", &[
+              ("GUI/Icons/Type_Damage.png", "Damage (attack power)"),
+              ("GUI/Icons/Type_Resist.png", "Resist (damage negation)"),
+              ("GUI/Icons/Type_Stun_Resist.png", "Stun Resist (poise)"),
+              ("GUI/Icons/Type_Pip.png", "Pips (FP cost)"),
+              ("GUI/Icons/Type_PowerPips.png", "Memory slots"),
+              ("GUI/Icons/Type_Heal.png", "Heal"),
+              ("GUI/Icons/Type_Ward.png", "Ward (negation, barriers)"),
+              ("GUI/Icons/Type_Charm.png", "Charm (boosts)"),
+          ]),
+         // HelpInterfaceTips2-3: the equipped mark and badges.
+         ("Backpack and Badges",
+          "An equipped item has a closed hand next to it in the Backpack. Double-click an item to equip it.\n\n\
+           Badges are Elden Ring's achievements: the Character page's badge tab lists them, greyed out until you \
+           earn them. Point at one to see what earns it.", &[])),
+    ]),
+    ("Tab_Character", &[
+        (("The Pages",
+          "Character: level, health, mana (FP), energy (stamina), flasks, attributes and badges.\n\nBackpack: \
+           everything you carry. The fist equips the chosen item, the open hand takes it off.\n\nPets: Torrent and \
+           your spirit ashes (the fist puts one in your quick items).", &[]),
+         ("More Pages",
+          "Deck: your memory slots, and your spells by school. Click a spell to memorize it, a slot to forget it, \
+           anywhere.\n\nQuests: the Unicorn Way quests you have taken on.\n\nWorld Map: Wizard101's map of Unicorn Way; its magnifier opens Elden Ring's \
+           map.\n\n\
+           Crafting: Elden Ring's recipes by category; choose one and Create to craft it. Reagents shows your \
+           materials.\n\nSettings: the HUD's settings.", &[])),
+        // HelpCharacterTips1: training points.
+        (("Levels",
+          "Runes are Elden Ring's experience. Rest at a Site of Grace and spend them to gain a level.\n\nEach level \
+           raises one attribute: Vigor (Health), Mind (Mana), Endurance (Energy), Strength, Dexterity, \
+           Intelligence, Faith or Arcane.", &[]),
+         ("Spells",
+          "Spells are bought from sorcerers and priests, or found.\n\nEach takes memory slots in your deck; Memory \
+           Stones give you more slots. Point at a spell in the deck to see its card.", &[])),
+    ]),
+    ("Tab_Crafting", &[
+        // HelpCraftingTips0-1: station, recipes, reagents.
+        (("Crafting",
+          "Crafting needs the Crafting Kit, which Merchant Kale sells at the Church of Elleh.\n\nRecipes come from \
+           cookbooks, found or bought around the Lands Between.\n\nMaterials are gathered from plants and \
+           creatures, or bought from merchants.", &[]),
+         ("The Crafting Page",
+          "The Crafting tab lists what you can craft and the materials you carry, by kind.", &[])),
+        // HelpSocketing1-3: jewels.
+        (("Ashes of War",
+          "Wizard101's jewels are Elden Ring's Ashes of War. At a Site of Grace, with a Whetblade, an Ash of War \
+           goes on a weapon and gives it a skill and an affinity.\n\nUnlike a jewel, an Ash of War can be moved to \
+           another weapon whenever you like.", &[]),
+         ("Upgrades",
+          "Smithing Stones upgrade weapons at a smithing table, such as Smithing Master Hewg's in the Roundtable \
+           Hold.\n\nGlovewort upgrades spirit ashes with Roderika, the spirit tuner in the Roundtable Hold.", &[])),
+    ]),
+    ("Tab_Pets", &[
+        // HelpPetTips1-2: pets and their ages.
+        (("Pets",
+          "Your pets are Torrent, the spectral steed, and your spirit ashes.\n\nSpirit ashes are summoned near \
+           Rebirth Monuments. The fist on the Pets page puts the chosen ash in your quick items.", &[]),
+         ("Pet Ages",
+          "A spirit ash grows as you upgrade it with Grave or Ghost Glovewort, from +0 to +10.\n\nThe age bar on the \
+           Pets page shows it as a Wizard101 pet age: Baby, Teen, Adult, Ancient, Epic, Mega and, at +10, Ultra.",
+          &[])),
+        // HelpCrownShop1 and HelpMount1-2: mounts.
+        (("Mounts",
+          "Torrent is your mount: use the Spectral Steed Whistle to call him and ride.\n\nMounts can't be ridden \
+           everywhere. Torrent fades away indoors and in most boss fights, as Wizard101 sets you down for a \
+           duel.", &[]),
+         // HelpPetTips2: talents.
+         ("Talents",
+          "Wizard101's pet talents are what Torrent or a spirit ash can do, listed on the Pets page.\n\nTorrent can \
+           double jump, and spiritsprings carry him high into the air.", &[])),
+    ]),
 ];
 
 /// The help spread's two pages (page pixels, inside the book's margins and clear of the spine).
 const HELP_PAGES: [[f32; 4]; 2] = [[84.0, 112.0, 360.0, 528.0], [412.0, 112.0, 688.0, 528.0]];
+/// An icon list's rows: the icon's size and the row pitch (page pixels).
+const HELP_ICON: f32 = 30.0;
+const HELP_ICON_ROW: f32 = 38.0;
 
 fn help(l: &Layout, st: &mut State, v: &mut View) {
     st.subs = HELP.len();
-    let (button, left, right) = HELP[st.sub % HELP.len()];
+    let (button, spreads) = HELP[st.sub % HELP.len()];
     let chosen = l.find(button);
     if let Some(c) = chosen {
         v.checked.insert(c);
@@ -1906,15 +2091,26 @@ fn help(l: &Layout, st: &mut State, v: &mut View) {
     marker(l, v, "TabBackground", "Tab_Questing", chosen);
     v.tab_row = row_of(l, &HELP.map(|h| h.0));
     hide(l, v, &["TabGroup2"]);
-    grey(l, v, &["Tab_Housing", "Tab_Crafting", "Tab_CrownShop", "Tab_Pets", "Tab_Gardening", "NextHelpPage",
-                 "leftscroll", "rightscroll"]);
-    v.set(l.find("pageText"), centre("1/1"));
-    for ((heading, text), r) in [left, right].into_iter().zip(HELP_PAGES) {
+    grey(l, v, &["Tab_Housing", "Tab_CrownShop", "Tab_Gardening", "NextHelpPage"]);
+    // Each topic's spreads turn with the page arrows under the book, as Wizard101's help pages do.
+    let page = paging(l, v, st, spreads.len(), 1, ("pageText", "leftscroll", "rightscroll"));
+    let (left, right) = spreads[page];
+    for ((heading, text, icons), r) in [left, right].into_iter().zip(HELP_PAGES) {
         v.add([r[0], r[1], r[2], r[1] + 36.0], heading, TextStyle::new("WizardFancy", 0.7, BLACK).centred());
         v.fills.push(([r[0] + 40.0, r[1] + 42.0, r[2] - 40.0, r[1] + 43.5], ImColor32::from_rgba(90, 60, 30, 110)));
         let mut body = TextStyle::new("WizardNormal", 0.46, BLACK).wrapped();
         body.middle = false;
-        v.add([r[0], r[1] + 54.0, r[2], r[3]], text, body);
+        let mut y = r[1] + 54.0;
+        if !text.is_empty() {
+            let bottom = if icons.is_empty() { r[3] } else { y + 60.0 };
+            v.add([r[0], y, r[2], bottom], text, body);
+            y = bottom + 6.0;
+        }
+        for (art, what) in icons.iter() {
+            v.image([r[0] + 20.0, y, r[0] + 20.0 + HELP_ICON, y + HELP_ICON], *art);
+            v.add([r[0] + 30.0 + HELP_ICON, y, r[2], y + HELP_ICON], *what, TextStyle::new("WizardNormal", 0.46, BLACK));
+            y += HELP_ICON_ROW;
+        }
     }
 }
 

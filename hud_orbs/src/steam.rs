@@ -1,6 +1,6 @@
 //! The player's Steam achievements, read from the Steam client through the game's own steam_api64.dll (Elden Ring
 //! unlocks its achievements through ISteamUserStats; this only reads them). Steam's achievement list is matched to
-//! the book's by display name, so the Steam API names don't need to be known.
+//! the book's by API name (ACH00-ACH41, the book's order) and, failing that, by display name.
 
 /// Per name in `names` (the book's achievement titles): unlocked or not, as Steam has it; None for one Steam
 /// doesn't list. None in all when Steam isn't reachable or hasn't sent the player's stats yet.
@@ -94,14 +94,28 @@ pub fn achievements(names: &[&str]) -> Option<Vec<Option<bool>>> {
     let mut any = false;
     let out = names
         .iter()
-        .map(|name| {
-            let (api_name, _) = list.iter().find(|(_, shown)| key(shown) == key(name))?;
+        .enumerate()
+        .map(|(i, name)| {
+            // Steam's API name for the book's index (Elden Ring's are ACH00-ACH41, in the book's order), else the
+            // display name: a display name that differs from the book's ("Hoarah Loux, Warrior") still matches.
+            let by_index = CString::new(format!("ACH{i:02}")).ok();
+            let (api_name, _) = list.iter().find(|(api, _)| by_index.as_ref() == Some(api))
+                .or_else(|| list.iter().find(|(_, shown)| key(shown) == key(name)))?;
             let mut unlocked = false;
             let ok = unsafe { (api.get)(api.stats, api_name.as_ptr(), &mut unlocked) };
             any |= ok;
             ok.then_some(unlocked)
         })
-        .collect();
+        .collect::<Vec<Option<bool>>>();
+    // Once: how many are unlocked, and any book entry Steam doesn't list.
+    static LOGGED: OnceLock<()> = OnceLock::new();
+    if any {
+        LOGGED.get_or_init(|| {
+            let missing: Vec<&str> = names.iter().zip(&out).filter(|(_, o)| o.is_none()).map(|(n, _)| *n).collect();
+            tracing::info!("steam: {} of {} achievements unlocked; not on Steam: {:?}",
+                           out.iter().filter(|o| **o == Some(true)).count(), names.len(), missing);
+        });
+    }
     any.then_some(out)
 }
 

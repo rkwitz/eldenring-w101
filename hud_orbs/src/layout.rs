@@ -289,6 +289,12 @@ pub struct View {
     pub over_hole: HashSet<usize>,
     /// Hover texts: (rect, lines), the first line the title.
     pub tips: Vec<([f32; 4], Vec<String>)>,
+    /// Hover texts in Wizard101's plain tooltip (ToolTip.gui: the white bubble, black WizardNormal 0.4, centred):
+    /// (rect, text).
+    pub bubbles: Vec<([f32; 4], String)>,
+    /// Things drawn only while the mouse is over a rect (the deck's enlarged spell card): (rect, what to draw, in
+    /// page pixels, with draw_extra).
+    pub hovers: Vec<([f32; 4], Box<View>)>,
     /// The page's row of category tabs along the top (for the LB / RB hints).
     pub tab_row: Option<[f32; 4]>,
     /// A cut-out in the book (page pixels) where the game shows through.

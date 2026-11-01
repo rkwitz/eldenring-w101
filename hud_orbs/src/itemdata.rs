@@ -328,8 +328,9 @@ impl ItemData {
                     }
                     let res: Vec<String> = ["Imm", "Rob", "Foc", "Vit"].iter().zip(a.resistance)
                         .filter(|(_, v)| *v > 0).map(|(n, v)| format!("{n} {v}")).collect();
-                    if !res.is_empty() {
-                        sub.push(res.join(" "));
+                    // Two to a line: the tooltip's centred WizardFancy lines (book.rs draw_tip) fit two.
+                    for pair in res.chunks(2) {
+                        sub.push(pair.join("  "));
                     }
                     let kind = ["Helm", "Chest Armour", "Gauntlets", "Leg Armour"].get(a.slot as usize).unwrap_or(&"Armour");
                     sub.push(format!("{kind} - Weight {:.1}", a.weight));

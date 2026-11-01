@@ -73,6 +73,8 @@ EXTRA_ART += ["GUI/Cards/School_Resource_Blnk.dds", "GUI/Reagents/Resource_Nothi
 EXTRA_ART += [f"GUI/Art/Art_Badge0{i}.dds" for i in range(1, 7)]
 # The backpack's unequip (open hand) button, and the card type icons a spell card shows in its bottom-right corner.
 EXTRA_ART += ["GUI/Buttons/Button_Unequip.dds"]
+# The deck's spell count icon (normal card symbol) and the pet talent rows' frame.
+EXTRA_ART += ["GUI/Buttons/Button_Item_Cards.dds", "GUI/Art/Art_Text03.dds"]
 # The school icons in the reagent cards' circle.
 EXTRA_ART += [f"GUI/Icons/Icon_{s}.dds" for s in ("Balance", "Death", "Fire", "Ice", "Life", "Myth", "Storm", "Shadow")]
 EXTRA_ART += [f"GUI/Icons/Type_{t}.dds" for t in ("AOE", "Heal", "HealOverTime", "DamageOverTime", "Charm", "Ward",

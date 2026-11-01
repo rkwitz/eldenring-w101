@@ -129,6 +129,10 @@ pub fn graphics() -> Option<[u32; 25]> {
 pub fn set_graphics(index: usize, value: u32) -> bool {
     GRAPHICS.lock().unwrap().get_mut(index).map(|v| *v = value).is_some()
 }
+pub fn quitting_out() -> bool {
+    false
+}
+
 pub fn quit_to_title() -> bool {
     false
 }

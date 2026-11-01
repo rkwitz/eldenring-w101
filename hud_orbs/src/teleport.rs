@@ -62,6 +62,10 @@ const POOF_LIVE: f32 = 1.75;
 const SHOT_MAX_AGE: f32 = 600.0;
 /// After a book warp's POOF_FLAG, Elden Ring's loading screens are that warp's (seconds).
 const BOOK_WINDOW: f32 = 20.0;
+/// After Elden Ring's quit-out byte is seen set, its loading screen is the quit to the title screen (seconds).
+const QUIT_WINDOW: f32 = 30.0;
+/// The player must have been loaded this recently when a loading screen starts (not at the title screen; seconds).
+const PLAYER_RECENT: f32 = 2.0;
 
 #[derive(Default)]
 pub struct Teleport {
@@ -73,6 +77,9 @@ pub struct Teleport {
     /// Elden Ring's loading screen started during a frozen poof: let it through when the poof ends.
     held: bool,
     alive: bool,
+    /// When the player character was last loaded (HP read), and when the quit-out byte was last seen set.
+    player_at: Option<Instant>,
+    quit_at: Option<Instant>,
     wanted: bool,
     missing_logged: bool,
     /// FX_Disappear.nif's body mesh and spark path (book\art\teleport\fx_disappear.tsv).
@@ -120,6 +127,10 @@ impl Teleport {
         let ready = art.iter().all(Option::is_some);
         if let Some(hp) = hp {
             self.alive = hp > 0;
+            self.player_at = Some(Instant::now());
+        }
+        if game.is_some() && crate::game::quitting_out() {
+            self.quit_at = Some(Instant::now());
         }
         if game.is_some() && crate::game::event_flag(POOF_FLAG) == Some(true) {
             crate::game::set_event_flag(POOF_FLAG, false);
@@ -137,7 +148,14 @@ impl Teleport {
             let book = self.book_at.is_some_and(|t| t.elapsed().as_secs_f32() < BOOK_WINDOW);
             // Used once: the next warp needs a copy of the world it starts from (after loading a save, none yet).
             let shot = self.shot.take().filter(|(_, at)| at.elapsed().as_secs_f32() < SHOT_MAX_AGE);
-            match (book, self.alive, shot, ready, textures.get(WORLD)) {
+            // A quit-out to the title screen (Ryan's log, round 15) or a load from the title screen isn't a warp.
+            let quit = self.quit_at.take().is_some_and(|t| t.elapsed().as_secs_f32() < QUIT_WINDOW);
+            let title = !self.player_at.is_some_and(|t| t.elapsed().as_secs_f32() < PLAYER_RECENT);
+            if quit || title {
+                tracing::info!("teleport: loading screen {}, no poof",
+                               if quit { "of a quit-out to the title screen" } else { "from the title screen" });
+            }
+            match (book || quit || title, self.alive, shot, ready, textures.get(WORLD)) {
                 (false, true, Some((camera, at)), true, Some(_)) => {
                     tracing::info!("teleport: Elden Ring warp, poof on the world copy from {:.1} s ago",
                                    at.elapsed().as_secs_f32());

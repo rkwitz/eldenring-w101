@@ -52,7 +52,7 @@ const MAP_STICK_DEAD: f32 = 0.2;
 const MAP_STICK_SPEED: f32 = 0.8;
 /// Wizard101's item tooltip (itemStatsInfoViewed.gui / itemStatsInfoEquipped.gui): Art_Message_Box's frame
 /// pieces (the blue ones for what is worn) around Background_Message_Box04 (black, at alpha A0), the name in
-/// WizardFancy 0.55 yellow centred at 15..38, the stat lines from y 40 with 15 px margins, and for equipped items
+/// WizardFancy 0.55 light blue centred at 15..38, the stat lines from y 40 with 15 px margins, and for equipped items
 /// the fist (Button_Equip) over the top right corner (181,-14 .. 220,22 of the 200-wide window).
 fn tip_frame(blue: bool) -> [Option<String>; 9] {
     let kind = if blue { "Art_Message_Box_Blue" } else { "Art_Message_Box" };
@@ -72,8 +72,13 @@ const PLAIN_TIP_SCALE: f32 = 0.4;
 const TIP_WIDTH: f32 = 200.0;
 const MAX_TIP: f32 = 290.0;
 const TIP_BACK: ImColor32 = ImColor32::from_rgba(0, 0, 0, 205);
-const TIP_TITLE: ImColor32 = ImColor32::from_rgb(255, 255, 0);
-const TIP_TEXT: ImColor32 = ImColor32::from_rgb(255, 255, 255);
+/// The item's name: the client's item-title markup "<center><COLOR;FFFFFF00>" (Wizard101 colours are AABBGGRR,
+/// as its .lang "Bronze" FF457DE4 / "Gold" FF2ACFFF show): light blue.
+const TIP_TITLE: ImColor32 = ImColor32::from_rgb(0, 255, 255);
+/// The stat lines: the tooltip window's own text style (itemStatsInfoViewed / WindowBubbleMultipleLayouts
+/// controlWidget: WizardFancy 0.55, m_Color 8000FFFF = yellow), in rows as tall as the title (15..39).
+const TIP_TEXT: ImColor32 = ImColor32::from_rgb(255, 255, 0);
+const TIP_STAT_SCALE: f32 = 0.55;
 const TIP_NOTE: ImColor32 = ImColor32::from_rgb(200, 196, 184);
 const EQUIP_FIST: &str = "GUI/InventoryPage/Button_Equip.png";
 /// A tooltip row's school and stat icons (Wizard101's 32 px icons drawn small, beside the value).
@@ -204,6 +209,8 @@ pub struct Book {
     flasks_logged: bool,
     /// Per pages::ACHIEVEMENTS entry, read with the sheet.
     achieved: Vec<Option<bool>>,
+    /// The plain tooltip (ToolTip.gui) being shown: its text and for how many seconds (it fades in, EFFECT_FADEIN).
+    bubble: Option<(String, f32)>,
     last_frame: Instant,
     /// Screen copies for the map page: frames counted (the world is copied every 10th frame while the book is
     /// shut), whether a copy of the world from before the map opened exists, whether the map was copied this frame.
@@ -247,6 +254,73 @@ fn badge(canvas: &Canvas, r: [f32; 4], text: &str) {
     canvas.draw.add_rect(p0, p1, fade(GOLD)).rounding(round).thickness(1.5 * canvas.s).build();
     canvas.text(&format!("<center>{text}</center>"), [r[0] + 2.0, r[1], r[2] - 2.0, r[3]],
                 &TextStyle::new("WizardFancy", 0.0, fade(YELLOW)), false);
+}
+
+/// Wizard101's plain tooltip (ToolTip.gui): the ToolTip_Bckgrnd widget's nine bubble pieces (16 px each, white,
+/// rounded) around ToolTipText, which sits 8 px inside them (8,8 .. 192,42 of 200 x 50) in black WizardNormal 0.4,
+/// centred both ways; the container fades in (EFFECT_FADEIN).
+const BUBBLE: [&str; 9] = ["GUI/Tooltip/bubble_TL.png", "GUI/Tooltip/bubble_T.png", "GUI/Tooltip/bubble_TR.png",
+                           "GUI/Tooltip/bubble_L.png", "GUI/Tooltip/bubble_R.png", "GUI/Tooltip/bubble_BL.png",
+                           "GUI/Tooltip/bubble_B.png", "GUI/Tooltip/bubble_BR.png", "GUI/Tooltip/bubble_C.png"];
+const BUBBLE_PAD: f32 = 8.0;
+const BUBBLE_SCALE: f32 = 0.4;
+/// The widest a bubble's text runs before it wraps (page pixels), and the seconds it takes to fade in.
+const BUBBLE_TEXT_MAX: f32 = 240.0;
+const BUBBLE_FADE: f32 = 0.2;
+
+/// Wizard101's plain tooltip (see BUBBLE) with `text`, beside the mouse (below and right of the wand, kept on the
+/// screen), at opacity `fade`.
+fn draw_bubble(canvas: &Canvas, text: &str, mouse: [f32; 2], screen: [f32; 2], fade: f32) {
+    let Some(font) = canvas.fonts.get("WizardNormal") else { return };
+    let width_of = |t: &str| font.width(t) * BUBBLE_SCALE;
+    // Word-wrapped lines, each centred.
+    let mut lines: Vec<String> = Vec::new();
+    for para in text.split('\n') {
+        let mut line = String::new();
+        for word in para.split_whitespace() {
+            let next = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            if !line.is_empty() && width_of(&next) > BUBBLE_TEXT_MAX {
+                lines.push(std::mem::replace(&mut line, word.to_string()));
+            } else {
+                line = next;
+            }
+        }
+        lines.push(line);
+    }
+    let line_h = font.line_height * BUBBLE_SCALE;
+    let text_w = lines.iter().map(|l| width_of(l)).fold(0.0, f32::max);
+    let (w, h) = (text_w + 2.0 * BUBBLE_PAD + 6.0, lines.len() as f32 * line_h + 2.0 * BUBBLE_PAD + 2.0);
+    let right = (screen[0] - canvas.origin[0]) / canvas.s;
+    let bottom = (screen[1] - canvas.origin[1]) / canvas.s;
+    let mut x = mouse[0] + 14.0;
+    if x + w > right - 4.0 {
+        x = mouse[0] - 6.0 - w;
+    }
+    let mut y = mouse[1] + 26.0;
+    if y + h > bottom - 4.0 {
+        y = mouse[1] - 6.0 - h;
+    }
+    let faded = Canvas {
+        draw: canvas.draw,
+        textures: canvas.textures,
+        fonts: canvas.fonts,
+        origin: canvas.origin,
+        s: canvas.s,
+        mouse: canvas.mouse,
+        mouse_down: false,
+        alpha: canvas.alpha * fade,
+        hole: Cell::new(None),
+    };
+    let pieces: [Option<String>; 9] = BUBBLE.map(|p| Some(p.to_string()));
+    // (The canvas's alpha fades the pieces and the text.)
+    faded.border(&pieces, [x, y, x + w, y + h], ImColor32::WHITE);
+    let black = ImColor32::from_rgb(0, 0, 0);
+    let mut ly = y + BUBBLE_PAD + 1.0;
+    for line in &lines {
+        faded.text(&format!("<center>{line}</center>"), [x + BUBBLE_PAD, ly, x + w - BUBBLE_PAD, ly + line_h],
+                   &TextStyle::new("WizardNormal", BUBBLE_SCALE, black), false);
+        ly += line_h;
+    }
 }
 
 /// Wizard101's wand cursor (GUI/cursor.dds, from GUI/Cursors.xml's "Default").
@@ -324,6 +398,7 @@ impl Book {
             face_logged: false,
             flasks_logged: false,
             achieved: Vec::new(),
+            bubble: None,
             last_frame: Instant::now(),
             frames: 0,
             world_ready: false,
@@ -536,6 +611,12 @@ impl Book {
         self.tab = tab;
         self.state.reset();
         self.state.sub = sub;
+    }
+
+    /// Turns the current page's list to page `page` (the preview renderer).
+    #[allow(dead_code)]
+    pub fn preview_page(&mut self, page: usize) {
+        self.state.page = page;
     }
 
     /// Shows the book around Elden Ring's open map (the preview renderer).
@@ -1132,6 +1213,11 @@ impl Book {
         wanted.extend(view.node_images.values().cloned());
         wanted.extend(view.backs.iter().map(|i| i.1.clone()));
         wanted.extend(view.frames.iter().flat_map(|f| f.1.iter().flatten().cloned()));
+        for (_, hv) in &view.hovers {
+            wanted.extend(hv.images.iter().map(|i| i.1.clone()));
+            wanted.extend(hv.backs.iter().map(|i| i.1.clone()));
+        }
+        wanted.extend(BUBBLE.iter().map(|p| p.to_string()));
         wanted.push(CURSOR.into());
         wanted.extend(tip_frame(false).into_iter().chain(tip_frame(true)).flatten());
         wanted.push(EQUIP_FIST.into());
@@ -1209,7 +1295,23 @@ impl Book {
                 badge(&canvas, [f[0] - 2.0, f[1] - 24.0, f[2] + 2.0, f[1] - 2.0], up);
                 badge(&canvas, [c[0] - 2.0, c[3] + 2.0, c[2] + 2.0, c[3] + 24.0], down);
             }
-            // The hover text of what the mouse is over.
+            // What the mouse is over: an enlarged card (the deck), Wizard101's plain tooltip (badges), or the item
+            // tooltip.
+            if let Some((_, hv)) = view.hovers.iter().rev().find(|(r, _)| layout::inside(mouse, *r)) {
+                layout::draw_extra(hv, &canvas);
+            }
+            match view.bubbles.iter().rev().find(|(r, _)| layout::inside(mouse, *r)) {
+                Some((_, text)) => {
+                    let step = ui.io().delta_time.clamp(0.0, 0.25);
+                    match self.bubble.as_mut() {
+                        Some(b) if b.0 == *text => b.1 += step,
+                        _ => self.bubble = Some((text.clone(), step)),
+                    }
+                    let since = self.bubble.as_ref().map_or(0.0, |b| b.1);
+                    draw_bubble(&canvas, text, mouse, [width, height], (since / BUBBLE_FADE).min(1.0));
+                }
+                None => self.bubble = None,
+            }
             if let Some((_, lines)) = view.tips.iter().rev().find(|(r, _)| layout::inside(mouse, *r)) {
                 match lines.split_first() {
                     Some((first, rest)) if first == layout::PLAIN_TIP => self.draw_plain_tip(&canvas, rest, mouse, [width, height]),
@@ -1227,15 +1329,16 @@ impl Book {
     }
 
     /// A hover box beside the mouse in Wizard101's item tooltip style (see tip_frame): the name first, then one
-    /// stat per line; a long last line (the game's description) wraps in a quieter colour. "Equipped" in the lines
+    /// stat per line, every line centred (the stat layouts are H_CENTER); a long last line (the game's description) wraps in a quieter colour. "Equipped" in the lines
     /// makes it the equipped variant (blue frame, fist badge) instead of a line of its own.
     fn draw_tip(&self, canvas: &Canvas, lines: &[String], mouse: [f32; 2], screen: [f32; 2]) {
         let (Some(fancy), Some(normal)) = (self.fonts.get("WizardFancy"), self.fonts.get("WizardNormal")) else { return };
         let Some((title, rest)) = lines.split_first() else { return };
         let equipped = rest.iter().any(|l| l == "Equipped");
         let rest: Vec<&String> = rest.iter().filter(|l| *l != "Equipped").collect();
-        let (title_scale, scale, margin) = (0.55, 0.42, 15.0);
-        let line_h = normal.line_height * scale;
+        let (title_scale, scale, note_scale, margin) = (0.55, TIP_STAT_SCALE, 0.42, 15.0);
+        let line_h = fancy.line_height * scale;
+        let note_h = normal.line_height * note_scale;
         let title_h = fancy.line_height * title_scale;
         // A stat row: "@value|school icon|stat icon|name" (itemdata::stat_row).
         let row_of = |l: &str| -> Option<(String, Vec<String>)> {
@@ -1244,15 +1347,16 @@ impl Book {
             let icons = parts.take(2).filter(|p| !p.is_empty()).map(str::to_string).collect();
             Some((value, icons))
         };
-        let row_h = line_h.max(TIP_ICON + 2.0);
-        let row_width = |value: &str, icons: usize| normal.width(value) * scale + 4.0 + icons as f32 * (TIP_ICON + 1.0);
+        let icon = TIP_ICON.min(line_h);
+        let row_h = line_h.max(icon + 2.0);
+        let row_width = |value: &str, icons: usize| fancy.width(value) * scale + 4.0 + icons as f32 * (icon + 1.0);
         let is_note = |i: usize, l: &str| i + 1 == rest.len() && !l.starts_with('@')
-            && normal.width(l) * scale > MAX_TIP - 2.0 * margin;
+            && fancy.width(l) * scale > MAX_TIP - 2.0 * margin;
         // As wide as the widest stat line needs (the description wraps), between Wizard101's 200 and MAX_TIP.
         let widest = rest.iter().enumerate().filter(|(i, l)| !is_note(*i, l))
             .map(|(_, l)| match row_of(l) {
                 Some((v, icons)) => row_width(&v, icons.len()),
-                None => normal.width(l) * scale,
+                None => fancy.width(l) * scale,
             })
             .chain([fancy.width(title) * title_scale])
             .fold(0.0, f32::max);
@@ -1260,8 +1364,15 @@ impl Book {
         let inner = width - 2.0 * margin;
         let rows = |w: f32| (w / inner * 1.08).ceil().max(1.0);
         let title_rows = rows(fancy.width(title) * title_scale);
-        let heights: Vec<f32> = rest.iter().map(|l| if l.starts_with('@') { row_h } else { rows(normal.width(l) * scale) * line_h })
-            .collect();
+        let heights: Vec<f32> = rest.iter().enumerate().map(|(i, l)| {
+            if l.starts_with('@') {
+                row_h
+            } else if is_note(i, l) {
+                rows(normal.width(l) * note_scale) * note_h
+            } else {
+                rows(fancy.width(l) * scale) * line_h
+            }
+        }).collect();
         let title_bottom = margin + (title_rows * title_h).max(23.0);
         let height = title_bottom + 2.0 + heights.iter().sum::<f32>() + 4.0 * (rest.len() > 1) as u8 as f32 + margin;
         // Page pixels of the screen's edges.
@@ -1282,15 +1393,16 @@ impl Book {
         let mut ly = y + title_bottom + 2.0;
         for (i, (line, h)) in rest.iter().zip(heights).enumerate() {
             if let Some((value, icons)) = row_of(line) {
-                // "+45" then the icons, on one line.
-                let vw = normal.width(&value) * scale;
-                canvas.text(&value, [x + margin, ly, x + margin + vw + 2.0, ly + h],
-                            &TextStyle::new("WizardNormal", scale, TIP_TEXT), false);
-                let mut ix = x + margin + vw + 4.0;
-                let iy = ly + (h - TIP_ICON) / 2.0;
-                for icon in &icons {
-                    canvas.image(icon, [ix, iy, ix + TIP_ICON, iy + TIP_ICON], [0.0, 0.0, 1.0, 1.0], ImColor32::WHITE);
-                    ix += TIP_ICON + 1.0;
+                // "+45" then the icons, on one line, centred as a whole.
+                let vw = fancy.width(&value) * scale;
+                let x0 = x + (width - row_width(&value, icons.len())) / 2.0;
+                canvas.text(&value, [x0, ly, x0 + vw + 2.0, ly + h],
+                            &TextStyle::new("WizardFancy", scale, TIP_TEXT), false);
+                let mut ix = x0 + vw + 4.0;
+                let iy = ly + (h - icon) / 2.0;
+                for img in &icons {
+                    canvas.image(img, [ix, iy, ix + icon, iy + icon], [0.0, 0.0, 1.0, 1.0], ImColor32::WHITE);
+                    ix += icon + 1.0;
                 }
                 ly += h;
                 continue;
@@ -1299,8 +1411,12 @@ impl Book {
             if note && i > 0 {
                 ly += 4.0;
             }
-            let style = TextStyle::new("WizardNormal", scale, if note { TIP_NOTE } else { TIP_TEXT }).wrapped();
-            canvas.text(line, [x + margin, ly, x + width - margin, ly + h], &style, false);
+            let style = if note {
+                TextStyle::new("WizardNormal", note_scale, TIP_NOTE)
+            } else {
+                TextStyle::new("WizardFancy", scale, TIP_TEXT)
+            };
+            canvas.text(line, [x + margin, ly, x + width - margin, ly + h], &style.centred().wrapped(), false);
             ly += h;
         }
         if equipped {
