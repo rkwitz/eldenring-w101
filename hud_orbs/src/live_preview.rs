@@ -24,9 +24,14 @@
 //!   the book lets go (close it in Elden Ring with B).
 //!
 //! - Round 15:
-//!   - Idle (A1): Elden Ring's mirror model stands in a fixed pose (the copy is made every frame: turning it shows at
-//!     once), so the picture gets a slow breathing movement drawn here (`breath_strips`, layout.rs): head and
-//!     shoulders lift a few pixels and the chest widens slightly, feet fixed, a 4.2 s cycle.
+//!   - Idle (A1): Elden Ring's mirror model does play an idle animation (Ryan), yet the copied set-0 picture stood
+//!     still. So which target ER redraws is now measured, not assumed: every square RGBA8 render target of the
+//!     scene is kept, and while the menu is up each is read back twice about a second apart (a 64x64 sample grid);
+//!     the ones that changed and have the scene's dark brown background are the live pictures, and those are shown
+//!     (equipped / bare by their set). "live: anim" lines log every target's change. The shown picture is then
+//!     checked about every 1.5 s; if it stops changing the survey runs again. A slow 2D breathing
+//!     (`breath_strips`, layout.rs) is only a fallback, ini `live_preview_fake_breath = 1`, used when no target
+//!     changes.
 //!   - Sets (A2): sets 0 and 2 are the same equipped picture; of the bare ones, set 1's head skin can come out black
 //!     (its face skin not filled in; eyes, beard and hair fine), set 3's was right every time. F9 now toggles
 //!     between the equipped set (ini `live_preview_slot`, 0) and the bare one (ini `live_preview_bare`, 3).
@@ -84,6 +89,16 @@ const BREATH_PERIOD: f32 = 4.2;
 const BREATH_LIFT: f32 = 0.006;
 const BREATH_WIDEN: f32 = 0.005;
 const BREATH_STRIPS: usize = 24;
+/// The animation survey: the sample grid's side, the mean byte difference that counts as "changed", and the
+/// scene's background (run 2: RGB 23,20,14) with its tolerance.
+const ANIM_GRID: usize = 64;
+const ANIM_CHANGED: f32 = 0.1;
+const ANIM_BACKGROUND: [f32; 3] = [23.0, 20.0, 14.0];
+const ANIM_BACKGROUND_TOLERANCE: f32 = 18.0;
+/// A new scene counter (each burst of square targets), so the survey knows when to start over.
+static SCENE: AtomicU32 = AtomicU32::new(0);
+/// The fake breathing may draw (ini on and no changing target found).
+static FAKE_BREATH: AtomicBool = AtomicBool::new(false);
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 /// The dispatcher's address (0: not looked for or not found), and whether the scan ran.
@@ -177,18 +192,19 @@ pub fn on_created(width: u64, height: u32, format: u32, flags: u32, resource: us
             t.retired = Some(now);
         }
         sh.burst = 0;
+        SCENE.fetch_add(1, Ordering::Relaxed);
     }
     sh.last_made = Some(now);
     sh.burst += 1;
-    // The final picture by its stack; if no stack matches (another game version), the first square RGBA8 target
-    // of the scene (run 2: also the final picture).
-    let keep = by_stack || sh.burst == 1;
-    if !keep || sh.targets.len() >= 16 {
+    // Every square RGBA8 target of the scene is kept: the animation survey finds which ones ER redraws. Without a
+    // survey result the final picture by its stack is shown, else the first of the scene (run 2: also the final).
+    if sh.targets.iter().filter(|t| t.retired.is_none()).count() >= 48 {
         return;
     }
     unsafe { probe::com_add_ref(resource) };
+    let first = sh.burst == 1;
     sh.targets.push(Target { resource, size: height, set, by_stack, retired: None });
-    if KEPT_LINES.fetch_add(1, Ordering::Relaxed) < 64 {
+    if (by_stack || first) && KEPT_LINES.fetch_add(1, Ordering::Relaxed) < 64 {
         tracing::info!("live: kept {width}x{height} fmt 28 {resource:#x} (set {set:?}, {})",
                        if by_stack { "stack matched" } else { "first of its scene, stack not matched" });
     }
@@ -303,7 +319,7 @@ fn compare(a: &[f32], b: &[f32]) -> (f32, f32) {
 /// layout.rs, for the full character picture: the strips (top and bottom as fractions of the picture, and the uv
 /// rect each shows) that draw it breathing, while the live picture is in it. None: draw it as it is.
 pub fn breath_strips(name: &str) -> Option<Vec<([f32; 2], [f32; 4])>> {
-    if name != MODEL_FULL || !SHOWING.load(Ordering::Relaxed) {
+    if name != MODEL_FULL || !SHOWING.load(Ordering::Relaxed) || !FAKE_BREATH.load(Ordering::Relaxed) {
         return None;
     }
     let t = BREATH_START.get_or_init(Instant::now).elapsed().as_secs_f32();
@@ -339,6 +355,61 @@ struct WorldSearch {
     menu_said: Option<bool>,
 }
 
+/// 64x64 RGB point samples of a square RGBA8 readback, and the mean colour of its four corner cells (the scene's
+/// background in the final picture).
+fn anim_sample(rb: &hudhook::Readback) -> Option<(Vec<u8>, [f32; 3])> {
+    if !matches!(rb.format, 28 | 29) || rb.width < ANIM_GRID as u32 || rb.height < ANIM_GRID as u32 {
+        return None;
+    }
+    let (w, h, pitch) = (rb.width as usize, rb.height as usize, rb.pitch as usize);
+    if rb.data.len() < pitch * h {
+        return None;
+    }
+    let mut out = Vec::with_capacity(ANIM_GRID * ANIM_GRID * 3);
+    for gy in 0..ANIM_GRID {
+        for gx in 0..ANIM_GRID {
+            let (x, y) = ((gx * 2 + 1) * w / (ANIM_GRID * 2), (gy * 2 + 1) * h / (ANIM_GRID * 2));
+            let o = y * pitch + x * 4;
+            out.extend_from_slice(&rb.data[o..o + 3]);
+        }
+    }
+    let mut corner = [0.0f32; 3];
+    for (gx, gy) in [(0, 0), (ANIM_GRID - 1, 0), (0, ANIM_GRID - 1), (ANIM_GRID - 1, ANIM_GRID - 1)] {
+        let o = (gy * ANIM_GRID + gx) * 3;
+        for c in 0..3 {
+            corner[c] += out[o + c] as f32 / 4.0;
+        }
+    }
+    Some((out, corner))
+}
+
+fn anim_diff(a: &[u8], b: &[u8]) -> f32 {
+    let n = a.len().min(b.len()).max(1) as f32;
+    a.iter().zip(b).map(|(x, y)| (*x as i32 - *y as i32).unsigned_abs() as f32).sum::<f32>() / n
+}
+
+/// Which of the scene's square targets ER redraws while its menu is up (A1).
+#[derive(Default)]
+struct AnimSurvey {
+    scene: u32,
+    started: bool,
+    queue: Vec<usize>,
+    second: bool,
+    first: Vec<(usize, Vec<u8>)>,
+    pending: Option<usize>,
+    frames: u32,
+    /// (resource, set, by stack, change, final-looking background)
+    results: Vec<(usize, Option<usize>, bool, f32, bool)>,
+    done: bool,
+    /// The live pictures found: equipped, bare.
+    picks: [Option<usize>; 2],
+    /// Watching the shown picture: its last sample, checks in a row without change, surveys run this scene.
+    watch_last: Option<(usize, Vec<u8>)>,
+    still: u32,
+    runs: u32,
+    said_still: bool,
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Drive {
     Off,
@@ -357,6 +428,8 @@ pub struct LivePreview {
     search: WorldSearch,
     /// The live world copy is ready this frame.
     world_live: bool,
+    anim: AnimSurvey,
+    fake_breath: bool,
     state: u32,
     drive: Drive,
     hud: Option<u8>,
@@ -389,6 +462,7 @@ impl LivePreview {
             .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok())
             .unwrap_or(DEFAULT_STATE);
         let drive = get("live_preview_drive").as_deref() == Some("1");
+        let fake_breath = get("live_preview_fake_breath").as_deref() == Some("1");
         ENABLED.store(true, Ordering::Relaxed);
         tracing::info!("live: live preview on (set {set}, bare set {bare}, assumed state {state:#x}, world state \
                         {world_state:#x}, drive {drive}); F9 toggles equipped / bare, F10 arms / disarms the \
@@ -399,6 +473,8 @@ impl LivePreview {
             world_state,
             search: WorldSearch::default(),
             world_live: false,
+            anim: AnimSurvey::default(),
+            fake_breath,
             state,
             drive: if drive { Drive::Armed } else { Drive::Off },
             hud: None,
@@ -427,7 +503,10 @@ impl LivePreview {
     fn current(&self) -> Option<(usize, u32)> {
         let sh = SHARED.lock().unwrap_or_else(|e| e.into_inner());
         let live: Vec<&Target> = sh.targets.iter().filter(|t| t.retired.is_none()).collect();
-        live.iter().find(|t| t.by_stack && t.set == Some(self.set))
+        let bare = usize::from(self.set == self.sets[1]);
+        let picked = self.anim.picks[bare].or(self.anim.picks[1 - bare]);
+        live.iter().find(|t| Some(t.resource) == picked)
+            .or_else(|| live.iter().find(|t| t.by_stack && t.set == Some(self.set)))
             .or_else(|| live.iter().filter(|t| t.by_stack).nth(self.set))
             .or_else(|| live.first())
             .map(|t| (t.resource, t.size))
@@ -481,6 +560,7 @@ impl LivePreview {
             });
         }
         self.world_search(render, hud);
+        self.anim_survey(render, hud);
         let box_size = picture();
         let target = if hud != Some(3) { self.current() } else { None };
         let copied = match (box_size, target) {
@@ -536,6 +616,8 @@ impl LivePreview {
         }
         crate::input::pass_right_stick(self.showing.is_some());
         SHOWING.store(self.showing.is_some(), Ordering::Relaxed);
+        FAKE_BREATH.store(self.fake_breath && self.anim.done && self.anim.picks.iter().all(Option::is_none),
+                          Ordering::Relaxed);
         // The world behind the book while Elden Ring's menu covers the screen: a live copy of the world scene's own
         // picture, once it is known.
         self.world_live = false;
@@ -550,6 +632,124 @@ impl LivePreview {
         } else {
             self.search.menu_grid = None;
             self.search.menu_samples = 0;
+        }
+    }
+
+    /// While Elden Ring's menu is up with a scene: reads every square target back twice, about a second apart, and
+    /// picks the ones that changed (ER redraws them: the idle animation) and show the scene's background. Then
+    /// watches the shown one and surveys again if it stops changing.
+    fn anim_survey(&mut self, render: &mut dyn RenderContext, hud: Option<u8>) {
+        let scene = SCENE.load(Ordering::Relaxed);
+        let (live, settled): (Vec<(usize, Option<usize>, bool)>, bool) = {
+            let sh = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+            (sh.targets.iter().filter(|t| t.retired.is_none()).map(|t| (t.resource, t.set, t.by_stack)).collect(),
+             sh.last_made.is_some_and(|t| t.elapsed() > Duration::from_millis(1500)))
+        };
+        let book = picture().is_some();
+        let showing = self.showing;
+        let a = &mut self.anim;
+        if a.scene != scene {
+            *a = AnimSurvey { scene, ..Default::default() };
+        }
+        a.frames += 1;
+        if hud == Some(3) || hud.is_none() || live.is_empty() || !settled {
+            return;
+        }
+        if !a.started {
+            a.started = true;
+            a.runs += 1;
+            a.queue = live.iter().map(|t| t.0).collect();
+            tracing::info!("live: anim: surveying {} square targets of scene {scene} (book open {book})",
+                           a.queue.len());
+        }
+        // A readback asked for earlier.
+        if let Some(p) = a.pending {
+            match render.take_readback_of(p) {
+                Some(rb) => {
+                    a.pending = None;
+                    let Some((grid, corner)) = anim_sample(&rb) else { return };
+                    if !a.done {
+                        if !a.second {
+                            a.first.push((p, grid));
+                        } else if let Some((_, before)) = a.first.iter().find(|f| f.0 == p) {
+                            let change = anim_diff(before, &grid);
+                            let background = (0..3).all(|c| (corner[c] - ANIM_BACKGROUND[c]).abs()
+                                                         <= ANIM_BACKGROUND_TOLERANCE);
+                            let (set, by_stack) = live.iter().find(|t| t.0 == p).map(|t| (t.1, t.2))
+                                .unwrap_or((None, false));
+                            tracing::info!("live: anim {p:#x} (set {set:?}, stack {by_stack}): change {change:.2}, \
+                                            corners {:.0},{:.0},{:.0}{}", corner[0], corner[1], corner[2],
+                                           if background { " (scene background)" } else { "" });
+                            a.results.push((p, set, by_stack, change, background));
+                        }
+                    } else {
+                        // Watching the shown picture.
+                        if let Some((r, before)) = a.watch_last.replace((p, grid.clone())) {
+                            if r == p {
+                                let change = anim_diff(&before, &grid);
+                                if change > ANIM_CHANGED {
+                                    a.still = 0;
+                                    a.said_still = false;
+                                } else {
+                                    a.still += 1;
+                                }
+                                if a.still == 4 && !a.said_still {
+                                    a.said_still = true;
+                                    tracing::info!("live: anim: the shown picture {p:#x} stopped changing (book open \
+                                                    {book}){}", if a.runs < 3 { "; surveying again" } else { "" });
+                                    if a.runs < 3 {
+                                        let (scene, runs) = (a.scene, a.runs);
+                                        *a = AnimSurvey { scene, runs, ..Default::default() };
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                None if a.frames > 120 => a.pending = None, // never came: ask again
+                None => {}
+            }
+            return;
+        }
+        if !a.done {
+            if a.queue.is_empty() {
+                if !a.second {
+                    a.second = true;
+                    a.queue = a.first.iter().map(|f| f.0).collect();
+                    return;
+                }
+                // The verdict: changing targets with the scene's background, equipped (sets 0, 2) and bare (1, 3).
+                let live_pictures: Vec<_> = a.results.iter().filter(|r| r.3 > ANIM_CHANGED && r.4).collect();
+                let pick = |bare: bool| live_pictures.iter()
+                    .filter(|r| r.1.is_some_and(|s| (s % 2 == 1) == bare))
+                    .max_by(|x, y| (x.2, x.3).partial_cmp(&(y.2, y.3)).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|r| r.0);
+                a.picks = [pick(false), pick(true)];
+                if a.picks.iter().all(Option::is_none) {
+                    // Changing pictures without a set: shown for both.
+                    a.picks = [live_pictures.first().map(|r| r.0); 2];
+                }
+                a.done = true;
+                let changing = a.results.iter().filter(|r| r.3 > ANIM_CHANGED).count();
+                tracing::info!("live: anim: {changing} of {} targets changed, {} of them look final; showing \
+                                equipped {:?}, bare {:?}{}", a.results.len(), live_pictures.len(), a.picks[0],
+                               a.picks[1], if live_pictures.is_empty() {
+                                   " (none changed: the set picture stays; ini live_preview_fake_breath = 1 adds a \
+                                    drawn breathing)" } else { "" });
+                return;
+            }
+            if a.frames >= 3 && render.request_readback(a.queue[0], self.state) {
+                a.pending = Some(a.queue.remove(0));
+                a.frames = 0;
+            }
+            return;
+        }
+        // Watch the shown picture about every 1.5 s.
+        if let Some(r) = showing.filter(|_| a.frames >= 90) {
+            if render.request_readback(r, self.state) {
+                a.pending = Some(r);
+                a.frames = 0;
+            }
         }
     }
 
