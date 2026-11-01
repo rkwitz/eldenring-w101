@@ -18,6 +18,7 @@ mod itemdata;
 mod layout;
 mod loadscreen;
 mod markers;
+mod music;
 mod nameplates;
 mod steam;
 mod teleport;
@@ -134,6 +135,8 @@ struct Orbs {
     live: Option<live_preview::LivePreview>,
     /// The last stats read in normal play (B2: the book shows them while the hidden mirror hides Elden Ring's HUD).
     last_stats: Option<game::Stats>,
+    /// Wizard101's Unicorn Way music (round 20 M1-M5, music.rs).
+    music: music::Music,
 }
 
 /// Frame timing written to w101_orbs.log every few seconds, to see what the overlay costs the game.
@@ -189,7 +192,9 @@ impl Orbs {
             }
         }
         let probe = settings.scene_probe.then(probe::Probe::new);
+        let music = music::Music::new(&folder);
         Orbs {
+            music,
             settings,
             probe,
             live,
@@ -333,6 +338,7 @@ impl ImguiRenderLoop for Orbs {
         let hud = game::hud_shown();
         let faded = game::faded();
         let position = game.and_then(|g| g.position());
+        self.music.frame(game, stats, position, self.focused);
         let settings_path = self.folder.join("w101_orbs.ini");
         let mut cx = book::Context {
             game,

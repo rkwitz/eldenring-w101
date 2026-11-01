@@ -154,6 +154,46 @@ impl Game {
         out
     }
 
+    /// w101 music (round 20 M2/M3): the loaded characters of model `models` with their HP (0 when dead), as
+    /// (ChrIns address, model, physics position, hp). Uses the same half-second character list as `enemies`.
+    pub fn combatants(&self, models: &[u32]) -> Vec<(usize, u32, [f32; 3], i32)> {
+        use eldenring::cs::{CSChrDataModule, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
+        use std::mem::offset_of;
+        let list = {
+            let mut cache = self.characters.lock().unwrap_or_else(|e| e.into_inner());
+            if cache.0.is_none_or(|t| t.elapsed() > std::time::Duration::from_millis(500)) {
+                *cache = (Some(std::time::Instant::now()), self.characters());
+            }
+            cache.1.clone()
+        };
+        let mut out = Vec::new();
+        for (chr, model) in list {
+            if !models.contains(&model) || read::<u32>(chr + offset_of!(ChrIns, character_id)) != Some(model) {
+                continue;
+            }
+            let Some(modules) = read::<usize>(chr + offset_of!(ChrIns, modules)) else { continue };
+            let Some(hp) = read::<usize>(modules + offset_of!(ChrInsModuleContainer, data))
+                .and_then(|data| read::<i32>(data + offset_of!(CSChrDataModule, hp))) else { continue };
+            let Some(physics) = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics)) else { continue };
+            let Some([x, y, z, _]) = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position)) else { continue };
+            if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6) {
+                out.push((chr, model, [x, y, z], hp.max(0)));
+            }
+        }
+        out
+    }
+
+    /// w101 music (round 20 M3): GameDataMan's boss fight state (the eldenring crate's public layout): whether a
+    /// boss fight is active and the entity ID of the boss whose health bar is up (0 = none).
+    pub fn boss_fight(&self) -> Option<(bool, u32)> {
+        use eldenring::cs::GameDataMan;
+        use std::mem::offset_of;
+        let gdm = read::<usize>(self.game_data_man).filter(|p| *p != 0)?;
+        let active = read::<u8>(gdm + offset_of!(GameDataMan, boss_fight_active))?;
+        let entity = read::<u32>(gdm + offset_of!(GameDataMan, boss_health_bar_entity_id))?;
+        Some((active != 0, entity))
+    }
+
     /// w101 npcvis (round 18 G1): the loaded characters of model `models` whose map entity ID (ChrIns
     /// event_entity_id, the MSB part's EntityID) is in `ids`: (entity, physics position in the camera's space).
     pub fn entities(&self, models: &[u32], ids: &[u32]) -> Vec<(u32, [f32; 3])> {
