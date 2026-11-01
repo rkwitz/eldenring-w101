@@ -130,6 +130,22 @@ fn sample(t: &RgbaImage, u: f32, v: f32) -> [f32; 4] {
     out
 }
 
+/// The DX12 renderer's key pixel shader (vendor hudhook dx12.rs PS_KEY), for the live mirror picture.
+fn key_out(texture: &RgbaImage, t: [f32; 4]) -> [f32; 4] {
+    let fixed = [23.0, 20.0, 14.0];
+    let corner = sample(texture, 0.004, 0.004);
+    let near = (0..3).map(|i| (corner[i] - fixed[i]).abs()).fold(0.0, f32::max) < 12.0;
+    let key = if near { [corner[0], corner[1], corner[2]] } else { fixed };
+    let d = (0..3).map(|i| (t[i] - key[i]).abs()).fold(0.0, f32::max);
+    let a = ((d - 1.0) / 2.0).clamp(0.0, 1.0);
+    let mut out = [0.0; 4];
+    for i in 0..3 {
+        out[i] = ((t[i] - key[i] * (1.0 - a)) / a.max(0.05)).clamp(0.0, 255.0);
+    }
+    out[3] = t[3] * a;
+    out
+}
+
 /// Draws imgui's draw data over `canvas` (premultiplied-free alpha blending, like imgui's DX12 backend).
 fn rasterize(draw_data: &imgui::DrawData, textures: &[RgbaImage], font: &RgbaImage, canvas: &mut RgbaImage) {
     let (cw, ch) = (canvas.width() as i32, canvas.height() as i32);
@@ -137,11 +153,13 @@ fn rasterize(draw_data: &imgui::DrawData, textures: &[RgbaImage], font: &RgbaIma
         let vtx = list.vtx_buffer();
         let idx = list.idx_buffer();
         let mut additive = false;
+        let mut keyed = false;
         for cmd in list.commands() {
             if let DrawCmd::RawCallback { raw_cmd, .. } = cmd {
                 match unsafe { (*raw_cmd).UserCallbackData } as usize {
-                    hudhook::BLEND_ADDITIVE => additive = true,
-                    hudhook::BLEND_NORMAL => additive = false,
+                    hudhook::BLEND_ADDITIVE => (additive, keyed) = (true, false),
+                    hudhook::BLEND_NORMAL => (additive, keyed) = (false, false),
+                    hudhook::BLEND_KEY => (additive, keyed) = (false, true),
                     _ => {}
                 }
                 continue;
@@ -182,7 +200,10 @@ fn rasterize(draw_data: &imgui::DrawData, textures: &[RgbaImage], font: &RgbaIma
                         for i in 0..4 {
                             col[i] = (w0 * v[0].col[i] as f32 + w1 * v[1].col[i] as f32 + w2 * v[2].col[i] as f32) / 255.0;
                         }
-                        let t = sample(texture, u, vv);
+                        let mut t = sample(texture, u, vv);
+                        if keyed {
+                            t = key_out(texture, t);
+                        }
                         let a = t[3] / 255.0 * col[3];
                         if a <= 0.0 {
                             continue;
@@ -326,6 +347,12 @@ fn main() {
     book.textures.want([loadscreen::IMAGE.to_string()]);
     let settings_image = settings::load_settings(Path::new("/nonexistent")).loadscreen_image;
     load_screen.load(folder.parent().unwrap_or(&folder), &settings_image, &folder.join("book").join("page_flip.tsv"), &mut render);
+    // Round 18 A3: Elden Ring's mirror picture (a probe dump) in the character pictures, as the DLL shows it.
+    let mirror = std::env::var_os("PREVIEW_LIVE_MIRROR").and_then(|p| image::open(p).ok()).map(|i| {
+        let i = i.to_rgba8();
+        let (w, h) = (i.width(), i.height());
+        (hudhook::RenderContext::load_texture(&mut render, i.as_raw(), w, h).unwrap(), [w as f32, h as f32])
+    });
     for (name, tab, sub, mouse, show) in shots {
         if only.is_some_and(|o| !name.contains(o)) {
             continue;
@@ -396,6 +423,10 @@ fn main() {
                 settings: &mut settings,
                 settings_path: Path::new("/tmp/book_preview_settings.ini"),
             };
+            if let Some((id, size)) = mirror.filter(|_| frame >= 2) {
+                book.textures.set(pages::MODEL_FULL, id, size);
+                book.textures.set(pages::MODEL_PORTRAIT, id, size);
+            }
             book.frame(ui, &mut cx);
             if !show.starts_with("poof") {
                 book.draw_markers(ui, &cx);

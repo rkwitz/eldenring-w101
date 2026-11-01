@@ -61,6 +61,8 @@ pub struct D3D12RenderEngine {
     pipeline_state: ID3D12PipelineState,
     // w101_orbs: the same with additive blending (crate::blend_additive).
     additive_state: ID3D12PipelineState,
+    // w101_orbs: alpha blending with the live mirror picture's flat background keyed out (crate::BLEND_KEY).
+    key_state: ID3D12PipelineState,
 
     projection_buffer: [[f32; 4]; 4],
     node_mask: u32,
@@ -157,7 +159,7 @@ impl D3D12RenderEngine {
         let (rtv_heap, texture_heap) = unsafe { create_heaps(&device, node_mask) }?;
         let rtv_heap_start = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
 
-        let (root_signature, pipeline_state, additive_state) =
+        let (root_signature, pipeline_state, additive_state, key_state) =
             unsafe { create_shader_program(&device, rtv_format, node_mask) }?;
 
         let fence = Fence::new(&device)?;
@@ -177,6 +179,7 @@ impl D3D12RenderEngine {
             root_signature,
             pipeline_state,
             additive_state,
+            key_state,
             projection_buffer: Default::default(),
             node_mask,
             fence,
@@ -688,6 +691,7 @@ impl D3D12RenderEngine {
                         // w101_orbs: blending switches (crate::blend_callback).
                         match (*raw_cmd).UserCallbackData as usize {
                             crate::BLEND_ADDITIVE => self.command_list.SetPipelineState(&self.additive_state),
+                            crate::BLEND_KEY => self.command_list.SetPipelineState(&self.key_state),
                             crate::BLEND_NORMAL => self.command_list.SetPipelineState(&self.pipeline_state),
                             _ => callback(cl.raw(), raw_cmd),
                         }
@@ -773,7 +777,7 @@ unsafe fn create_shader_program(
     device: &ID3D12Device,
     rtv_format: DXGI_FORMAT,
     node_mask: u32,
-) -> Result<(ID3D12RootSignature, ID3D12PipelineState, ID3D12PipelineState)> {
+) -> Result<(ID3D12RootSignature, ID3D12PipelineState, ID3D12PipelineState, ID3D12PipelineState)> {
     let parameters = [
         D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
@@ -883,6 +887,32 @@ unsafe fn create_shader_program(
     float4 main(PS_INPUT input): SV_Target {
       float4 out_col = input.col * texture0.Sample(sampler0, input.uv);
       return out_col;
+    }"#;
+
+    // w101_orbs: the live mirror picture (crate::BLEND_KEY): its flat background (ER's CharaMake scene, RGB 23,20,14 in
+    // round 13's dumps; the colour at the square's top-left corner when that is close to it) becomes transparent,
+    // with a short ramp so edges blend, and the background's tint taken back out of the edge pixels.
+    const PS_KEY: &str = r#"
+    struct PS_INPUT {
+      float4 pos: SV_POSITION;
+      float4 col: COLOR0;
+      float2 uv: TEXCOORD0;
+    };
+
+    SamplerState sampler0: register(s0);
+    Texture2D texture0: register(t0);
+
+    float4 main(PS_INPUT input): SV_Target {
+      float3 fixed_key = float3(23.0, 20.0, 14.0) / 255.0;
+      float3 corner = texture0.SampleLevel(sampler0, float2(0.004, 0.004), 0).rgb;
+      float3 c = abs(corner - fixed_key);
+      float3 key = max(max(c.r, c.g), c.b) * 255.0 < 12.0 ? corner : fixed_key;
+      float4 t = texture0.Sample(sampler0, input.uv);
+      float3 d3 = abs(t.rgb - key);
+      float d = max(max(d3.r, d3.g), d3.b) * 255.0;
+      float a = saturate((d - 1.0) / 2.0);
+      float3 rgb = saturate((t.rgb - key * (1.0 - a)) / max(a, 0.05));
+      return float4(input.col.rgb * rgb, input.col.a * a);
     }"#;
 
     let vtx_shader: ID3DBlob = util::try_out_err_blob(|v, err_blob| unsafe {
@@ -1023,7 +1053,7 @@ unsafe fn create_shader_program(
         ..Default::default()
     };
 
-    let pipeline_state = unsafe { device.CreateGraphicsPipelineState(&pso_desc)? };
+    let pipeline_state: ID3D12PipelineState = unsafe { device.CreateGraphicsPipelineState(&pso_desc)? };
     // w101_orbs: the additive twin (src x alpha + dst).
     let mut additive_desc = pso_desc.clone();
     additive_desc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_ONE;
@@ -1031,9 +1061,46 @@ unsafe fn create_shader_program(
     additive_desc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ONE;
     let additive_state = unsafe { device.CreateGraphicsPipelineState(&additive_desc)? };
     let _ = ManuallyDrop::into_inner(additive_desc.pRootSignature);
+    // w101_orbs: the keyed twin (normal blending, the key pixel shader).
+    let key_shader: std::result::Result<ID3DBlob, _> = util::try_out_err_blob(|v, err_blob| unsafe {
+        D3DCompile(
+            PS_KEY.as_ptr() as _,
+            PS_KEY.len(),
+            None,
+            None,
+            None::<&ID3DInclude>,
+            s!("main\0"),
+            s!("ps_5_0\0"),
+            0,
+            0,
+            v,
+            Some(err_blob),
+        )
+    })
+    .map_err(|(e, _blob)| e);
+    // Never fatal: without it the picture is drawn as it is (normal blending).
+    let key_state = match key_shader {
+        Ok(key_shader) => {
+            let mut key_desc = pso_desc.clone();
+            key_desc.PS = D3D12_SHADER_BYTECODE {
+                pShaderBytecode: unsafe { key_shader.GetBufferPointer() },
+                BytecodeLength: unsafe { key_shader.GetBufferSize() },
+            };
+            let state = unsafe { device.CreateGraphicsPipelineState(&key_desc) };
+            let _ = ManuallyDrop::into_inner(key_desc.pRootSignature);
+            state.unwrap_or_else(|e| {
+                error!("key pipeline: {e:?}");
+                pipeline_state.clone()
+            })
+        },
+        Err(e) => {
+            error!("key pixel shader: {e:?}");
+            pipeline_state.clone()
+        },
+    };
     let _ = ManuallyDrop::into_inner(pso_desc.pRootSignature);
 
-    Ok((root_signature, pipeline_state, additive_state))
+    Ok((root_signature, pipeline_state, additive_state, key_state))
 }
 
 struct Buffer<T: Sized> {

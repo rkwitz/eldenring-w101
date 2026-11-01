@@ -756,12 +756,15 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
         if let Some(img) = view.node_images.get(&i) {
             match crate::live_preview::image_strips(img) {
                 // The live mirror picture: cropped to this picture's framing, maybe breathing (live_preview.rs).
+                // Round 18 A3: its flat background keyed out, so the window's own sky (portrait_back) shows.
                 Some(strips) => {
+                    crate::live_preview::key_blend(true);
                     for ([y0, y1], uv) in strips {
                         let h = r[3] - r[1];
                         let strip = [r[0], r[1] + h * y0, r[2], r[1] + h * y1];
                         canvas.image(img, strip, uv, fade(ImColor32::WHITE, alpha));
                     }
+                    crate::live_preview::key_blend(false);
                 }
                 None => canvas.image(img, r, [0.0, 0.0, 1.0, 1.0], fade(ImColor32::WHITE, alpha)),
             }

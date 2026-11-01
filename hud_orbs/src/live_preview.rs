@@ -69,6 +69,23 @@
 //!     mirror also stays up for live_preview_linger seconds on other pages (quick tab flips don't reopen it); it
 //!     closes at once when the book closes or goes to the map page.
 //!
+//! - Round 18 (A1-A3; Ryan: the game and the preview run at the same time, never frozen; tame ER's mirror first):
+//!   - Default on (A2): the book drives the mirror without F10 (ini `live_preview_drive = 0` turns it off).
+//!   - World (A1): round 17's log never matched an RGBA8 world candidate (best r 0.53); the world scene's own
+//!     picture before ER's UI is most likely its R10G10B10A2 target (EROverlay: the main target is format 24), so
+//!     formats 24 and 10 are candidates too. Once found, the world behind the book stays a live copy while the
+//!     mirror opens, is up and closes; when it closes the copy stands until Elden Ring's screen is back (no hold,
+//!     no fade of an old screenshot). Without it the cover goes at once (ini live_close_hold 0 / live_close_fade
+//!     0.15 by default).
+//!   - Walking (A1): with the book driving the mirror, W/A/S/D and the left stick still reach the game (ini
+//!     `live_walk = 0` stops it); "live: walk" lines log whether the player really moved under the menu. When it
+//!     did, the mirror stays up for the whole book (ini live_preview_linger overrides).
+//!   - No camera spin: the book's own slow spin no longer turns ER's model (the same stick turns the world
+//!     camera, now visible live behind the book); a drag still does (ini `live_preview_auto_spin = 1` brings the
+//!     spin back).
+//!   - Background (A3): the picture is drawn with ER's flat scene background (RGB 23,20,14) keyed out
+//!     (hudhook BLEND_KEY), so the window's own Wizard101 sky (portrait_back, Background_Inventory_Sky) shows.
+//!
 //! Fail-safe: no target, no copy, no dispatcher, or the menu not opening / closing: the software picture stays and
 //! a "live:" line says why. Nothing here writes game memory; phase 2 calls one game function.
 
@@ -208,13 +225,39 @@ const COVER_SLOT: usize = 3;
 /// B3 defaults (ini live_preview_linger, live_close_hold, live_close_fade): seconds the mirror stays up on another
 /// page, the cover stays after Elden Ring's menu closed, and it takes to fade out.
 const LINGER: f32 = 3.0;
-const CLOSE_HOLD: f32 = 0.2;
-const CLOSE_FADE: f32 = 0.3;
+const CLOSE_HOLD: f32 = 0.0;
+const CLOSE_FADE: f32 = 0.15;
 /// B3: the camera counts as back within this yaw (radians, about 2 degrees); the return gives up after this long.
 const RETURN_TOLERANCE: f32 = 0.035;
 const RETURN_MAX: f32 = 2.0;
 /// The book is open on a page that may keep the mirror up (not closed, not the map page), as book.rs says.
 static BOOK_KEEP: AtomicBool = AtomicBool::new(false);
+/// Round 18: the book's own slow spin turns ER's model (ini live_preview_auto_spin), walking under the book-driven
+/// mirror (ini live_walk) and whether the mirror is up for the book now.
+static AUTO_SPIN: AtomicBool = AtomicBool::new(false);
+static WALK: AtomicBool = AtomicBool::new(true);
+static MIRROR_UP: AtomicBool = AtomicBool::new(false);
+/// Round 18 A1: world candidates' formats (R8G8B8A8, R10G10B10A2, R16G16B16A16_FLOAT) and how many are kept.
+const WORLD_FORMATS: [u32; 3] = [28, 24, 10];
+const WORLD_KEEP: usize = 40;
+
+/// book.rs: the book's slow spin (not a drag) may turn Elden Ring's model.
+pub fn auto_spin() -> bool {
+    !enabled() || AUTO_SPIN.load(Ordering::Relaxed)
+}
+
+/// book.rs: W/A/S/D and the left stick reach the game while the book drives the mirror (round 18 A1).
+pub fn walk_under_mirror() -> bool {
+    enabled() && WALK.load(Ordering::Relaxed) && MIRROR_UP.load(Ordering::Relaxed)
+}
+
+/// layout.rs: the live picture is drawn with the mirror scene's flat background keyed out (round 18 A3); the book
+/// draws on the foreground list.
+pub fn key_blend(on: bool) {
+    use hudhook::imgui::sys;
+    let mode = if on { hudhook::BLEND_KEY } else { hudhook::BLEND_NORMAL };
+    unsafe { sys::ImDrawList_AddCallback(sys::igGetForegroundDrawList(), Some(hudhook::blend_callback), mode as *mut _) };
+}
 
 /// book.rs, every frame: the book is open on a page that may keep the hidden mirror up (B3).
 pub fn note_book(keep: bool) {
@@ -276,9 +319,9 @@ fn wanted() -> bool {
 
 /// probe.rs's creation hooks: a 2D render target or depth texture the game just made.
 pub fn on_created(width: u64, height: u32, format: u32, flags: u32, resource: usize) {
-    if enabled() && resource != 0 && format == 28 && flags & 0x1 != 0 && width != height as u64 && width >= 1024
-        && height >= 576 {
-        on_world_created(width as u32, height, resource);
+    if enabled() && resource != 0 && WORLD_FORMATS.contains(&format) && flags & 0x1 != 0 && width != height as u64
+        && width >= 1024 && height >= 576 {
+        on_world_created(width as u32, height, format, resource);
         return;
     }
     if !enabled() || resource == 0 || format != 28 || flags & 0x1 == 0 || width != height as u64
@@ -322,7 +365,7 @@ pub fn on_created(width: u64, height: u32, format: u32, flags: u32, resource: us
 
 /// A screen-shaped RGBA8 render target: kept as a candidate for the world scene's picture. A new batch (more than
 /// 3 s after the last one: a load, a resolution change) replaces the old ones.
-fn on_world_created(width: u32, height: u32, resource: usize) {
+fn on_world_created(width: u32, height: u32, format: u32, resource: usize) {
     let mut frames = [std::ptr::null_mut::<std::ffi::c_void>(); 24];
     let n = unsafe {
         windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace(
@@ -344,12 +387,13 @@ fn on_world_created(width: u32, height: u32, resource: usize) {
         }
     }
     w.last_made = Some(now);
-    if w.targets.iter().filter(|t| t.retired.is_none()).count() >= 24 {
+    if w.targets.iter().filter(|t| t.retired.is_none()).count() >= WORLD_KEEP {
         return;
     }
     unsafe { probe::com_add_ref(resource) };
     let batch = w.batch;
-    tracing::info!("live: world candidate {width}x{height} {resource:#x} (batch {batch}, stack {:x?})", stack);
+    tracing::info!("live: world candidate {width}x{height} fmt {format} {resource:#x} (batch {batch}, stack {:x?})",
+                   stack);
     w.targets.push(WorldTarget { resource, width, height, stack, batch, retired: None });
 }
 
@@ -612,6 +656,15 @@ pub struct LivePreview {
     gave_up: bool,
     last_shown: Instant,
     wanted_since: Option<Instant>,
+    // Round 18.
+    /// The ini set live_preview_linger (else it grows to the whole book once walking under the mirror works).
+    linger_fixed: bool,
+    /// The player's position this frame (lib.rs), and the walk check: where the player was when a move key went
+    /// down under the mirror, when, and what was logged.
+    player: Option<[f32; 3]>,
+    walk_from: Option<([f32; 3], Instant)>,
+    walk_lines: u32,
+    walk_works: Option<bool>,
 }
 
 impl LivePreview {
@@ -643,7 +696,11 @@ impl LivePreview {
         let state = get("live_preview_state")
             .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok())
             .unwrap_or(DEFAULT_STATE);
-        let drive = get("live_preview_drive").as_deref() == Some("1");
+        // Round 18 A2: on by default.
+        let drive = get("live_preview_drive").as_deref() != Some("0");
+        AUTO_SPIN.store(get("live_preview_auto_spin").as_deref() == Some("1"), Ordering::Relaxed);
+        WALK.store(get("live_walk").as_deref() != Some("0"), Ordering::Relaxed);
+        let linger_fixed = get("live_preview_linger").is_some();
         let fake_breath = get("live_preview_fake_breath").as_deref() == Some("1");
         let linger = float("live_preview_linger", LINGER).clamp(0.0, 600.0);
         let close_hold = float("live_close_hold", CLOSE_HOLD).clamp(0.0, 5.0);
@@ -651,8 +708,9 @@ impl LivePreview {
         ENABLED.store(true, Ordering::Relaxed);
         tracing::info!("live: live preview on (set {set}, bare set {bare}, assumed state {state:#x}, world state \
                         {world_state:#x}, drive {drive}, frame {frame:?}, turn {turn} (full stick {turn_rate} rad/s, \
-                        dead zone {stick_dead}, sign {turn_sign}, fake pad {fake_pad})); F9 toggles equipped / bare, \
-                        F10 arms / disarms the book-driven mirror");
+                        dead zone {stick_dead}, sign {turn_sign}, fake pad {fake_pad}); walk {}, auto spin {}, close \
+                        hold {close_hold} fade {close_fade}); F9 toggles equipped / bare, F10 arms / disarms the \
+                        book-driven mirror", WALK.load(Ordering::Relaxed), AUTO_SPIN.load(Ordering::Relaxed));
         Some(LivePreview {
             set,
             sets: [set, bare],
@@ -695,6 +753,11 @@ impl LivePreview {
             gave_up: false,
             last_shown: Instant::now(),
             wanted_since: None,
+            linger_fixed,
+            player: None,
+            walk_from: None,
+            walk_lines: 0,
+            walk_works: None,
         })
     }
 
@@ -740,8 +803,10 @@ impl LivePreview {
     /// Before the frame is drawn (render thread): hotkeys, target lifetimes, and the copy into the book's picture.
     /// `camera`: the world camera's forward row (Game::camera), for B3's turning back.
     pub fn before_render(&mut self, render: &mut dyn RenderContext, textures: &mut Textures,
-                         camera: Option<[f32; 3]>) {
+                         camera: Option<[f32; 3]>, player: Option<[f32; 3]>) {
         let hud = crate::game::hud_state();
+        self.player = player;
+        self.walk_check();
         self.view = camera.filter(|f| f.iter().all(|v| v.is_finite()))
             .map(|f| [f[0].atan2(f[2]), f[1].clamp(-1.0, 1.0).asin()]);
         if hud != self.hud {
@@ -904,7 +969,9 @@ impl LivePreview {
         // The world behind the book while Elden Ring's menu covers the screen: a live copy of the world scene's own
         // picture, once it is known.
         self.world_live = false;
-        if hud.is_some_and(|h| h != 3) && (self.showing.is_some() || self.drives()) {
+        // Round 18 A1: also while the mirror closes, until Elden Ring's own screen is back (frame()).
+        let settling = matches!(self.drive, Drive::Settling(..));
+        if (hud.is_some_and(|h| h != 3) && (self.showing.is_some() || self.drives())) || settling {
             if let Some((resource, w, h)) = self.search.chosen {
                 if let Some(id) = render.copy_texture(WORLD_SLOT, resource, self.world_state, [0, 0, w, h]) {
                     textures.set(LIVE_WORLD, id, [w as f32, h as f32]);
@@ -916,6 +983,38 @@ impl LivePreview {
             self.search.menu_grid = None;
             self.search.menu_samples = 0;
         }
+    }
+
+    /// Round 18 A1: whether the player really walks under the book-driven mirror (W/A/S/D or the left stick held
+    /// for a second: did the position change?). Logged a few times; once it works the mirror may stay up for the
+    /// whole book.
+    fn walk_check(&mut self) {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        let keys = [b'W', b'A', b'S', b'D'].iter().any(|k| unsafe { GetAsyncKeyState(*k as i32) } < 0);
+        let s = crate::input::sticks();
+        let moving = walk_under_mirror() && crate::input::game_focused() && (keys || s[0].hypot(s[1]) > 0.5);
+        let (Some(pos), true) = (self.player, moving) else {
+            self.walk_from = None;
+            return;
+        };
+        let (from, at) = *self.walk_from.get_or_insert((pos, Instant::now()));
+        if at.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        let moved = ((pos[0] - from[0]).powi(2) + (pos[2] - from[2]).powi(2)).sqrt();
+        let works = moved > 0.3;
+        if self.walk_lines < 6 && (self.walk_works != Some(works) || self.walk_lines == 0) {
+            self.walk_lines += 1;
+            tracing::info!("live: walk: {} under the mirror menu ({moved:.2} m in a second of {})",
+                           if works { "the player walks" } else { "the player did NOT move" },
+                           if keys { "W/A/S/D" } else { "left stick" });
+        }
+        if works && self.walk_works != Some(true) && !self.linger_fixed {
+            self.linger = 600.0;
+            tracing::info!("live: walking works under the mirror, so it stays up for the whole book");
+        }
+        self.walk_works = Some(works);
+        self.walk_from = Some((pos, Instant::now()));
     }
 
     /// B3: the right stick x that turns the world camera back to its yaw from before the mirror opened (0: none),
@@ -1337,7 +1436,17 @@ impl LivePreview {
                 tracing::info!("live: the mirror didn't close; close it in Elden Ring (B). Book-driven mirror off");
                 Drive::Failed
             }
-            Drive::Settling(t, rearm) if t.elapsed().as_secs_f32() >= self.close_hold + self.close_fade => {
+            // Round 18 A1: with the live world copy behind, it stands until Elden Ring's screen is back (its fade
+            // done), then goes at once: what shows is the game as it is, never an old picture fading.
+            Drive::Settling(t, rearm) if self.search.chosen.is_some()
+                && ((self.hud == Some(3) && crate::game::faded() < 0.05) || t.elapsed() > Duration::from_millis(1500)) => {
+                tracing::info!("live: Elden Ring's screen back {:.0} ms after the mirror closed",
+                               t.elapsed().as_secs_f32() * 1000.0);
+                self.last_attempt = Some(now);
+                if rearm { Drive::Armed } else { Drive::Off }
+            }
+            Drive::Settling(t, rearm) if self.search.chosen.is_none()
+                && t.elapsed().as_secs_f32() >= self.close_hold + self.close_fade => {
                 self.last_attempt = Some(now);
                 if rearm { Drive::Armed } else { Drive::Off }
             }
@@ -1346,8 +1455,10 @@ impl LivePreview {
         // Elden Ring's mirror menu stays hidden behind the world: live once the world scene's picture is known (A3),
         // else the frame before the mirror opened (B3), else the teleport's older copy. After the menu closed it stays
         // a moment (Elden Ring's menu going) and fades into the game.
+        MIRROR_UP.store(matches!(self.drive, Drive::Open) && self.hud != Some(3), Ordering::Relaxed);
         let menu_up = self.hud != Some(3);
         let alpha = match self.drive {
+            Drive::Settling(..) if self.world_live => 1.0,
             Drive::Settling(t, _) => {
                 1.0 - ((t.elapsed().as_secs_f32() - self.close_hold) / self.close_fade.max(1e-3)).clamp(0.0, 1.0)
             }
@@ -1359,7 +1470,7 @@ impl LivePreview {
         if alpha > 0.0 {
             let size = ui.io().display_size;
             let draw = ui.get_background_draw_list();
-            let world = if self.world_live && menu_up { textures.get(LIVE_WORLD) }
+            let world = if self.world_live { textures.get(LIVE_WORLD) }
                 else { textures.get(COVER).filter(|_| self.cover_at.is_some()).or_else(|| textures.get(TELEPORT_WORLD)) };
             let a = (alpha * 255.0).round() as u8;
             match world {

@@ -281,7 +281,8 @@ impl ImguiRenderLoop for Orbs {
         let forward = camera.as_ref().map(|c| [c.matrix[2][0], c.matrix[2][1], c.matrix[2][2]]);
         self.teleport.capture(render, &mut self.book.textures, plain, camera);
         if let Some(live) = &mut self.live {
-            live.before_render(render, &mut self.book.textures, forward);
+            let player = game.and_then(|g| g.position()).map(|p| p.0);
+            live.before_render(render, &mut self.book.textures, forward, player);
         }
         if let Some(probe) = &mut self.probe {
             probe.render_frame(render, &self.folder);

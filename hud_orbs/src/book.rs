@@ -617,7 +617,9 @@ impl Book {
             // The live mirror picture (live_preview.rs) stands in for the character, not for an arrow on its own;
             // it is framed like this picture and turned the way this one turns (its slow spin, a drag).
             if slot == 0 && look.item.is_none() {
-                let rate = if by_hand { pointer_turn / dt.max(1e-3) } else if spinning { self.spin * SPIN } else { 0.0 };
+                // Round 18: the slow spin turns ER's model only when the ini asks (its stick turns the world camera).
+                let rate = if by_hand { pointer_turn / dt.max(1e-3) }
+                    else if spinning && crate::live_preview::auto_spin() { self.spin * SPIN } else { 0.0 };
                 crate::live_preview::note_box(size, zoom, rate);
             } else if slot == 1 {
                 crate::live_preview::note_portrait(size);
@@ -821,8 +823,10 @@ impl Book {
         self.last_frame = Instant::now();
         input::set_gameplay(cx.gameplay && !self.open && self.dialogue.is_none());
         // M1: the character still walks with the book open (WASD, left stick), except on the map page.
-        // Not over Elden Ring's own menus (the live mirror): there WASD would move their cursor.
-        input::set_move_through(self.open && cx.gameplay && cx.hud && self.dialogue.is_none() && self.tab != Tab::Map);
+        // Not over Elden Ring's own menus, except the book's own live mirror (round 18 A1: the game keeps going under
+        // it; live_preview logs whether the player really walks there).
+        input::set_move_through(self.open && cx.gameplay && (cx.hud || crate::live_preview::walk_under_mirror())
+            && self.dialogue.is_none() && self.tab != Tab::Map);
         // Round 17 B3: the hidden live mirror may stay up while the book is open off the map page.
         crate::live_preview::note_book(self.open && self.dialogue.is_none() && self.tab != Tab::Map);
         // Before taking the presses, so that the press that closed ER's map doesn't close the reopened book.

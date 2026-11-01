@@ -219,6 +219,9 @@ pub unsafe extern "C" fn blend_callback(
 pub const BLEND_ADDITIVE: usize = 0x5710_1AD0;
 /// w101_orbs: see [`blend_callback`].
 pub const BLEND_NORMAL: usize = 0x5710_1A10;
+/// w101_orbs: alpha blending with a flat dark background keyed out of the texture (the live mirror picture's
+/// RGB 23,20,14, or its top-left corner's colour when close to that); back with [`BLEND_NORMAL`].
+pub const BLEND_KEY: usize = 0x5710_1AE7;
 
 /// w101_orbs: [`RenderContext::request_readback`]'s `resource` for the back buffer as the game drew it (before the
 /// overlay); its `state` is ignored.
