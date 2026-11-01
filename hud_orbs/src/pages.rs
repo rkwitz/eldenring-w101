@@ -127,10 +127,14 @@ pub enum Hit {
 pub enum Action {
     None,
     OpenMap,
+    /// Close the book (Settings' OK is SettingsOk now; kept for other pages).
+    #[allow(dead_code)]
     Close,
     Tab(Tab),
     /// Settings row, step (-1 or +1).
     Setting(usize, i32),
+    /// Settings' OK: apply the staged changes and close.
+    SettingsOk,
     /// Settings: Quit (to Elden Ring's title screen; true: then to the desktop).
     Quit(bool),
     /// The equip button: equip the item (inventory ID), or take it off if it is equipped.
@@ -482,7 +486,7 @@ pub fn click(tab: Tab, l: &Layout, id: usize, st: &mut State) -> Action {
                 (st.sub, st.page) = (i, 0);
             }
         }
-        (Tab::Settings, "OkButton") => return Action::Close,
+        (Tab::Settings, "OkButton") => return Action::SettingsOk,
         (Tab::Settings, "HelpButton") => return Action::Tab(Tab::Help),
         (Tab::Settings, "QuitButton") => return Action::Quit(false),
         (Tab::Settings, "IdleButton") => return Action::Quit(true),
@@ -1934,6 +1938,11 @@ pub const SETTINGS_ROWS: [&str; 5] =
 /// Rows 6 and 7: their tops (page pixels), below OptionHardwareCursor (315) at Wizard101's 48-pixel row pitch.
 const EXTRA_ROWS: [f32; 2] = [363.0, 411.0];
 pub const SETTINGS_PAGE_ROWS: usize = 7;
+/// OptionValue's text: Settings.gui has WizardFancy 0.6 centred in the 22-pixel red box, but WizardFancy's capitals
+/// sit low in their cells, so at 0.6 they ran over the box's bottom rim (Ryan, round 15: text must stay inside its
+/// box). A little smaller and lifted, they sit inside the red.
+const VALUE_SCALE: f32 = 0.54;
+const VALUE_LIFT: f32 = 2.5;
 
 /// One settings row as the page shows it: label, value, and the lines of its tip.
 pub type SettingRow = (String, String, Vec<String>);
@@ -1952,51 +1961,62 @@ fn settings(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             if i == tab {
                 v.checked.insert(b);
             }
-            v.tip(l.nodes[b].rect, vec![(*title).into()]);
+            // Wizard101's plain button tooltip (ToolTip.gui), as its Settings tab buttons have (m_sTip).
+            v.plain_tip(l.nodes[b].rect, vec![(*title).into()]);
         }
     }
     v.set(l.find("QuitButton"), centre("Quit"));
     v.set(l.find("IdleButton"), centre("Exit Game"));
     if let Some(b) = l.find("QuitButton") {
-        v.tip(l.nodes[b].rect, vec!["Quit".into(), "Back to Elden Ring's title screen (the game saves first)".into()]);
+        v.plain_tip(l.nodes[b].rect, vec!["Back to Elden Ring's title screen".into(), "(the game saves first)".into()]);
     }
     if let Some(b) = l.find("IdleButton") {
-        v.tip(l.nodes[b].rect, vec!["Exit Game".into(),
-            "Back to the title screen (the game saves), then Elden Ring closes".into()]);
+        v.plain_tip(l.nodes[b].rect, vec!["The game saves, then Elden Ring closes".into()]);
     }
-    let selected = st.sub % st.subs;
+    if let Some(b) = l.find("OkButton") {
+        v.plain_tip(l.nodes[b].rect, vec!["Apply the changes and close".into()]);
+    }
+    // With a controller the row the d-pad changes shows in OptionText's own highlight colour (m_HighColor white);
+    // there is no marker in front of the label (Ryan, round 15).
+    let selected = crate::input::pad_connected().then_some(st.sub % st.subs);
     let label_style = TextStyle::new("WizardFancy", 0.6857, BLACK);
-    let value_style = TextStyle::new("WizardFancy", 0.6, ImColor32::from_rgb(0xCC, 0xCC, 0x00)).centred();
+    let value_style = TextStyle::new("WizardFancy", VALUE_SCALE, ImColor32::from_rgb(0xCC, 0xCC, 0x00)).centred();
     for i in 0..SETTINGS_PAGE_ROWS {
         let shown = i < rows.len();
         let (label, value, tip) = d.settings.get(i).cloned().unwrap_or_default();
-        let label = if shown && i == selected { format!("> {label}") } else { label };
-        if let Some(name) = SETTINGS_ROWS.get(i) {
-            let Some(r) = l.find(name) else { continue };
-            v.show(Some(r), shown);
-            if !shown {
-                continue;
+        // The row's top: Settings.gui's own rows, or rows 6 and 7 in their art (OptionHardwareCursor's, moved down).
+        let top = match SETTINGS_ROWS.get(i) {
+            Some(name) => {
+                let Some(r) = l.find(name) else { continue };
+                v.show(Some(r), shown);
+                // The label and value are drawn below instead (one line, fitted), so the layout's are left empty.
+                v.set(l.find_under(r, "OptionText"), "");
+                v.set(l.find_under(r, "OptionValue"), "");
+                l.nodes[r].rect[1]
             }
-            v.set(l.find_under(r, "OptionText"), label);
-            v.set(l.find_under(r, "OptionValue"), centre(&value));
-            v.tip(l.nodes[r].rect, tip);
-            continue;
-        }
+            None => EXTRA_ROWS[i - SETTINGS_ROWS.len()],
+        };
         if !shown {
             continue;
         }
-        // Rows 6 and 7 in Settings.gui's row art (OptionHardwareCursor's, moved down).
-        let y = EXTRA_ROWS[i - SETTINGS_ROWS.len()];
-        let left = [436.0, y + 6.0, 478.0, y + 48.0];
-        let right = [638.0, y + 6.0, 680.0, y + 48.0];
-        let value_box = [462.0, y + 16.0, 654.0, y + 38.0];
-        v.images.push((value_box, "GUI/Buttons/Button_Red01.png".into(), [0.0, 0.0, 1.0, 0.25]));
-        v.images.push((left, "GUI/Buttons/Button_Arrow01.png".into(), [0.0, 0.0, 0.25, 0.5]));
-        v.images.push((right, "GUI/Buttons/Button_Arrow01.png".into(), [0.0, 0.5, 0.25, 1.0]));
-        v.add([136.0, y + 12.0, 386.0, y + 42.0], label, label_style.clone());
-        v.add(value_box, value, value_style.clone());
-        v.tip([100.0, y, 680.0, y + 54.0], tip);
-        st.hits.push((left, Hit::Setting(i, -1)));
-        st.hits.push((right, Hit::Setting(i, 1)));
+        if i >= SETTINGS_ROWS.len() {
+            let left = [436.0, top + 6.0, 478.0, top + 48.0];
+            let right = [638.0, top + 6.0, 680.0, top + 48.0];
+            v.images.push(([462.0, top + 16.0, 654.0, top + 38.0], "GUI/Buttons/Button_Red01.png".into(),
+                           [0.0, 0.0, 1.0, 0.25]));
+            v.images.push((left, "GUI/Buttons/Button_Arrow01.png".into(), [0.0, 0.0, 0.25, 0.5]));
+            v.images.push((right, "GUI/Buttons/Button_Arrow01.png".into(), [0.0, 0.5, 0.25, 1.0]));
+            st.hits.push((left, Hit::Setting(i, -1)));
+            st.hits.push((right, Hit::Setting(i, 1)));
+        }
+        // OptionText (136..386 at +12..+42) may run on to just before the left arrow (436); OptionValue's text stays
+        // inside the red box (462..654 at +16..+38) clear of the arrows' rims. Both are one line that shrinks to fit.
+        let mut label_style = label_style.clone();
+        if selected == Some(i) {
+            label_style.colour = ImColor32::WHITE;
+        }
+        v.add([136.0, top + 12.0, 430.0, top + 42.0], label, label_style);
+        v.add([474.0, top + 16.0 - VALUE_LIFT, 642.0, top + 38.0 - VALUE_LIFT], value, value_style.clone());
+        v.plain_tip([100.0, top, 680.0, top + 54.0], tip);
     }
 }

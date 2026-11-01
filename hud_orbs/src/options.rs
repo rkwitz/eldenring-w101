@@ -56,9 +56,9 @@ pub enum When {
 impl When {
     pub fn text(self) -> &'static str {
         match self {
-            When::Now => "Changes Elden Ring right away",
-            When::Restart => "Saved; Elden Ring uses it when it next starts",
-            When::HudRestart => "Experimental; saved, used when the game next starts",
+            When::Now => "Applied when you click OK",
+            When::Restart => "Saved when you click OK;\nElden Ring uses it when it next starts",
+            When::HudRestart => "Experimental; saved when you click OK,\nused when the game next starts",
         }
     }
 }
@@ -175,7 +175,7 @@ pub const TABS: [(&str, &str, &[Row]); 10] = [
         row("Sound Effects Volume", Kind::Scale(opt::SFX), When::Now, "Sound Effects Volume"),
         row("Voice Volume", Kind::Scale(opt::VOICE), When::Now, "Dialogue Volume"),
     ]),
-    ("GameplayButton", "Gameplay 1", &[
+    ("GameplayButton", "Gameplay", &[
         row("Nameplates", Kind::Hud(Hud::Nameplates), When::Now, "Show Name"),
         row("Tutorial Tips", Kind::Opt(opt::TUTORIALS, BOOL), When::Now, "Tutorial Tips"),
         row("HUD", Kind::Opt(opt::HUD, HUD_TYPE), When::Now, "Combat Display"),
@@ -229,15 +229,99 @@ pub const TABS: [(&str, &str, &[Row]); 10] = [
     ]),
 ];
 
-/// The row's shown value now; None when it can't be read (no game, no GraphicsConfig.xml).
-pub fn value(row: &Row, game: Option<&game::Game>, s: &crate::Settings, gfx: Option<&[u32; 25]>) -> Option<String> {
-    let on = |b: bool| if b { "On" } else { "Off" }.to_string();
+/// Changes made on the page but not applied yet: like Wizard101's Settings window, they apply only when OK is
+/// clicked; closing the book any other way drops them (Book::set_open).
+#[derive(Default)]
+pub struct Staged {
+    /// Elden Ring option bytes: (offset, value).
+    opts: Vec<(usize, u8)>,
+    /// The whole graphics config as it will be written.
+    gfx: Option<[u32; 25]>,
+    /// The HUD's settings (bools as 0 / 1).
+    hud: Vec<(Hud, f32)>,
+}
+
+impl Staged {
+    pub fn is_empty(&self) -> bool {
+        self.opts.is_empty() && self.gfx.is_none() && self.hud.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        *self = Staged::default();
+    }
+
+    fn opt(&self, game: Option<&game::Game>, offset: usize) -> Option<u8> {
+        self.opts.iter().find(|o| o.0 == offset).map(|o| o.1).or_else(|| game?.option(offset))
+    }
+
+    fn set_opt(&mut self, offset: usize, value: u8) {
+        self.opts.retain(|o| o.0 != offset);
+        self.opts.push((offset, value));
+    }
+
+    fn hud(&self, s: &crate::Settings, h: Hud) -> f32 {
+        self.hud.iter().find(|x| x.0 == h).map_or_else(|| hud_get(s, h), |x| x.1)
+    }
+
+    /// The graphics settings as the page shows them: the staged ones, else Elden Ring's.
+    pub fn graphics(&self) -> Option<[u32; 25]> {
+        self.gfx.or_else(graphics)
+    }
+}
+
+fn hud_get(s: &crate::Settings, h: Hud) -> f32 {
+    let b = |v: bool| v as u8 as f32;
+    match h {
+        Hud::Size => s.scale,
+        Hud::Right => s.left,
+        Hud::Up => s.bottom,
+        Hud::Level => b(s.level),
+        Hud::LoadScreen => b(s.loadscreen),
+        Hud::BookMap => b(s.bookmap),
+        Hud::Nameplates => b(s.nameplates),
+        Hud::Debug => b(s.debug),
+        Hud::Probe => b(s.scene_probe),
+        Hud::ProbeNudge => b(s.scene_probe_nudge),
+        Hud::LivePreview => b(s.live_preview),
+    }
+}
+
+fn hud_put(s: &mut crate::Settings, h: Hud, v: f32) {
+    let on = v > 0.5;
+    match h {
+        Hud::Size => s.scale = v,
+        Hud::Right => s.left = v,
+        Hud::Up => s.bottom = v,
+        Hud::Level => s.level = on,
+        Hud::LoadScreen => s.loadscreen = on,
+        Hud::BookMap => s.bookmap = on,
+        Hud::Nameplates => s.nameplates = on,
+        Hud::Debug => s.debug = on,
+        Hud::Probe => s.scene_probe = on,
+        Hud::ProbeNudge => s.scene_probe_nudge = on,
+        Hud::LivePreview => s.live_preview = on,
+    }
+}
+
+fn hud_text(h: Hud, v: f32) -> String {
+    match h {
+        Hud::Size => format!("{v:.2}"),
+        Hud::Right | Hud::Up => format!("{v:.0}"),
+        Hud::BookMap => if v > 0.5 { "On Page" } else { "Behind" }.into(),
+        _ => if v > 0.5 { "On" } else { "Off" }.into(),
+    }
+}
+
+/// The row's shown value, staged changes included; None when it can't be read (no game, no GraphicsConfig.xml).
+/// `gfx` is Staged::graphics(), read once per frame by the caller.
+pub fn value(row: &Row, game: Option<&game::Game>, s: &crate::Settings, gfx: Option<&[u32; 25]>, staged: &Staged)
+             -> Option<String> {
     match &row.kind {
         Kind::Opt(offset, choices) => {
-            let v = game?.option(*offset)?;
+            let v = staged.opt(game, *offset)?;
             Some(choices.iter().find(|c| c.0 == v).map_or(v.to_string(), |c| c.1.to_string()))
         }
-        Kind::Scale(offset) => game?.option(*offset).map(|v| v.to_string()),
+        Kind::Scale(offset) => staged.opt(game, *offset).map(|v| v.to_string()),
         Kind::Gfx(g) => {
             let v = gfx?[g.field];
             Some(g.choices.iter().find(|c| c.0 == v).map_or(v.to_string(), |c| c.1.to_string()))
@@ -248,19 +332,7 @@ pub fn value(row: &Row, game: Option<&game::Game>, s: &crate::Settings, gfx: Opt
             let f = RESOLUTION[mode].0;
             Some(format!("{} x {}", g[f], g[f + 1]))
         }
-        Kind::Hud(h) => Some(match h {
-            Hud::Size => format!("{:.2}", s.scale),
-            Hud::Right => format!("{:.0}", s.left),
-            Hud::Up => format!("{:.0}", s.bottom),
-            Hud::Level => on(s.level),
-            Hud::LoadScreen => on(s.loadscreen),
-            Hud::BookMap => if s.bookmap { "On Page" } else { "Behind" }.into(),
-            Hud::Nameplates => on(s.nameplates),
-            Hud::Debug => on(s.debug),
-            Hud::Probe => on(s.scene_probe),
-            Hud::ProbeNudge => on(s.scene_probe_nudge),
-            Hud::LivePreview => on(s.live_preview),
-        }),
+        Kind::Hud(h) => Some(hud_text(*h, staged.hud(s, *h))),
     }
 }
 
@@ -269,27 +341,25 @@ fn step_choice<T: Copy + PartialEq>(choices: &[T], now: T, step: i32) -> T {
     choices[(i + step).clamp(0, choices.len() as i32 - 1) as usize]
 }
 
-/// Changes the row by `step` (-1 / +1). Returns what happened, for the page's note.
-pub fn change(row: &Row, step: i32, game: Option<&game::Game>, s: &mut crate::Settings, settings_path: &std::path::Path)
+/// Changes the row by `step` (-1 / +1) in `staged` only; nothing is written until apply(). Returns the page's note.
+pub fn change(row: &Row, step: i32, game: Option<&game::Game>, s: &crate::Settings, staged: &mut Staged)
               -> Result<String, String> {
-    match &row.kind {
+    let shown = match &row.kind {
         Kind::Opt(offset, choices) => {
-            let game = game.ok_or("Elden Ring's options can't be reached")?;
-            let now = game.option(*offset).ok_or("Elden Ring's options can't be reached")?;
+            let now = staged.opt(game, *offset).ok_or("Elden Ring's options can't be reached")?;
             let values: Vec<u8> = choices.iter().map(|c| c.0).collect();
             let new = step_choice(&values, now, step);
-            game.set_option(*offset, new).then_some(()).ok_or("Elden Ring's options can't be written")?;
-            Ok(format!("{}: {}", row.label, choices.iter().find(|c| c.0 == new).map_or("", |c| c.1)))
+            staged.set_opt(*offset, new);
+            choices.iter().find(|c| c.0 == new).map_or(String::new(), |c| c.1.to_string())
         }
         Kind::Scale(offset) => {
-            let game = game.ok_or("Elden Ring's options can't be reached")?;
-            let now = game.option(*offset).ok_or("Elden Ring's options can't be reached")?;
+            let now = staged.opt(game, *offset).ok_or("Elden Ring's options can't be reached")?;
             let new = (now as i32 + step).clamp(0, 10) as u8;
-            game.set_option(*offset, new).then_some(()).ok_or("Elden Ring's options can't be written")?;
-            Ok(format!("{}: {new}", row.label))
+            staged.set_opt(*offset, new);
+            new.to_string()
         }
         Kind::Gfx(g) => {
-            let mut now = graphics().ok_or("Elden Ring's graphics settings can't be read")?;
+            let mut now = staged.graphics().ok_or("Elden Ring's graphics settings can't be read")?;
             let values: Vec<u32> = g.choices.iter().map(|c| c.0).collect();
             let new = step_choice(&values, now[g.field], step);
             now[g.field] = new;
@@ -309,12 +379,11 @@ pub fn change(row: &Row, step: i32, game: Option<&game::Game>, s: &mut crate::Se
                 now[QUALITY.field] = 5; // Custom, as Elden Ring's menu does
                 now[AUTO_DETECT.field] = 0;
             }
-            save_graphics(&now)?;
-            Ok(format!("{}: {} (when Elden Ring next starts)", row.label,
-                       g.choices.iter().find(|c| c.0 == new).map_or("", |c| c.1)))
+            staged.gfx = Some(now);
+            g.choices.iter().find(|c| c.0 == new).map_or(String::new(), |c| c.1.to_string())
         }
         Kind::Resolution => {
-            let mut now = graphics().ok_or("Elden Ring's graphics settings can't be read")?;
+            let mut now = staged.graphics().ok_or("Elden Ring's graphics settings can't be read")?;
             let mode = (now[SCREEN_MODE.field] as usize).min(2);
             let f = RESOLUTION[mode].0;
             let mut sizes = SIZES.to_vec();
@@ -322,28 +391,58 @@ pub fn change(row: &Row, step: i32, game: Option<&game::Game>, s: &mut crate::Se
             let new = step_choice(&sizes, (now[f], now[f + 1]), step);
             let new = if sizes.contains(&(now[f], now[f + 1])) { new } else { sizes[sizes.len() / 2] };
             (now[f], now[f + 1]) = new;
-            save_graphics(&now)?;
-            Ok(format!("{} window: {} x {} (when Elden Ring next starts)", MODE[mode].1, new.0, new.1))
+            staged.gfx = Some(now);
+            format!("{} x {}", new.0, new.1)
         }
         Kind::Hud(h) => {
-            let st = step as f32;
-            match h {
-                Hud::Size => s.scale = ((s.scale + 0.05 * st) * 100.0).round().clamp(50.0, 200.0) / 100.0,
-                Hud::Right => s.left = (s.left + 5.0 * st).clamp(-200.0, 600.0),
-                Hud::Up => s.bottom = (s.bottom + 5.0 * st).clamp(-200.0, 600.0),
-                Hud::Level => s.level = !s.level,
-                Hud::LoadScreen => s.loadscreen = !s.loadscreen,
-                Hud::BookMap => s.bookmap = !s.bookmap,
-                Hud::Nameplates => s.nameplates = !s.nameplates,
-                Hud::Debug => s.debug = !s.debug,
-                Hud::Probe => s.scene_probe = !s.scene_probe,
-                Hud::ProbeNudge => s.scene_probe_nudge = !s.scene_probe_nudge,
-                Hud::LivePreview => s.live_preview = !s.live_preview,
-            }
-            crate::save_settings(settings_path, s).map_err(|e| format!("w101_orbs.ini not saved: {e}"))?;
-            Ok(format!("{}: {}", row.label, value(row, None, s, None).unwrap_or_default()))
+            let (now, st) = (staged.hud(s, *h), step as f32);
+            let new = match h {
+                Hud::Size => ((now + 0.05 * st) * 100.0).round().clamp(50.0, 200.0) / 100.0,
+                Hud::Right | Hud::Up => (now + 5.0 * st).clamp(-200.0, 600.0),
+                _ => if now > 0.5 { 0.0 } else { 1.0 },
+            };
+            staged.hud.retain(|x| x.0 != *h);
+            staged.hud.push((*h, new));
+            hud_text(*h, new)
+        }
+    };
+    Ok(format!("{}: {shown} (OK applies it)", row.label))
+}
+
+/// Applies the staged changes (OK): Elden Ring's options in memory, the graphics settings to its persistent config
+/// and GraphicsConfig.xml, the HUD's to w101_orbs.ini. Only what differs from now is written. Returns how many
+/// settings changed, or what couldn't be applied (the rest still is). The staged changes are used up either way.
+pub fn apply(staged: &mut Staged, game: Option<&game::Game>, s: &mut crate::Settings, settings_path: &std::path::Path)
+             -> Result<usize, String> {
+    let staged = std::mem::take(staged);
+    let (mut changed, mut errors) = (0, Vec::new());
+    for (offset, v) in staged.opts {
+        match game {
+            Some(g) if g.option(offset) == Some(v) => {}
+            Some(g) if g.set_option(offset, v) => changed += 1,
+            _ => errors.push("Elden Ring's options can't be written".to_string()),
         }
     }
+    if let Some(gfx) = staged.gfx {
+        if graphics() != Some(gfx) {
+            match save_graphics(&gfx) {
+                Ok(()) => changed += 1,
+                Err(e) => errors.push(e),
+            }
+        }
+    }
+    let hud: Vec<_> = staged.hud.into_iter().filter(|(h, v)| hud_get(s, *h) != *v).collect();
+    if !hud.is_empty() {
+        for (h, v) in &hud {
+            hud_put(s, *h, *v);
+        }
+        changed += hud.len();
+        if let Err(e) = crate::save_settings(settings_path, s) {
+            errors.push(format!("w101_orbs.ini not saved: {e}"));
+        }
+    }
+    errors.dedup();
+    if errors.is_empty() { Ok(changed) } else { Err(errors.join("; ")) }
 }
 
 /// The graphics settings: Elden Ring's (in memory) or, without them, GraphicsConfig.xml's.
@@ -356,97 +455,230 @@ fn config_path() -> Option<std::path::PathBuf> {
     Some(std::path::Path::new(&std::env::var_os("APPDATA")?).join("EldenRing").join("GraphicsConfig.xml"))
 }
 
-fn decode(bytes: &[u8]) -> Option<String> {
-    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
-        let units: Vec<u16> = bytes[2..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+/// How GraphicsConfig.xml is encoded, so it is written back the same way. Elden Ring writes UTF-16 little-endian
+/// with no byte order mark (Ryan's file, 2026-11-01); the others are accepted in case a tool re-saved it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Encoding {
+    Utf16Le { bom: bool },
+    Utf16Be { bom: bool },
+    Utf8 { bom: bool },
+}
+
+fn decode(bytes: &[u8]) -> Option<(String, Encoding)> {
+    let utf16 = |b: &[u8], le: bool| -> Option<String> {
+        let units: Vec<u16> = b.chunks_exact(2)
+            .map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) })
+            .collect();
         String::from_utf16(&units).ok()
-    } else {
-        String::from_utf8(bytes.to_vec()).ok()
+    };
+    match bytes {
+        [0xFF, 0xFE, rest @ ..] => Some((utf16(rest, true)?, Encoding::Utf16Le { bom: true })),
+        [0xFE, 0xFF, rest @ ..] => Some((utf16(rest, false)?, Encoding::Utf16Be { bom: true })),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => Some((String::from_utf8(rest.to_vec()).ok()?, Encoding::Utf8 { bom: true })),
+        // No mark: an ASCII character then a zero byte is UTF-16LE; a zero byte first is UTF-16BE.
+        [a, 0, ..] if *a != 0 => Some((utf16(bytes, true)?, Encoding::Utf16Le { bom: false })),
+        [0, b, ..] if *b != 0 => Some((utf16(bytes, false)?, Encoding::Utf16Be { bom: false })),
+        _ => Some((String::from_utf8(bytes.to_vec()).ok()?, Encoding::Utf8 { bom: false })),
     }
+}
+
+fn encode(xml: &str, enc: Encoding) -> Vec<u8> {
+    let (mut out, bom): (Vec<u8>, &[u8]) = match enc {
+        Encoding::Utf16Le { bom } => (Vec::new(), if bom { &[0xFF, 0xFE] } else { &[] }),
+        Encoding::Utf16Be { bom } => (Vec::new(), if bom { &[0xFE, 0xFF] } else { &[] }),
+        Encoding::Utf8 { bom } => (Vec::new(), if bom { &[0xEF, 0xBB, 0xBF] } else { &[] }),
+    };
+    out.extend_from_slice(bom);
+    match enc {
+        Encoding::Utf16Le { .. } => out.extend(xml.encode_utf16().flat_map(u16::to_le_bytes)),
+        Encoding::Utf16Be { .. } => out.extend(xml.encode_utf16().flat_map(u16::to_be_bytes)),
+        Encoding::Utf8 { .. } => out.extend_from_slice(xml.as_bytes()),
+    }
+    out
+}
+
+/// Where the text of element `tag` is: the byte range between `<tag ...>` and its `</tag>`. Tag names match
+/// without regard to case; attributes and spacing inside the tags are allowed. None for a missing or self-closing
+/// element.
+fn tag_span(xml: &str, tag: &str) -> Option<std::ops::Range<usize>> {
+    let lower = xml.to_ascii_lowercase(); // the same byte offsets
+    let tag = tag.to_ascii_lowercase();
+    let open = format!("<{tag}");
+    let mut from = 0;
+    while let Some(i) = lower[from..].find(&open) {
+        let at = from + i + open.len();
+        from = at;
+        let next = lower[at..].chars().next()?;
+        if next != '>' && !next.is_whitespace() && next != '/' {
+            continue; // a longer name that starts the same
+        }
+        let close = at + lower[at..].find('>')?;
+        if lower[..close].ends_with('/') {
+            return None;
+        }
+        let start = close + 1;
+        let end = start + lower[start..].find(&format!("</{tag}"))?;
+        return Some(start..end);
+    }
+    None
 }
 
 fn tag_value<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{tag}>");
-    let start = xml.find(&open)? + open.len();
-    let end = start + xml[start..].find("</")?;
-    Some(xml[start..end].trim())
+    tag_span(xml, tag).map(|r| xml[r].trim())
 }
 
-/// GraphicsConfig.xml's settings in CSWindowScreenConfig's order (fps target, not in the file, as 60).
+/// Stand-ins for a field missing from the file (1920x1080 windowed, High), only so the rest of the file can still
+/// be read; a missing field is written back only when it is changed.
+const DEFAULTS: [u32; 25] = [1920, 1080, 1920, 1080, 1920, 1080, 0, 0, 1, 3, 2, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 0, 2, 3];
+
+fn gfx_tags() -> impl Iterator<Item = &'static Gfx> {
+    [&SCREEN_MODE, &AUTO_DETECT, &QUALITY].into_iter().chain(QUALITIES.iter())
+}
+
+/// GraphicsConfig.xml's settings in CSWindowScreenConfig's order. A tag that is missing or has a value it doesn't
+/// know reads as DEFAULTS; None only if the file has none of the tags.
 pub fn read_config(bytes: &[u8]) -> Option<[u32; 25]> {
-    let xml = decode(bytes)?;
-    let mut out = [0u32; 25];
-    out[8] = 1;
+    let (xml, _) = decode(bytes)?;
+    let (mut out, mut found) = (DEFAULTS, false);
     for (f, w, h) in RESOLUTION {
-        out[f] = tag_value(&xml, w)?.parse().ok()?;
-        out[f + 1] = tag_value(&xml, h)?.parse().ok()?;
+        for (field, tag) in [(f, w), (f + 1, h)] {
+            if let Some(v) = tag_value(&xml, tag).and_then(|v| v.parse().ok()) {
+                (out[field], found) = (v, true);
+            }
+        }
     }
-    for g in [&SCREEN_MODE, &AUTO_DETECT, &QUALITY].into_iter().chain(QUALITIES.iter()) {
-        let v = tag_value(&xml, g.tag)?;
-        out[g.field] = g.choices.iter().find(|c| c.2 == v)?.0;
+    for g in gfx_tags() {
+        let Some(v) = tag_value(&xml, g.tag) else { continue };
+        if let Some(c) = g.choices.iter().find(|c| c.2.eq_ignore_ascii_case(v)) {
+            (out[g.field], found) = (c.0, true);
+        }
     }
-    Some(out)
+    found.then_some(out)
 }
 
-/// GraphicsConfig.xml with `values` put in (each tag Elden Ring wrote is replaced; the rest is kept).
+/// GraphicsConfig.xml with `values` put in. Only the tags whose value changes are rewritten; everything else
+/// (encoding, byte order mark or none, line ends, spacing, tags it doesn't know) is kept byte for byte. A changed
+/// setting whose tag is missing is added before the root's closing tag. None if the file can't be decoded or has
+/// nowhere to add a missing tag.
 pub fn write_config(bytes: &[u8], values: &[u32; 25]) -> Option<Vec<u8>> {
-    let mut xml = decode(bytes)?;
-    let mut put = |tag: &str, value: String| -> Option<()> {
-        let open = format!("<{tag}>");
-        let start = xml.find(&open)? + open.len();
-        let end = start + xml[start..].find("</")?;
-        xml.replace_range(start..end, &value);
+    let (mut xml, enc) = decode(bytes)?;
+    let old = read_config(bytes).unwrap_or(DEFAULTS);
+    let newline = if xml.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut put = |tag: &str, value: &str| -> Option<()> {
+        if let Some(r) = tag_span(&xml, tag) {
+            xml.replace_range(r, value);
+        } else {
+            let at = xml.trim_end().rfind("</")?;
+            xml.insert_str(at, &format!("<{tag}>{value}</{tag}>{newline}"));
+        }
         Some(())
     };
     for (f, w, h) in RESOLUTION {
-        put(w, values[f].to_string())?;
-        put(h, values[f + 1].to_string())?;
+        for (field, tag) in [(f, w), (f + 1, h)] {
+            if values[field] != old[field] {
+                put(tag, &values[field].to_string())?;
+            }
+        }
     }
-    for g in [&SCREEN_MODE, &AUTO_DETECT, &QUALITY].into_iter().chain(QUALITIES.iter()) {
-        put(g.tag, g.choices.iter().find(|c| c.0 == values[g.field])?.2.to_string())?;
+    for g in gfx_tags() {
+        let Some(c) = g.choices.iter().find(|c| c.0 == values[g.field]) else { continue };
+        if values[g.field] != old[g.field] {
+            put(g.tag, c.2)?;
+        }
     }
-    let mut out = vec![0xFF, 0xFE];
-    out.extend(xml.encode_utf16().flat_map(|u| u.to_le_bytes()));
-    Some(out)
+    Some(encode(&xml, enc))
 }
 
-/// Writes the graphics settings into Elden Ring's persistent config (so its own save writes the same) and into
-/// GraphicsConfig.xml, which is first copied to GraphicsConfig.xml.before_book (once).
+/// Writes the graphics settings into GraphicsConfig.xml (copied once to GraphicsConfig.xml.before_book; the new file
+/// is written to GraphicsConfig.xml.new, then put in place) and into Elden Ring's persistent config, so its own save
+/// writes the same.
 fn save_graphics(values: &[u32; 25]) -> Result<(), String> {
+    let path = config_path().ok_or("GraphicsConfig.xml not found (no APPDATA)")?;
+    let old = std::fs::read(&path).map_err(|e| format!("GraphicsConfig.xml not read: {e}"))?;
+    let new = write_config(&old, values).ok_or_else(|| {
+        let head: Vec<String> = old.iter().take(16).map(|b| format!("{b:02X}")).collect();
+        tracing::warn!("settings: GraphicsConfig.xml ({} bytes) not understood; it starts {}", old.len(), head.join(" "));
+        "GraphicsConfig.xml couldn't be read; it was left as it is".to_string()
+    })?;
+    let backup = path.with_file_name("GraphicsConfig.xml.before_book");
+    if !backup.exists() {
+        std::fs::write(&backup, &old).map_err(|e| format!("GraphicsConfig.xml not backed up: {e}"))?;
+    }
+    if new != old {
+        let temp = path.with_file_name("GraphicsConfig.xml.new");
+        std::fs::write(&temp, &new).map_err(|e| format!("GraphicsConfig.xml not written: {e}"))?;
+        std::fs::rename(&temp, &path).map_err(|e| format!("GraphicsConfig.xml not replaced: {e}"))?;
+    }
     let in_memory = game::graphics().is_some();
     if in_memory {
         for (i, v) in values.iter().enumerate() {
             game::set_graphics(i, *v);
         }
     }
-    let path = config_path().ok_or("GraphicsConfig.xml not found")?;
-    let old = std::fs::read(&path).map_err(|e| format!("GraphicsConfig.xml not read: {e}"))?;
-    let backup = path.with_file_name("GraphicsConfig.xml.before_book");
-    if !backup.exists() {
-        std::fs::write(&backup, &old).map_err(|e| format!("GraphicsConfig.xml not backed up: {e}"))?;
-    }
-    let new = write_config(&old, values).ok_or("GraphicsConfig.xml has an unexpected layout")?;
-    std::fs::write(&path, new).map_err(|e| format!("GraphicsConfig.xml not written: {e}"))?;
     tracing::info!("settings: graphics config written (in memory: {in_memory}): {values:?}");
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// Ryan's GraphicsConfig.xml as Elden Ring wrote it (2026-11-01): UTF-16LE, no byte order mark, CRLF.
+    const RYAN: &str = "<?xml version=\"1.0\" encoding=\"UTF-16\" ?>\r\n<config><ScreenMode>BORDERLESS</ScreenMode>\r\n<Resolution-WindowScreenWidth>2560</Resolution-WindowScreenWidth>\r\n<Resolution-WindowScreenHeight>1440</Resolution-WindowScreenHeight>\r\n<Resolution-FullScreenWidth>2560</Resolution-FullScreenWidth>\r\n<Resolution-FullScreenHeight>1440</Resolution-FullScreenHeight>\r\n<Resolution-BorderlessScreenWidth>2560</Resolution-BorderlessScreenWidth>\r\n<Resolution-BorderlessScreenHeight>1440</Resolution-BorderlessScreenHeight>\r\n<Auto-detectBestRenderingSettings>OFF</Auto-detectBestRenderingSettings>\r\n<QualitySetting>CUSTOM</QualitySetting>\r\n<TextureQuality>MAX</TextureQuality>\r\n<Antialiasing>HIGH</Antialiasing>\r\n<SSAO>MAX</SSAO>\r\n<DepthOfField>MEDIUM</DepthOfField>\r\n<MotionBlur>MEDIUM</MotionBlur>\r\n<ShadowQuality>MEDIUM</ShadowQuality>\r\n<LightingQuality>MAX</LightingQuality>\r\n<EffectsQuality>MAX</EffectsQuality>\r\n<ReflectionQuality>MAX</ReflectionQuality>\r\n<WaterSurfaceQuality>HIGH</WaterSurfaceQuality>\r\n<ShadeQuality>HIGH</ShadeQuality>\r\n<VolumetricEffectQuality>MEDIUM</VolumetricEffectQuality>\r\n<RaytracingQuality>DISABLE</RaytracingQuality>\r\n<GIDataQuality>HIGH</GIDataQuality>\r\n<GrassQuality>MEDIUM</GrassQuality>\r\n</config>\r\n";
+
+    fn utf16le(s: &str, bom: bool) -> Vec<u8> {
+        encode(s, Encoding::Utf16Le { bom })
+    }
+
     #[test]
-    fn graphics_config_round_trip() {
-        let xml = "<?xml version=\"1.0\" encoding=\"UTF-16\" ?>\r\n<config><ScreenMode>BORDERLESS</ScreenMode>\r\n<Resolution-WindowScreenWidth>2560</Resolution-WindowScreenWidth>\r\n<Resolution-WindowScreenHeight>1440</Resolution-WindowScreenHeight>\r\n<Resolution-FullScreenWidth>2560</Resolution-FullScreenWidth>\r\n<Resolution-FullScreenHeight>1440</Resolution-FullScreenHeight>\r\n<Resolution-BorderlessScreenWidth>2560</Resolution-BorderlessScreenWidth>\r\n<Resolution-BorderlessScreenHeight>1440</Resolution-BorderlessScreenHeight>\r\n<Auto-detectBestRenderingSettings>OFF</Auto-detectBestRenderingSettings>\r\n<QualitySetting>CUSTOM</QualitySetting>\r\n<TextureQuality>MAX</TextureQuality>\r\n<Antialiasing>HIGH</Antialiasing>\r\n<SSAO>MAX</SSAO>\r\n<DepthOfField>MEDIUM</DepthOfField>\r\n<MotionBlur>MEDIUM</MotionBlur>\r\n<ShadowQuality>MEDIUM</ShadowQuality>\r\n<LightingQuality>MAX</LightingQuality>\r\n<EffectsQuality>MAX</EffectsQuality>\r\n<ReflectionQuality>MAX</ReflectionQuality>\r\n<WaterSurfaceQuality>HIGH</WaterSurfaceQuality>\r\n<ShadeQuality>HIGH</ShadeQuality>\r\n<VolumetricEffectQuality>MEDIUM</VolumetricEffectQuality>\r\n<RaytracingQuality>DISABLE</RaytracingQuality>\r\n<GIDataQuality>HIGH</GIDataQuality>\r\n<GrassQuality>MEDIUM</GrassQuality>\r\n</config>\r\n";
-        let mut bytes = vec![0xFF, 0xFE];
-        bytes.extend(xml.encode_utf16().flat_map(|u| u.to_le_bytes()));
-        let v = super::read_config(&bytes).unwrap();
-        assert_eq!(v[6], 2);
-        assert_eq!(v[10], 3);
-        assert_eq!(v[22], 0);
-        assert_eq!(super::write_config(&bytes, &v).unwrap(), bytes);
+    fn ryans_file_round_trip() {
+        let bytes = utf16le(RYAN, false);
+        assert_eq!(bytes.len(), 2432); // the size of Ryan's file
+        let v = read_config(&bytes).unwrap();
+        assert_eq!((v[4], v[5], v[6], v[10], v[22], v[24]), (2560, 1440, 2, 3, 0, 2));
+        assert_eq!(write_config(&bytes, &v).unwrap(), bytes);
         let mut w = v;
+        (w[4], w[5]) = (1920, 1080);
         w[6] = 0;
-        w[0] = 1920;
-        let out = super::write_config(&bytes, &w).unwrap();
-        assert_eq!(super::read_config(&out).unwrap(), w);
+        let out = write_config(&bytes, &w).unwrap();
+        assert_eq!(&out[..2], b"<\0", "no byte order mark added");
+        assert_eq!(read_config(&out).unwrap(), w);
+        let text = decode(&out).unwrap().0;
+        assert_eq!(text, RYAN.replace("BorderlessScreenWidth>2560<", "BorderlessScreenWidth>1920<")
+            .replace("BorderlessScreenHeight>1440<", "BorderlessScreenHeight>1080<")
+            .replace(">BORDERLESS<", ">WINDOW<"));
+    }
+
+    #[test]
+    fn other_encodings_kept() {
+        for bytes in [utf16le(RYAN, true), encode(RYAN, Encoding::Utf16Be { bom: false }),
+                      encode(RYAN, Encoding::Utf8 { bom: true }), RYAN.as_bytes().to_vec()] {
+            let v = read_config(&bytes).unwrap();
+            assert_eq!(v[6], 2);
+            assert_eq!(write_config(&bytes, &v).unwrap(), bytes);
+            let mut w = v;
+            w[10] = 0;
+            let out = write_config(&bytes, &w).unwrap();
+            assert_eq!(out[..3], bytes[..3]);
+            assert_eq!(read_config(&out).unwrap(), w);
+        }
+    }
+
+    #[test]
+    fn tolerant_layout() {
+        // Attributes, spacing, lower case values, a tag it doesn't know, missing tags.
+        let xml = "<?xml version=\"1.0\"?>\n<config>\n  <ScreenMode a=\"1\"> window </ScreenMode>\n  <FutureThing>7</FutureThing>\n  <TextureQuality>max</TextureQuality>\n  <Resolution-WindowScreenWidth>1600</Resolution-WindowScreenWidth>\n</config>\n";
+        let bytes = utf16le(xml, false);
+        let v = read_config(&bytes).unwrap();
+        assert_eq!((v[0], v[6], v[10], v[1]), (1600, 0, 3, DEFAULTS[1]));
+        assert_eq!(write_config(&bytes, &v).unwrap(), bytes, "nothing missing is added unless changed");
+        let mut w = v;
+        w[1] = 900;
+        let out = decode(&write_config(&bytes, &w).unwrap()).unwrap().0;
+        assert!(out.contains("<FutureThing>7</FutureThing>"));
+        assert!(out.contains("<ScreenMode a=\"1\"> window </ScreenMode>"), "an unchanged tag is kept as it was");
+        assert!(out.contains("<Resolution-WindowScreenHeight>900</Resolution-WindowScreenHeight>\n</config>"));
+        assert_eq!(read_config(out.as_bytes()).unwrap()[1], 900);
+        assert!(read_config(b"not xml").is_none());
     }
 }

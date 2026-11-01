@@ -59,6 +59,13 @@ fn tip_frame(blue: bool) -> [Option<String>; 9] {
     }
     out
 }
+/// Wizard101's plain button tooltip (ToolTip.gui; see Book::draw_plain_tip): its nine pieces in Canvas::border's
+/// order, its default size and its text scale.
+const PLAIN_TIP_FRAME: [&str; 9] = ["GUI/Tooltip/bubble_TL.png", "GUI/Tooltip/bubble_T.png", "GUI/Tooltip/bubble_TR.png",
+    "GUI/Tooltip/bubble_L.png", "GUI/Tooltip/bubble_R.png", "GUI/Tooltip/bubble_BL.png", "GUI/Tooltip/bubble_B.png",
+    "GUI/Tooltip/bubble_BR.png", "GUI/Tooltip/bubble_C.png"];
+const PLAIN_TIP_SIZE: [f32; 2] = [200.0, 50.0];
+const PLAIN_TIP_SCALE: f32 = 0.4;
 const TIP_WIDTH: f32 = 200.0;
 const MAX_TIP: f32 = 290.0;
 const TIP_BACK: ImColor32 = ImColor32::from_rgba(0, 0, 0, 205);
@@ -184,8 +191,10 @@ pub struct Book {
     /// The book was opened on the World Map page: Elden Ring's map opens by itself once the button or key that
     /// opened the book is let go (Ryan, 2026-10-30: no "press A" step).
     map_on_open: bool,
-    /// Settings' Quit / Exit Game clicked once (to the desktop, when): the next click confirms.
+    /// Settings' Quit clicked once (to the desktop, when): the next click confirms.
     quit_asked: Option<(bool, Instant)>,
+    /// Settings changes waiting for OK (options::Staged).
+    staged: crate::options::Staged,
     /// Exit Game confirmed: since when, and since when no player character has been loaded.
     quitting: Option<(Instant, Option<Instant>)>,
     face_logged: bool,
@@ -307,6 +316,7 @@ impl Book {
             warp_after_map: None,
             map_on_open: false,
             quit_asked: None,
+            staged: Default::default(),
             quitting: None,
             face_logged: false,
             flasks_logged: false,
@@ -819,6 +829,11 @@ impl Book {
                 self.state.step_page(1);
             }
         }
+        if (pressed & input::A != 0 || ui.is_key_pressed_no_repeat(Key::Enter)) && self.tab == Tab::Settings {
+            // The Settings window's OK.
+            self.settings_ok(cx);
+            return;
+        }
         if pressed & input::A != 0 || ui.is_key_pressed_no_repeat(Key::Enter) {
             self.select(self.tab, true);
             if !self.open {
@@ -871,6 +886,7 @@ impl Book {
             Action::Close => self.set_open(false),
             Action::Tab(tab) => self.select(tab, false),
             Action::Setting(row, step) => self.change_setting(row, step, cx),
+            Action::SettingsOk => self.settings_ok(cx),
             Action::Quit(desktop) => self.quit(desktop),
             Action::Warp(flag) => {
                 tracing::info!("map page: warp flag {flag}");
@@ -1019,7 +1035,7 @@ impl Book {
         let tab = if map_view { Tab::Map } else { self.tab };
         let page_name = TABS[tab_index(tab)].2;
         let mut view = View::default();
-        let settings = if tab == Tab::Settings { settings_rows(self.state.page, cx) } else { Vec::new() };
+        let settings = if tab == Tab::Settings { settings_rows(self.state.page, cx, &self.staged) } else { Vec::new() };
         let none = Names::default();
         let data = Data {
             sheet: self.sheet.as_ref(),
@@ -1080,6 +1096,7 @@ impl Book {
         wanted.push(CURSOR.into());
         wanted.extend(tip_frame(false).into_iter().chain(tip_frame(true)).flatten());
         wanted.push(EQUIP_FIST.into());
+        wanted.extend(PLAIN_TIP_FRAME.map(String::from));
         wanted.extend(crate::itemdata::TIP_ICONS.iter().map(|i| i.to_string()));
         self.textures.want(wanted);
 
@@ -1155,7 +1172,10 @@ impl Book {
             }
             // The hover text of what the mouse is over.
             if let Some((_, lines)) = view.tips.iter().rev().find(|(r, _)| layout::inside(mouse, *r)) {
-                self.draw_tip(&canvas, lines, mouse, [width, height]);
+                match lines.split_first() {
+                    Some((first, rest)) if first == layout::PLAIN_TIP => self.draw_plain_tip(&canvas, rest, mouse, [width, height]),
+                    _ => self.draw_tip(&canvas, lines, mouse, [width, height]),
+                }
             }
             draw_cursor(&draw, &self.textures, pointer.pos, height);
         } else if !view.hole.or(view.picture).is_some_and(|h| layout::inside(mouse, h))
@@ -1248,6 +1268,32 @@ impl Book {
             canvas.image(EQUIP_FIST, [x + width - 25.0, y - 14.0, x + width + 14.0, y + 22.0],
                          [0.0, 0.0, 0.5, 0.5], ImColor32::WHITE);
         }
+    }
+
+    /// Wizard101's plain hover text (Root.wad GUI/ToolTip.gui): ToolTip_Bckgrnd, a ControlWidget of the nine
+    /// GUI/Tooltip/bubble_* pieces (a white bubble with a thin dark rim and round corners), sized to its parent
+    /// (200x50 by default), and ToolTipText inset 8 px on every side: WizardNormal 0.4, black (FF000000), centred
+    /// both ways, no word wrap. Here it grows past 200x50 to fit longer text; lines are "\n" breaks or separate lines.
+    fn draw_plain_tip(&self, canvas: &Canvas, lines: &[String], mouse: [f32; 2], screen: [f32; 2]) {
+        let Some(font) = self.fonts.get("WizardNormal") else { return };
+        let lines: Vec<&str> = lines.iter().flat_map(|l| l.split('\n')).map(str::trim).collect();
+        let (scale, inset) = (PLAIN_TIP_SCALE, 8.0);
+        let line_h = font.line_height * scale;
+        let widest = lines.iter().map(|l| font.width(l) * scale).fold(0.0, f32::max);
+        let width = (widest + 2.0 * inset + 8.0).max(PLAIN_TIP_SIZE[0]);
+        let height = (lines.len() as f32 * line_h + 2.0 * inset + 4.0).max(PLAIN_TIP_SIZE[1]);
+        let right = (screen[0] - canvas.origin[0]) / canvas.s;
+        let bottom = (screen[1] - canvas.origin[1]) / canvas.s;
+        let top = -canvas.origin[1] / canvas.s;
+        let mut x = mouse[0] + 22.0;
+        if x + width + 20.0 > right {
+            x = mouse[0] - 12.0 - width;
+        }
+        let y = (mouse[1] + 8.0).min(bottom - height).max(top);
+        canvas.border(&PLAIN_TIP_FRAME.map(|p| Some(p.to_string())), [x, y, x + width, y + height], ImColor32::WHITE);
+        let text = lines.join("\n");
+        let style = TextStyle::new("WizardNormal", scale, ImColor32::BLACK).centred();
+        canvas.text(&text, [x + inset, y + inset, x + width - inset, y + height - inset], &style, false);
     }
 
     /// QuestListWindow's four card windows, each with QuestInfoWindow.gui drawn into it for a quest in progress.
@@ -1371,9 +1417,9 @@ impl Book {
         let tab = self.state.page % crate::options::TABS.len();
         let Some(r) = crate::options::TABS[tab].2.get(row) else { return };
         self.state.sub = row;
-        let note = match crate::options::change(r, step, cx.game, cx.settings, cx.settings_path) {
+        let note = match crate::options::change(r, step, cx.game, cx.settings, &mut self.staged) {
             Ok(done) => {
-                tracing::info!("settings: {done}");
+                tracing::info!("settings: staged {done}");
                 done
             }
             Err(why) => {
@@ -1384,15 +1430,30 @@ impl Book {
         self.state.note = Some((note, Instant::now()));
     }
 
-    /// Settings' Quit (to Elden Ring's title screen) and Exit Game (then to the desktop): a second click within
-    /// QUIT_CONFIRM seconds confirms. Elden Ring's own quit-out saves first; the window is closed only once the
-    /// title screen is up (quit_follow).
+    /// The Settings window's OK (button, A or Enter): applies the staged changes and closes the book. If something
+    /// couldn't be applied, the book stays open with the reason.
+    fn settings_ok(&mut self, cx: &mut Context) {
+        match crate::options::apply(&mut self.staged, cx.game, cx.settings, cx.settings_path) {
+            Ok(n) => {
+                tracing::info!("settings: OK, {n} setting(s) applied");
+                self.set_open(false);
+            }
+            Err(why) => {
+                tracing::warn!("settings: OK, not all applied: {why}");
+                self.state.note = Some((why, Instant::now()));
+            }
+        }
+    }
+
+    /// Settings' Quit (to Elden Ring's title screen: a second click within QUIT_CONFIRM seconds confirms) and Exit
+    /// Game (then to the desktop, on the first click; Ryan, round 15). Elden Ring's own quit-out saves first; the
+    /// window is closed only once the title screen is up (quit_follow).
     fn quit(&mut self, desktop: bool) {
         let what = if desktop { "Exit Game" } else { "Quit" };
-        if self.quit_asked.is_none_or(|(d, t)| d != desktop || t.elapsed().as_secs_f32() > QUIT_CONFIRM) {
+        let confirmed = self.quit_asked.is_some_and(|(d, t)| d == desktop && t.elapsed().as_secs_f32() <= QUIT_CONFIRM);
+        if !desktop && !confirmed {
             self.quit_asked = Some((desktop, Instant::now()));
-            let to = if desktop { "save and close Elden Ring" } else { "save and go back to the title screen" };
-            self.state.note = Some((format!("Click {what} again to {to}"), Instant::now()));
+            self.state.note = Some((format!("Click {what} again to save and go back to the title screen"), Instant::now()));
             return;
         }
         self.quit_asked = None;
@@ -1442,6 +1503,10 @@ impl Book {
             self.state.pet = 0; // the Pets page opens on the equipped spirit ash
             self.sheet_time = None;
         } else {
+            if !self.staged.is_empty() {
+                tracing::info!("settings: book closed without OK; changes dropped");
+            }
+            self.staged.clear();
             self.map_on_open = false;
             self.holding = true;
             self.closed_at = Some(Instant::now());
@@ -1588,10 +1653,11 @@ fn hair_model(face: &[u8]) -> Option<u32> {
 }
 
 /// The Settings page's rows on tab `tab` (options::TABS): label, value, tip (what it is, when it applies).
-pub fn settings_rows(tab: usize, cx: &Context) -> Vec<pages::SettingRow> {
-    let graphics = crate::options::graphics();
+pub fn settings_rows(tab: usize, cx: &Context, staged: &crate::options::Staged) -> Vec<pages::SettingRow> {
+    let graphics = staged.graphics();
     crate::options::TABS[tab % crate::options::TABS.len()].2.iter().map(|row| {
-        let value = crate::options::value(row, cx.game, cx.settings, graphics.as_ref()).unwrap_or_else(|| "-".into());
+        let value = crate::options::value(row, cx.game, cx.settings, graphics.as_ref(), staged)
+            .unwrap_or_else(|| "-".into());
         let mut tip = vec![row.label.to_string(), row.when.text().to_string()];
         if row.w101 != "-" {
             tip.push(format!("Wizard101: {}", row.w101));

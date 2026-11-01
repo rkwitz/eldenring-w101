@@ -323,7 +323,18 @@ impl View {
             self.tips.push((rect, lines));
         }
     }
+
+    /// A hover text in Wizard101's plain button tooltip (ToolTip.gui: white rounded bubble, black text), not the
+    /// item tooltip: the lines are marked with PLAIN_TIP first.
+    pub fn plain_tip(&mut self, rect: [f32; 4], lines: Vec<String>) {
+        if !lines.is_empty() {
+            self.tips.push((rect, std::iter::once(PLAIN_TIP.to_string()).chain(lines).collect()));
+        }
+    }
 }
+
+/// The first line of a View::plain_tip.
+pub const PLAIN_TIP: &str = "\u{1}plain";
 
 /// Loaded art: image path (as in the layouts) -> texture and size in pixels.
 #[derive(Default)]
