@@ -25,6 +25,8 @@ Events, in id order (all flags in w101_quests' docstring):
             3. a quest of this NPC's that is assigned and not complete and has "underway" pages: those pages
             4. the NPC's idle pages
           Flags are set before the pages, so leaving the dialog early never loses progress.
+  idle    (round 16) one per street character: one frame after every load, ForceAnimation its idle
+          (w101_quests.IDLE), then END.
 Pages are ER's generic dialog box (2007[10] "Display Generic Dialog and Set Event Flags", OK only, as vanilla
 common.emevd 4852 shows its messages) with EventTextForMap text from er_text.py --dialogue: OK shows the next page,
 the back button or walking away from the NPC ends the conversation. Message ids come from a dialogue file
@@ -104,6 +106,11 @@ def asset_enabled(entity, state):
     return _i(2005, 3, "<IBxxx", entity, state)
 
 
+def force_animation(entity, animation, loop=0):
+    """2003[18] ForceAnimationPlayback, packed as vanilla m60_42_36 event 1042363700 plays Varre's 90100."""
+    return _i(2003, 18, "<IiBBBbf", entity, animation, loop, 0, 0, 0, 1.0)
+
+
 def wait(seconds):
     return _i(1001, 0, "<f", seconds)
 
@@ -114,6 +121,7 @@ def dialog(message, entity, distance):
 
 
 END = _i(1000, 4, "<Bxxx", 0)
+WAIT_FRAME = _i(1001, 1, "<i", 1)  # WaitFixedNumberOfFrames(1)
 RESTART = _i(1000, 4, "<Bxxx", 1)
 
 DIALOGUE = {}  # dialogue key -> [message id, ...] (main: --dialogue)
@@ -239,6 +247,9 @@ def quest_events():
                        asset_enabled(entity, 0), END])
     for slug, *_rest, entity in Q.CHARACTERS:  # npcs
         events.append(npc_event(slug, entity))
+    for _slug, _title, _frame, _local, _yaw, model, *_rows, entity in Q.CHARACTERS:  # idles (round 16 F3)
+        animation, loop = Q.IDLE[model]
+        events.append([WAIT_FRAME, force_animation(entity, animation, loop), END])  # vanilla waits a frame too
     assert len(events) <= 100, f"{len(events)} events do not fit in {Q.EVENT_BASE}..+99"
     out = []
     for k, ev in enumerate(events):

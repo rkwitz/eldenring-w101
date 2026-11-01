@@ -31,17 +31,15 @@ const GIVERS: [(&str, u32, [f32; 3]); 5] = [
 
 /// Wizard101 names over the street characters (msb_add_npcs.py; the givers at the same spots as GIVERS):
 /// (name, MSB position, height of the plate's bottom over the character's feet, metres: the Elden Ring stand-in's
-/// head + about 0.4; c0000 humans 1.8 m, Melina 1.7, Blaidd 2.3, Kale seated 1.4, Boc 1.2). They have no patrol
-/// route and stand still, so the HUD draws the plates at their placed spots.
-const NPC_PLATES: [(&str, [f32; 3], f32); 8] = [
+/// head + about 0.4; c0000 humans 1.8 m, Melina 1.7). They have no patrol route and stand still, so the HUD draws the
+/// plates at their placed spots. Round 16: only the NPCs a new wizard gets quests from (Diego, Ugo Kalahad and Aegon
+/// Statz were taken off the street, w101_quests.REMOVED).
+const NPC_PLATES: [(&str, [f32; 3], f32); 5] = [
     ("Private Connelly", [5.0029, 94.1828, -44.0778], 2.2),
     ("Ceren Nightchant", [-84.8379, 94.4878, -18.4484], 2.2),
     ("Olivia Dawnwillow", [-65.8655, 92.8248, -7.9762], 2.2),
     ("Lady Oriel", [-335.1056, 93.4988, 103.5473], 2.1),
     ("Private O'Ryan", [-160.8270, 93.4878, -54.0237], 2.2),
-    ("Diego the Duelmaster", [-29.7745, 94.5018, -61.8978], 2.7),
-    ("Ugo Kalahad", [-16.6856, 90.4898, 14.4977], 1.8),
-    ("Aegon Statz", [-70.7651, 92.9018, -1.6920], 1.6),
 ];
 /// NPC plates show this far away (metres), fading over the last part, as the creature plates.
 const PLATE_RANGE: f32 = 40.0;

@@ -81,6 +81,15 @@ NPC_INDEX = {slug: k for k, (slug, *_rest) in enumerate(NPCS)}
 # Positions/yaws: the zone gamedata.bin (WC_Unicorn, WC_Unicorn_HedgeMaze), W101 (x, z, y) * 0.01, y lifted 0.2 m so
 # the character drops onto the collision. O'Ryan stands at house H1's door (the house is not built), Lady Oriel on the
 # maze's sunken floor (W101 floats her 4 m up).
+# Round 16 (F1): only the NPCs a new level 1-2 wizard meets on the street and gets quests from. Removed (REMOVED):
+# Diego (NPC06: PvP trainer; his only quest, WizQst162711, is a talk-to handed out by someone else), Ugo Kalahad
+# (NPC08_Shop: a shop, ShoppingBehavior, no quest) and Aegon Statz (NPC12: the Gravulum Order / Pekuliarity event;
+# the client's own badge and Crown Shop lines send you to him in Ravenwood, no Unicorn Way starter quest names him).
+# Round 16 (F2): W101 yaw = rotation about z, applied clockwise (Gamebryo's NiMatrix3), and a W101 character's face
+# is its model's -y (Human_WCGuard_A.nif: the eye bones sit at -y of the head), so it faces (-sin yaw, -cos yaw) in
+# W101 (x, y). Checked on the zone itself: the Abby stand-in faces Private Connelly exactly (cos 1.000), Connelly
+# faces the Hub arrival point (0.98); round 15's (-sin yaw, +cos yaw) mirrored every facing across the x axis.
+# O'Ryan's yaw: facing out of house H1's door, towards the "Street 1 House 1 Exit" location (-12463.1, 8646.2).
 HUMAN_THINK, HUMAN_NPC = 523011000, 523010010
 CHARACTERS = [
     ("private_connelly", "Private Connelly", "street", (26.543, 0.184, 22.200), 55.86, "c0000",
@@ -91,16 +100,22 @@ CHARACTERS = [
      HUMAN_THINK, HUMAN_NPC, 23201, 1042360822),
     ("lady_oriel", "Lady Oriel", "garden", (5.974, -0.500, 0.940), 179.62, "c2180",
      21800000, 21800000, -1, 1042360823),
-    ("private_oryan", "Private O'Ryan", "street", (-125.714, -0.511, 88.655), None, "c0000",
+    ("private_oryan", "Private O'Ryan", "street", (-125.714, -0.511, 88.655), -26.27, "c0000",
      HUMAN_THINK, HUMAN_NPC, 6194, 1042360824),
-    ("diego", "Diego the Duelmaster", "street", (-12.534, 0.503, 22.119), -55.16, "c2010",
-     20100000, 20109110, -1, 1042360825),
-    ("ugo_kalahad", "Ugo Kalahad", "street", (33.824, -3.509, 84.236), 114.99, "c3200",
-     32000000, 32000010, -1, 1042360826),
-    ("aegon_statz", "Aegon Statz", "street", (-21.709, -1.097, 94.374), -16.74, "c4110",
-     41109000, 41109020, -1, 1042360827),
 ]
-ORYAN_FACING = 90.0  # O'Ryan has no street yaw at H1's door: the giver asset's facing (away from the door)
+# Round 15 characters taken out in round 16 (F1): (slug, part name, model). msb_add_npcs.py deletes these parts.
+REMOVED = [
+    ("diego", "c2010_9105", "c2010"),  # entity 1042360825
+    ("ugo_kalahad", "c3200_9106", "c3200"),  # 1042360826
+    ("aegon_statz", "c4110_9107", "c4110"),  # 1042360827
+]
+# Round 16 (F3): the idle each character is put in on every load (EMEVD 2003[18], as vanilla does it). W101 has every
+# street NPC standing (their ObjectData: FidgetBehavior Idle / IdleFidget, no seat), so all of them stand.
+#   c0000: 90100, the event idle vanilla m60_42_36 event 1042363700 plays on White Mask Varre at The First Step. With
+#     NpcParam 523010010 (Varre's row: SpEffect 9820, animIdOffset 320000000) it resolves to Varre's own a320_090100.
+#   c2180 Melina: 0, her standing idle (her row has no animation offset), looped.
+# (animation, loop) by model
+IDLE = {"c0000": (90100, 0), "c2180": (0, 1)}
 CHARACTER_PART_ID = 9100  # part header 0x08 / name suffix of the first character (<model>_9100..)
 TALK_NPC_BUTTON = 6000  # ActionButtonParam "Talk" (category 4, radius 2.5 m), as vanilla m60_51_36 1051360734 on a character
 DIALOG_OK, DIALOG_CANCEL = 1042362620, 1042362621  # set by a dialog page's OK / back (2007[10])
