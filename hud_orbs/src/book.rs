@@ -62,13 +62,6 @@ fn tip_frame(blue: bool) -> [Option<String>; 9] {
     }
     out
 }
-/// Wizard101's plain button tooltip (ToolTip.gui; see Book::draw_plain_tip): its nine pieces in Canvas::border's
-/// order, its default size and its text scale.
-const PLAIN_TIP_FRAME: [&str; 9] = ["GUI/Tooltip/bubble_TL.png", "GUI/Tooltip/bubble_T.png", "GUI/Tooltip/bubble_TR.png",
-    "GUI/Tooltip/bubble_L.png", "GUI/Tooltip/bubble_R.png", "GUI/Tooltip/bubble_BL.png", "GUI/Tooltip/bubble_B.png",
-    "GUI/Tooltip/bubble_BR.png", "GUI/Tooltip/bubble_C.png"];
-const PLAIN_TIP_SIZE: [f32; 2] = [200.0, 50.0];
-const PLAIN_TIP_SCALE: f32 = 0.4;
 const TIP_WIDTH: f32 = 200.0;
 const MAX_TIP: f32 = 290.0;
 const TIP_BACK: ImColor32 = ImColor32::from_rgba(0, 0, 0, 205);
@@ -219,7 +212,16 @@ pub struct Book {
     frames: u64,
     world_ready: bool,
     map_shot: bool,
+    /// The Equipment Sets page: every character's saved sets (character name, set), the file they are kept in
+    /// (next to w101_orbs.ini), and the set being put on: its name and the (slot, item) equips still to make, one
+    /// per frame, as Elden Ring's Equipment menu makes them one at a time.
+    gear: Vec<(String, pages::GearSet)>,
+    gear_path: Option<PathBuf>,
+    gear_queue: Option<(String, Vec<(u32, Option<u32>)>, usize)>,
 }
+
+/// The equipment sets file, beside the ini: one set per line, "character <tab> set name <tab> slot:param,...".
+const GEAR_FILE: &str = "w101_orbs_gear_sets.tsv";
 
 /// How long the book stays up after the map round trip while the game is not yet back to normal play.
 const MAP_BACK_GRACE: f32 = 1.5;
@@ -246,6 +248,11 @@ fn tab_index(tab: Tab) -> usize {
     TABS.iter().position(|t| t.0 == tab).unwrap_or(0)
 }
 
+/// The layout a tab shows: its page, or on the Backpack the Equipment Sets page while that is open.
+fn page_of(tab: Tab, state: &pages::State) -> &'static str {
+    if tab == Tab::Backpack && state.gear_view { pages::GEAR_PAGE } else { TABS[tab_index(tab)].2 }
+}
+
 /// A small button hint (LB, RB, Q, ...) in page pixels.
 fn badge(canvas: &Canvas, r: [f32; 4], text: &str) {
     let a = canvas.alpha;
@@ -264,6 +271,9 @@ fn badge(canvas: &Canvas, r: [f32; 4], text: &str) {
 const BUBBLE: [&str; 9] = ["GUI/Tooltip/bubble_TL.png", "GUI/Tooltip/bubble_T.png", "GUI/Tooltip/bubble_TR.png",
                            "GUI/Tooltip/bubble_L.png", "GUI/Tooltip/bubble_R.png", "GUI/Tooltip/bubble_BL.png",
                            "GUI/Tooltip/bubble_B.png", "GUI/Tooltip/bubble_BR.png", "GUI/Tooltip/bubble_C.png"];
+/// The bookmarks' hover texts, in TABS order (Wizard101's, without its key bindings; Options is the Settings page).
+const BOOKMARK_TIPS: [&str; 10] = ["Character", "Backpack", "Pets", "Spell Deck", "Quests", "Map", "Crafting", "Help",
+                                   "Options", "Close"];
 const BUBBLE_PAD: f32 = 8.0;
 const BUBBLE_SCALE: f32 = 0.4;
 /// The widest a bubble's text runs before it wraps (page pixels), and the seconds it takes to fade in.
@@ -405,6 +415,9 @@ impl Book {
             frames: 0,
             world_ready: false,
             map_shot: false,
+            gear: Vec::new(),
+            gear_path: None,
+            gear_queue: None,
         }
     }
 
@@ -424,7 +437,8 @@ impl Book {
             Ok(l) => self.prefs = Some(l),
             Err(e) => tracing::warn!("spellbook not loaded (run tools/w101_book_layout.py): {e}"),
         }
-        for (_, _, page) in TABS.iter().filter(|t| !t.2.is_empty()).chain([&(Tab::Quests, "", pages::QUEST_CARD)]) {
+        for (_, _, page) in TABS.iter().filter(|t| !t.2.is_empty())
+            .chain([&(Tab::Quests, "", pages::QUEST_CARD), &(Tab::Backpack, "", pages::GEAR_PAGE)]) {
             match Layout::load(&folder.join(format!("{page}.lay"))) {
                 Ok(l) => {
                     self.layouts.insert(page, l);
@@ -620,6 +634,29 @@ impl Book {
         self.state.sub = sub;
     }
 
+    /// The Backpack's Equipment Sets page with three sets, the first being what `game`'s character wears (the
+    /// preview renderer).
+    #[allow(dead_code)]
+    pub fn preview_gear(&mut self, game: &game::Game) {
+        let Some(sheet) = game.sheet() else { return };
+        let worn = pages::gear_now(&sheet);
+        let mut other = worn.clone();
+        for (slot, id) in other.iter_mut() {
+            if *slot == 12 {
+                *id = 10000;
+            }
+            if *slot == 17 {
+                *id = -1;
+            }
+        }
+        let school = pages::char_school(&sheet);
+        self.gear = (0..3).map(|n| (sheet.name.clone(), pages::GearSet {
+            name: pages::gear_name(school, n), slots: if n == 0 { worn.clone() } else { other.clone() } })).collect();
+        self.gear_path = Some(PathBuf::from("/nonexistent/gear.tsv"));
+        self.state.gear_view = true;
+        self.state.gear_chosen = 1;
+    }
+
     /// Turns the current page's list to page `page` (the preview renderer).
     #[allow(dead_code)]
     pub fn preview_page(&mut self, page: usize) {
@@ -788,6 +825,7 @@ impl Book {
         if cx.game.is_some() {
             self.poll_quests(cx);
         }
+        self.gear_step(cx);
         if self.dialogue.is_some() {
             self.dialogue_frame(ui, pressed, &pointer);
             return;
@@ -1006,7 +1044,7 @@ impl Book {
             return;
         }
         let Some(hit) = page_hit else { return };
-        let page_name = TABS[tab_index(self.tab)].2;
+        let page_name = page_of(self.tab, &self.state);
         let action = match self.layouts.get(page_name) {
             Some(page) => pages::click(self.tab, page, hit, &mut self.state),
             None => Action::None,
@@ -1029,6 +1067,10 @@ impl Book {
                     self.equip(id, &sheet, cx);
                 }
             }
+            Action::GearSave => self.gear_save(cx),
+            Action::GearEquip(i) => self.gear_equip(i, cx),
+            Action::GearDelete(i) => self.gear_edit(i, 0, cx),
+            Action::GearMove(i, step) => self.gear_edit(i, step, cx),
         }
     }
 
@@ -1085,7 +1127,159 @@ impl Book {
                 self.state.sub = i;
                 self.state.page = 0;
             }
+            Hit::GearSet(i) => {
+                self.state.gear_chosen = i;
+                if double {
+                    self.gear_equip(i, cx);
+                }
+            }
             Hit::Setting(..) | Hit::Warp(_) => {} // handled before (book::frame)
+        }
+    }
+
+    /// The current character's equipment sets (loading the file the first time).
+    fn gear_sets_of_character(&self) -> Vec<pages::GearSet> {
+        let Some(sheet) = self.sheet.as_ref() else { return Vec::new() };
+        self.gear.iter().filter(|(c, _)| *c == sheet.name).map(|(_, set)| set.clone()).collect()
+    }
+
+    fn gear_load(&mut self, cx: &Context) {
+        if self.gear_path.is_some() {
+            return;
+        }
+        let path = cx.settings_path.with_file_name(GEAR_FILE);
+        self.gear = std::fs::read_to_string(&path).unwrap_or_default().lines().filter_map(|line| {
+            let mut f = line.split('\t');
+            let (who, name, slots) = (f.next()?, f.next()?, f.next()?);
+            let slots = slots.split(',').filter_map(|e| {
+                let (slot, id) = e.split_once(':')?;
+                Some((slot.trim().parse().ok()?, id.trim().parse().ok()?))
+            }).collect();
+            Some((who.to_string(), pages::GearSet { name: name.to_string(), slots }))
+        }).collect();
+        tracing::info!("equipment sets: {} from {}", self.gear.len(), path.display());
+        self.gear_path = Some(path);
+    }
+
+    fn gear_save_file(&self) {
+        let Some(path) = &self.gear_path else { return };
+        let text: String = self.gear.iter().map(|(who, set)| {
+            let slots: Vec<String> = set.slots.iter().map(|(s, id)| format!("{s}:{id}")).collect();
+            format!("{who}\t{}\t{}\n", set.name.replace('\t', " "), slots.join(","))
+        }).collect();
+        if let Err(e) = std::fs::write(path, text) {
+            tracing::warn!("equipment sets not saved to {}: {e}", path.display());
+        }
+    }
+
+    /// Indices into self.gear of the current character's sets, in order.
+    fn gear_rows(&self) -> Vec<usize> {
+        let Some(sheet) = self.sheet.as_ref() else { return Vec::new() };
+        self.gear.iter().enumerate().filter(|(_, (c, _))| *c == sheet.name).map(|(i, _)| i).collect()
+    }
+
+    /// The Equipment Sets page's +: what the character wears now becomes a new set (Wizard101's set name).
+    fn gear_save(&mut self, cx: &Context) {
+        self.gear_load(cx);
+        let Some(sheet) = self.sheet.clone() else { return };
+        let rows = self.gear_rows();
+        if rows.len() >= pages::GEAR_ROWS {
+            self.state.note = Some(("No room for more equipment sets".into(), Instant::now()));
+            return;
+        }
+        let used: Vec<String> = rows.iter().map(|i| self.gear[*i].1.name.clone()).collect();
+        let school = pages::char_school(&sheet);
+        let name = (0..).map(|n| pages::gear_name(school, n)).find(|n| !used.contains(n)).unwrap_or_default();
+        self.gear.push((sheet.name.clone(), pages::GearSet { name: name.clone(), slots: pages::gear_now(&sheet) }));
+        self.gear_save_file();
+        self.state.gear_chosen = rows.len();
+        self.state.note = Some((format!("Saved {name}"), Instant::now()));
+        tracing::info!("equipment set saved: {name}");
+    }
+
+    /// Delete (step 0) or move (step -1 / +1) the character's set at row `row`.
+    fn gear_edit(&mut self, row: usize, step: i32, cx: &Context) {
+        self.gear_load(cx);
+        let rows = self.gear_rows();
+        let Some(&at) = rows.get(row) else { return };
+        if step == 0 {
+            let (_, set) = self.gear.remove(at);
+            self.state.note = Some((format!("Deleted {}", set.name), Instant::now()));
+            self.state.gear_chosen = row.saturating_sub(1);
+        } else {
+            let Some(&other) = rows.get((row as i32 + step).max(0) as usize).filter(|o| **o != at) else { return };
+            self.gear.swap(at, other);
+            self.state.gear_chosen = (row as i32 + step) as usize;
+        }
+        self.gear_save_file();
+    }
+
+    /// Puts on the character's set at row `row`: every slot that differs from what is worn, through Elden Ring's
+    /// own equip function (Game::equip), one slot per frame (gear_step). Items no longer in the inventory are
+    /// skipped and counted.
+    fn gear_equip(&mut self, row: usize, cx: &Context) {
+        self.gear_load(cx);
+        let (Some(sheet), Some(&at)) = (self.sheet.clone(), self.gear_rows().get(row)) else { return };
+        let set = self.gear[at].1.clone();
+        if cx.game.is_none() {
+            self.state.note = Some(("Equipping needs the game".into(), Instant::now()));
+            return;
+        }
+        let have: std::collections::HashSet<u32> = sheet.items.iter().map(|(id, _)| *id).collect();
+        let mut missing = 0;
+        let mut steps = Vec::new();
+        for &(slot, id) in &set.slots {
+            if sheet.equipment[slot as usize] == id || (pages::gear_empty(slot, id) && pages::gear_empty(slot, sheet.equipment[slot as usize])) {
+                continue;
+            }
+            if pages::gear_empty(slot, id) {
+                steps.push((slot, None));
+            } else if have.contains(&pages::gear_item(slot, id)) {
+                steps.push((slot, Some(pages::gear_item(slot, id))));
+            } else {
+                missing += 1;
+            }
+        }
+        tracing::info!("equipment set {}: {} changes, {missing} missing", set.name, steps.len());
+        if steps.is_empty() {
+            let text = if missing > 0 { format!("{}: {missing} items are no longer in your inventory", set.name) }
+                       else { format!("You are already wearing {}", set.name) };
+            self.state.note = Some((text, Instant::now()));
+            return;
+        }
+        self.gear_queue = Some((set.name, steps, missing));
+    }
+
+    /// One equip of the set being put on (see gear_equip).
+    fn gear_step(&mut self, cx: &Context) {
+        if cx.game.is_some() {
+            self.gear_load(cx);
+        }
+        let Some((name, steps, missing)) = self.gear_queue.as_mut() else { return };
+        let Some(game) = cx.game else {
+            self.gear_queue = None;
+            return;
+        };
+        if let Some((slot, item)) = (!steps.is_empty()).then(|| steps.remove(0)) {
+            // An empty hand: Elden Ring's unarmed "weapon", else the slot emptied.
+            let done = if slot <= 5 && item.is_none() {
+                game.equip(slot, Some(110000)).or_else(|_| game.equip(slot, None))
+            } else {
+                game.equip(slot, item)
+            };
+            if let Err(why) = done {
+                tracing::info!("equipment set {name}: slot {slot} item {item:?}: {why}");
+                *missing += 1;
+            }
+            self.sheet_time = None;
+        }
+        if steps.is_empty() {
+            let text = match *missing {
+                0 => format!("Equipped {name}"),
+                n => format!("Equipped {name} ({n} items could not be put on)"),
+            };
+            self.state.note = Some((text, Instant::now()));
+            self.gear_queue = None;
         }
     }
 
@@ -1172,10 +1366,11 @@ impl Book {
     fn draw(&mut self, ui: &Ui, cx: &Context, pointer: &Pointer, dt: f32, map_view: bool)
             -> (Option<usize>, Option<usize>, bool, [f32; 2]) {
         let tab = if map_view { Tab::Map } else { self.tab };
-        let page_name = TABS[tab_index(tab)].2;
+        let page_name = page_of(tab, &self.state);
         let mut view = View::default();
         let settings = if tab == Tab::Settings { settings_rows(self.state.page, cx, &self.staged) } else { Vec::new() };
         let none = Names::default();
+        let gear_sets = self.gear_sets_of_character();
         let data = Data {
             sheet: self.sheet.as_ref(),
             stats: cx.stats,
@@ -1191,6 +1386,7 @@ impl Book {
             }),
             position: cx.position,
             achieved: &self.achieved,
+            gear_sets: &gear_sets,
         };
         if let Some(page) = self.layouts.get(page_name) {
             pages::bind(tab, page, &data, &mut self.state, &mut view);
@@ -1238,12 +1434,14 @@ impl Book {
         for (_, hv) in &view.hovers {
             wanted.extend(hv.images.iter().map(|i| i.1.clone()));
             wanted.extend(hv.backs.iter().map(|i| i.1.clone()));
+            wanted.extend(hv.extra.iter().flat_map(|e| layout::text_pictures(&e.1)));
         }
+        // Pictures inside texts (the spell cards' school and type symbols).
+        wanted.extend(view.extra.iter().flat_map(|e| layout::text_pictures(&e.1)));
         wanted.extend(BUBBLE.iter().map(|p| p.to_string()));
         wanted.push(CURSOR.into());
         wanted.extend(tip_frame(false).into_iter().chain(tip_frame(true)).flatten());
         wanted.push(EQUIP_FIST.into());
-        wanted.extend(PLAIN_TIP_FRAME.map(String::from));
         wanted.extend(crate::itemdata::TIP_ICONS.iter().map(|i| i.to_string()));
         self.textures.want(wanted);
 
@@ -1322,8 +1520,14 @@ impl Book {
             if let Some((_, hv)) = view.hovers.iter().rev().find(|(r, _)| layout::inside(mouse, *r)) {
                 layout::draw_extra(hv, &canvas);
             }
-            match view.bubbles.iter().rev().find(|(r, _)| layout::inside(mouse, *r)) {
+            // The book's bookmarks have Wizard101's own hover texts (SpellBookPrefsWindow's m_sTip: GUI.lang
+            // 00001702-00001710, PetsTabTooltip), in the same plain tooltip.
+            let bookmark = TABS.iter().zip(BOOKMARK_TIPS).find_map(|((_, node, _), text)| {
+                prefs.find(node).map(|i| prefs.nodes[i].rect).filter(|r| layout::inside(mouse, *r)).map(|r| (r, text.to_string()))
+            });
+            match view.bubbles.iter().rev().find(|(r, _)| layout::inside(mouse, *r)).cloned().or(bookmark) {
                 Some((_, text)) => {
+                    let text = &text;
                     let step = ui.io().delta_time.clamp(0.0, 0.25);
                     match self.bubble.as_mut() {
                         Some(b) if b.0 == *text => b.1 += step,
@@ -1335,10 +1539,7 @@ impl Book {
                 None => self.bubble = None,
             }
             if let Some((_, lines)) = view.tips.iter().rev().find(|(r, _)| layout::inside(mouse, *r)) {
-                match lines.split_first() {
-                    Some((first, rest)) if first == layout::PLAIN_TIP => self.draw_plain_tip(&canvas, rest, mouse, [width, height]),
-                    _ => self.draw_tip(&canvas, lines, mouse, [width, height]),
-                }
+                self.draw_tip(&canvas, lines, mouse, [width, height]);
             }
             draw_cursor(&draw, &self.textures, pointer.pos, height);
         } else if !view.hole.or(view.picture).is_some_and(|h| layout::inside(mouse, h))
@@ -1451,32 +1652,6 @@ impl Book {
             canvas.image(EQUIP_FIST, [x + width - 25.0, y - 14.0, x + width + 14.0, y + 22.0],
                          [0.0, 0.0, 0.5, 0.5], ImColor32::WHITE);
         }
-    }
-
-    /// Wizard101's plain hover text (Root.wad GUI/ToolTip.gui): ToolTip_Bckgrnd, a ControlWidget of the nine
-    /// GUI/Tooltip/bubble_* pieces (a white bubble with a thin dark rim and round corners), sized to its parent
-    /// (200x50 by default), and ToolTipText inset 8 px on every side: WizardNormal 0.4, black (FF000000), centred
-    /// both ways, no word wrap. Here it grows past 200x50 to fit longer text; lines are "\n" breaks or separate lines.
-    fn draw_plain_tip(&self, canvas: &Canvas, lines: &[String], mouse: [f32; 2], screen: [f32; 2]) {
-        let Some(font) = self.fonts.get("WizardNormal") else { return };
-        let lines: Vec<&str> = lines.iter().flat_map(|l| l.split('\n')).map(str::trim).collect();
-        let (scale, inset) = (PLAIN_TIP_SCALE, 8.0);
-        let line_h = font.line_height * scale;
-        let widest = lines.iter().map(|l| font.width(l) * scale).fold(0.0, f32::max);
-        let width = (widest + 2.0 * inset + 8.0).max(PLAIN_TIP_SIZE[0]);
-        let height = (lines.len() as f32 * line_h + 2.0 * inset + 4.0).max(PLAIN_TIP_SIZE[1]);
-        let right = (screen[0] - canvas.origin[0]) / canvas.s;
-        let bottom = (screen[1] - canvas.origin[1]) / canvas.s;
-        let top = -canvas.origin[1] / canvas.s;
-        let mut x = mouse[0] + 22.0;
-        if x + width + 20.0 > right {
-            x = mouse[0] - 12.0 - width;
-        }
-        let y = (mouse[1] + 8.0).min(bottom - height).max(top);
-        canvas.border(&PLAIN_TIP_FRAME.map(|p| Some(p.to_string())), [x, y, x + width, y + height], ImColor32::WHITE);
-        let text = lines.join("\n");
-        let style = TextStyle::new("WizardNormal", scale, ImColor32::BLACK).centred();
-        canvas.text(&text, [x + inset, y + inset, x + width - inset, y + height - inset], &style, false);
     }
 
     /// QuestListWindow's four card windows, each with QuestInfoWindow.gui drawn into it for a quest in progress.

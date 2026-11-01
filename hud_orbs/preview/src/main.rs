@@ -234,6 +234,11 @@ fn main() {
         ("2c_backpack_armour", pages::Tab::Backpack, 1, [0.74, 0.30], ""),
         ("2d_backpack_talismans", pages::Tab::Backpack, 6, [0.74, 0.30], ""),
         ("2e_backpack_arrows", pages::Tab::Backpack, 7, [0.74, 0.30], ""),
+        // Round 16 (book): the Equipment Sets page, a set's hover, a bookmark's hover, a stat's hover.
+        ("2f_backpack_gear_sets", pages::Tab::Backpack, 0, [0.0, 0.0], "gear"),
+        ("2g_backpack_gear_tip", pages::Tab::Backpack, 0, [0.70, 0.335], "gear"),
+        ("1e_bookmark_tip", pages::Tab::Character, 0, [0.765, 0.235], ""),
+        ("1f_stat_tip", pages::Tab::Character, 0, [0.515, 0.42], ""),
         ("3_pets", pages::Tab::Pets, 0, [0.0, 0.0], ""),
         ("3b_pets_ash", pages::Tab::Pets, 0, [0.0, 0.0], "pet:1"),
         ("4_deck", pages::Tab::Deck, 0, [0.565, 0.35], ""),
@@ -321,6 +326,9 @@ fn main() {
         }
         if show == "markers" {
             book.preview_closed();
+        }
+        if show == "gear" {
+            book.preview_gear(&game);
         }
         if show == "materials" {
             book.preview_materials();

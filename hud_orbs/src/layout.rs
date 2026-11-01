@@ -289,8 +289,9 @@ pub struct View {
     pub over_hole: HashSet<usize>,
     /// Hover texts: (rect, lines), the first line the title.
     pub tips: Vec<([f32; 4], Vec<String>)>,
-    /// Hover texts in Wizard101's plain tooltip (ToolTip.gui: the white bubble, black WizardNormal 0.4, centred):
-    /// (rect, text).
+    /// Hover texts in Wizard101's plain tooltip (ToolTip.gui: the white rounded bubble, black WizardNormal 0.4,
+    /// centred; Book's draw_bubble): (rect, text, "\n" between lines). The one style for every button, tab and
+    /// label hover in the book; `tips` is only for items (Wizard101's item tooltip). Add with plain_tip.
     pub bubbles: Vec<([f32; 4], String)>,
     /// Things drawn only while the mouse is over a rect (the deck's enlarged spell card): (rect, what to draw, in
     /// page pixels, with draw_extra).
@@ -330,17 +331,16 @@ impl View {
         }
     }
 
-    /// A hover text in Wizard101's plain button tooltip (ToolTip.gui: white rounded bubble, black text), not the
-    /// item tooltip: the lines are marked with PLAIN_TIP first.
+    /// A hover text in Wizard101's plain tooltip (ToolTip.gui: white rounded bubble, black WizardNormal, centred,
+    /// fading in), the style Wizard101 gives every control's m_sTip: one line per entry (long ones wrap). Use it for
+    /// anything that is not an item; `tip` is Wizard101's item tooltip.
     pub fn plain_tip(&mut self, rect: [f32; 4], lines: Vec<String>) {
-        if !lines.is_empty() {
-            self.tips.push((rect, std::iter::once(PLAIN_TIP.to_string()).chain(lines).collect()));
+        let text = lines.join("\n");
+        if !text.trim().is_empty() {
+            self.bubbles.push((rect, text));
         }
     }
 }
-
-/// The first line of a View::plain_tip.
-pub const PLAIN_TIP: &str = "\u{1}plain";
 
 /// Loaded art: image path (as in the layouts) -> texture and size in pixels.
 #[derive(Default)]
@@ -436,10 +436,16 @@ impl Canvas<'_, '_> {
     }
 
     pub fn image(&self, name: &str, r: [f32; 4], uv: [f32; 4], tint: ImColor32) {
-        let Some((texture, _)) = self.textures.get(name) else { return };
+        let Some((texture, size)) = self.textures.get(name) else { return };
         if r[2] <= r[0] || r[3] <= r[1] {
             return;
         }
+        // The sampler wraps: an image's outermost pixels would blend with the opposite edge (the book background's
+        // dark left spine showed as a thin line right of the bookmarks, Ryan round 16). Edges at exactly 0 or 1 stop
+        // half a texel in.
+        let (hu, hv) = (0.5 / size[0].max(1.0), 0.5 / size[1].max(1.0));
+        let edge = |t: f32, h: f32| if t == 0.0 { h } else if t == 1.0 { 1.0 - h } else { t };
+        let uv = [edge(uv[0], hu), edge(uv[1], hv), edge(uv[2], hu), edge(uv[3], hv)];
         if let Some(h) = self.hole.get() {
             if h[0] < r[2] && h[2] > r[0] && h[1] < r[3] && h[3] > r[1] {
                 // Draw the parts of the image around the hole: above, below, left, right.
@@ -518,6 +524,10 @@ impl Canvas<'_, '_> {
         } else if lower.contains("<right>") {
             align = Align::Right;
         }
+        // Inline pictures (Wizard101's "<image;GUI/Icons/Type_Damage.png>" markup, as its card texts use for
+        // $dT_image$ / $Damage_image$): each becomes one private-use character, as wide as the line is tall.
+        let (raw, pictures) = inline_pictures(raw);
+        let raw = raw.as_str();
         let mut plain = String::with_capacity(raw.len());
         let mut in_tag = false;
         for c in raw.chars() {
@@ -536,6 +546,9 @@ impl Canvas<'_, '_> {
             .or_else(|| self.fonts.values().next());
         let Some(font) = font else { return };
         let t = style.tracking;
+        let picture_w = font.line_height * PICTURE_SIZE;
+        let pictures_in = |l: &str| l.chars().filter(|c| picture_index(*c).is_some()).count() as f32;
+        let measure = |l: &str| font.width_tracked(l, t) + pictures_in(l) * (picture_w + 2.0 * PICTURE_GAP);
         let width = r[2] - r[0];
         let height = r[3] - r[1];
         let base = if style.scale > 0.0 { style.scale } else { (height * 0.8 / font.line_height).max(0.1) };
@@ -548,7 +561,7 @@ impl Canvas<'_, '_> {
                     let mut line = String::new();
                     for word in paragraph.split_whitespace() {
                         let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-                        if font.width_tracked(&candidate, t) > max_w && !line.is_empty() {
+                        if measure(&candidate) > max_w && !line.is_empty() {
                             lines.push(std::mem::take(&mut line));
                             line = word.to_string();
                         } else {
@@ -576,7 +589,7 @@ impl Canvas<'_, '_> {
         }
         // One-line text: shrink to fit (down to 50%), then cut with "..."; lines taller than the box shrink too.
         if !style.wrap {
-            let widest = lines.iter().map(|l| font.width_tracked(l, t)).fold(0.0, f32::max) * scale;
+            let widest = lines.iter().map(|l| measure(l)).fold(0.0, f32::max) * scale;
             if widest > width && widest > 0.0 {
                 scale *= (width / widest).max(0.5);
             }
@@ -585,7 +598,7 @@ impl Canvas<'_, '_> {
                 scale *= (height * 1.3 / tall).max(0.6);
             }
             let max_w = width / scale;
-            for line in lines.iter_mut() {
+            for line in lines.iter_mut().filter(|l| pictures_in(l) == 0.0) {
                 *line = font.fit(line, max_w.max(1.0), t);
             }
         }
@@ -600,7 +613,7 @@ impl Canvas<'_, '_> {
             if y + line_h > r[3] + line_h * 0.25 && style.wrap {
                 break;
             }
-            let w = font.width_tracked(&line, t) * scale;
+            let w = measure(&line) * scale;
             let x = match align {
                 Align::Left => r[0],
                 Align::Centre => r[0] + (width - w) / 2.0,
@@ -617,10 +630,69 @@ impl Canvas<'_, '_> {
             if style.shadow {
                 font.draw_tracked(self.draw, &line, [at[0] + o * 1.5, at[1] + o * 1.5], sc, dark, t);
             }
-            font.draw_tracked(self.draw, &line, at, sc, colour, t);
+            if pictures_in(&line) == 0.0 {
+                font.draw_tracked(self.draw, &line, at, sc, colour, t);
+            } else {
+                // Runs of text and pictures, left to right; a picture sits on the line's middle.
+                let tint = fade(ImColor32::WHITE, self.alpha);
+                let mut pen = x;
+                let mut run = String::new();
+                let flush = |run: &mut String, pen: &mut f32| {
+                    if !run.is_empty() {
+                        font.draw_tracked(self.draw, run, self.at(*pen, y), sc, colour, t);
+                        *pen += font.width_tracked(run, t) * scale;
+                        run.clear();
+                    }
+                };
+                for c in line.chars() {
+                    match picture_index(c).and_then(|i| pictures.get(i)) {
+                        Some(path) => {
+                            flush(&mut run, &mut pen);
+                            let side = picture_w * scale;
+                            let (px, py) = (pen + PICTURE_GAP * scale, y + (line_h - side) / 2.0);
+                            self.image(path, [px, py, px + side, py + side], [0.0, 0.0, 1.0, 1.0], tint);
+                            pen += (picture_w + 2.0 * PICTURE_GAP) * scale;
+                        }
+                        None => run.push(c),
+                    }
+                }
+                flush(&mut run, &mut pen);
+            }
             y += line_h;
         }
     }
+}
+
+/// An inline picture's side (line heights) and the space each side of it (font pixels).
+const PICTURE_SIZE: f32 = 1.0;
+const PICTURE_GAP: f32 = 1.0;
+/// First private-use character standing for an inline picture.
+const PICTURE_CHAR: u32 = 0xE000;
+
+fn picture_index(c: char) -> Option<usize> {
+    (c as u32).checked_sub(PICTURE_CHAR).filter(|i| *i < 0x100).map(|i| i as usize)
+}
+
+/// `text` with every "<image;path>" replaced by a private-use character, and the paths in order.
+fn inline_pictures(text: &str) -> (String, Vec<String>) {
+    let mut out = String::with_capacity(text.len());
+    let mut paths = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("<image;") {
+        let after = &rest[at + 7..];
+        let Some(end) = after.find('>') else { break };
+        out.push_str(&rest[..at]);
+        out.push(char::from_u32(PICTURE_CHAR + paths.len() as u32).unwrap_or(' '));
+        paths.push(after[..end].to_string());
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    (out, paths)
+}
+
+/// The art of a text's inline pictures (to load it).
+pub fn text_pictures(text: &str) -> Vec<String> {
+    inline_pictures(text).1
 }
 
 /// What the mouse is over after drawing.

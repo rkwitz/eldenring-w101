@@ -106,6 +106,10 @@ pub struct State {
     /// Set while binding: what the page's equip button acts on (the Backpack's chosen item, the Pets page's
     /// spirit ash), if it can be equipped.
     equip_target: Option<u32>,
+    /// The Backpack shows Wizard101's Equipment Sets page (EquipmentManagerWindow) instead of the items.
+    pub gear_view: bool,
+    /// The chosen equipment set (row) there.
+    pub gear_chosen: usize,
 }
 
 /// Something on a page that a click (or double click) acts on, besides its layout buttons.
@@ -123,6 +127,8 @@ pub enum Hit {
     Setting(usize, i32),
     /// A teleport marker on the map page (the grace): the warp flag to set, as Action::Warp.
     Warp(u32),
+    /// An equipment set's row (index): choose it; a double click equips it.
+    GearSet(usize),
 }
 
 pub enum Action {
@@ -142,6 +148,12 @@ pub enum Action {
     Equip(u32),
     /// A warp button on the map page: the event flag that asks the mod's common.emevd event to warp the player.
     Warp(u32),
+    /// The Equipment Sets page: save what is worn now as a new set, equip set n, delete set n, move set n up (-1)
+    /// or down (+1).
+    GearSave,
+    GearEquip(usize),
+    GearDelete(usize),
+    GearMove(usize, i32),
 }
 
 /// Event flags the map page's buttons set; common.emevd events (tools/emevd.py book_warps) see one come on, clear
@@ -170,6 +182,8 @@ pub struct Data<'a> {
     pub position: Option<([f32; 3], i32, i32)>,
     /// Per ACHIEVEMENTS entry: earned (its event flag), or None when not tracked / not readable.
     pub achieved: &'a [Option<bool>],
+    /// The character's saved equipment sets (the Backpack's Equipment Sets page).
+    pub gear_sets: &'a [GearSet],
 }
 
 /// Elden Ring's achievements in Steam's own order (API names ACH00-ACH41) and with Steam's own display names (the log's
@@ -243,6 +257,7 @@ impl State {
         self.sub = 0;
         self.pet = 0; // the Pets page opens on the equipped spirit ash
         self.filter_node = None;
+        self.gear_view = false;
     }
 
     pub fn step_sub(&mut self, delta: i32) {
@@ -436,6 +451,7 @@ pub fn bind(tab: Tab, l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.equip_target = None;
     match tab {
         Tab::Character => character(l, d, st, v),
+        Tab::Backpack if st.gear_view => gear_sets(l, d, st, v),
         Tab::Backpack => backpack(l, d, st, v),
         Tab::Pets => pets(l, d, st, v),
         Tab::Deck => deck(l, d, st, v),
@@ -466,6 +482,17 @@ pub fn click(tab: Tab, l: &Layout, id: usize, st: &mut State) -> Action {
                 (st.sub, st.page) = (i, 0);
             }
         }
+        // The Equipment Sets page (EquipmentManagerWindow) and the Backpack's button to it.
+        (Tab::Backpack, "EquipmentManager") => {
+            st.gear_view = true;
+            st.page = 0;
+        }
+        (Tab::Backpack, "Backpack_Toggle" | "Backpack_Toggle2") if st.gear_view => st.gear_view = false,
+        (Tab::Backpack, "Create") if st.gear_view => return Action::GearSave,
+        (Tab::Backpack, "Equip") if st.gear_view => return Action::GearEquip(st.gear_chosen),
+        (Tab::Backpack, "Delete") if st.gear_view => return Action::GearDelete(st.gear_chosen),
+        (Tab::Backpack, "MoveUpButton") if st.gear_view => return Action::GearMove(st.gear_chosen, -1),
+        (Tab::Backpack, "MoveDownButton") if st.gear_view => return Action::GearMove(st.gear_chosen, 1),
         (Tab::Backpack, "Equip_Item") | (Tab::Pets, "EquipButton") => {
             if let Some(id) = st.equip_target {
                 return Action::Equip(id);
@@ -592,6 +619,21 @@ const BADGE_BAR: [f32; 4] = [474.0, 9.5, 675.0, 41.0];
 /// The text area inside the row's Button_Item frame (256 x 32): inside its gold line, x 11-243, y 5-24.
 const BADGE_TEXT: [f32; 4] = [11.0 / 256.0, 5.0 / 32.0, 243.0 / 256.0, 24.0 / 32.0];
 
+/// Wizard101's rank titles (Root.wad Locale/en-US/Levels.lang, in its order: Novice at level 1 .. Eternal), on a
+/// ladder for Elden Ring's levels 1-713 (the book's own spread, Ryan round 16): ten levels a rank up to Archmage
+/// at 110 (roughly where a first playthrough ends), then wider steps for the levels of later playthroughs.
+const RANKS: [(u32, &str); 19] = [
+    (1, "Novice"), (10, "Apprentice"), (20, "Initiate"), (30, "Journeyman"), (40, "Adept"), (50, "Magus"),
+    (60, "Master"), (70, "Grandmaster"), (80, "Legendary"), (95, "Transcendent"), (110, "Archmage"),
+    (125, "Promethean"), (150, "Exalted"), (175, "Prodigious"), (200, "Champion"), (250, "Paragon"),
+    (300, "Prime"), (400, "Supreme"), (550, "Eternal"),
+];
+
+/// The rank title for an Elden Ring level.
+pub fn rank_title(level: u32) -> &'static str {
+    RANKS.iter().rev().find(|(from, _)| level >= *from).map_or(RANKS[0].1, |r| r.1)
+}
+
 fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.subs = 2;
     let sub = st.sub % 2;
@@ -610,20 +652,20 @@ fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     };
     let name = if sheet.name.is_empty() { "Tarnished".to_string() } else { sheet.name.clone() };
     v.set(l.find("CharacterName"), centre(&name));
-    v.set(l.find("CharLevel"), format!("Level {}", sheet.level));
+    // Wizard101's GUI.lang StatsPageLevel "#1:$RANK$ (Level #2:$LEVEL$)" in CharLevel, the rank from
+    // Elden Ring's level (rank_title).
+    v.set(l.find("CharLevel"), format!("{} (Level {})", rank_title(sheet.level), sheet.level));
     v.set(l.find("CharTitle"), "Tarnished");
     // The school badge on the portrait's ring: the character's school as the reagent cards' Icon_<School> symbol
     // on their medallion. Elden Ring has no school, so it follows the casting stat: Intelligence = Myth (the
     // deck's Glintstone), Faith = Life (Golden Order), Arcane = Death; none of them past 20 = Balance.
+    // Drawn as Wizard101 draws it: the node's own Art_School_<School> badge (the symbol on the school's colour,
+    // filling the gold ring), no hover text (Ryan, round 16).
     if let Some(b) = l.find("SchoolIcon") {
         let [int, fai, arc] = [sheet.attributes[5], sheet.attributes[6], sheet.attributes[7]];
         let school = if int.max(fai).max(arc) <= 20 { "Balance" }
             else if int >= fai && int >= arc { "Myth" } else if fai >= arc { "Life" } else { "Death" };
-        let r = l.nodes[b].rect;
-        v.node_art.insert(b, REAGENT_MEDALLION.into());
-        let inset = (r[2] - r[0]) * 0.2;
-        v.images.push(([r[0] + inset, r[1] + inset, r[2] - inset, r[3] - inset], school_icon(school), [0.0, 0.0, 1.0, 1.0]));
-        v.tip(r, vec![format!("School: {school}"), "From your highest casting stat".into()]);
+        v.node_art.insert(b, school_art(school));
     }
     if let Some(s) = d.stats {
         v.set(l.find("Health"), centre(&format!("{}/{}", s.hp, s.max_hp)));
@@ -666,7 +708,7 @@ fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         let left = if has_icon { r[0] + size + 2.0 } else { r[0] };
         v.add([left, r[1], r[2], r[3]], text, TextStyle::new("WizardNormal", 0.42, colour).centred());
     }
-    v.tip([FLASK_ROWS[0][0], FLASK_ROWS[0][1], FLASK_ROWS[1][2], FLASK_ROWS[1][3]],
+    v.plain_tip([FLASK_ROWS[0][0], FLASK_ROWS[0][1], FLASK_ROWS[1][2], FLASK_ROWS[1][3]],
           vec!["Flasks".into(), format!("Crimson Tears: {hp} of {hp_max}"), format!("Cerulean Tears: {fp} of {fp_max}")]);
     // The portrait: the character's head (hat on), drawn from Elden Ring's models, on the starry background.
     if let Some(p) = l.find("wndCharacterPortrait") {
@@ -707,7 +749,7 @@ fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 v.style.insert(col, TextStyle::new("WizardNormal", 0.45, BLACK));
                 let r = l.nodes[col].rect;
                 let top = l.nodes[lw].rect[1] - 26.0;
-                v.tip([r[0], top, r[2], r[3]], vec![about[i].to_string(), values[i].clone()]);
+                v.plain_tip([r[0], top, r[2], r[3]], vec![format!("{}: {}", about[i], values[i])]);
             }
         }
         if let Some(acc) = l.find("AccuracyStats") {
@@ -726,7 +768,7 @@ fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 // The label under the box (this section has one row).
                 v.add([r[0], r[3] - 8.0, r[2], r[3] + 8.0], labels[i].to_string(),
                       TextStyle::new("WizardNormal", 0.3, BLACK).centred());
-                v.tip([r[0], r[1] - 26.0, r[2], r[3] + 8.0], vec![about[i].to_string(), values[i].clone()]);
+                v.plain_tip([r[0], r[1] - 26.0, r[2], r[3] + 8.0], vec![format!("{}: {}", about[i], values[i])]);
             }
             let ratio = if st3.max_load > 0.0 { st3.load / st3.max_load } else { 0.0 };
             let roll = match ratio {
@@ -735,7 +777,7 @@ fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 x if x <= 1.0 => "Heavy load",
                 _ => "Overloaded",
             };
-            v.tip(l.nodes[acc].rect, vec!["Equip load".into(), format!("{:.1} / {:.1}", st3.load, st3.max_load),
+            v.plain_tip(l.nodes[acc].rect, vec!["Equip load".into(), format!("{:.1} / {:.1}", st3.load, st3.max_load),
                                           roll.into()]);
         }
     } else {
@@ -827,6 +869,124 @@ const BACKPACK: [(&str, Filter, &str); 12] = [
 
 /// Where the Backpack's picture looks for category `sub` (centre height, view height, metres): helms at the
 /// head, chest armour at the body, gauntlets and greaves at the legs, everything else the whole wizard.
+/// A saved equipment set: its name and what it puts in each of GEAR_SLOTS (ChrAsm slot, param ID as
+/// PlayerGameData's equipment_param_ids has it).
+#[derive(Clone, Debug, PartialEq)]
+pub struct GearSet {
+    pub name: String,
+    pub slots: Vec<(u32, i32)>,
+}
+
+/// The ChrAsm slots an equipment set keeps: weapons (left 0 2 4, right 1 3 5), arrows and bolts (6-9), armour
+/// (12-15), talismans (17-20).
+pub const GEAR_SLOTS: [u32; 18] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 17, 18, 19, 20];
+/// Wizard101's Equipment Sets page (the Backpack's EquipmentManager button), its rows and Wizard101's set names
+/// (EquipmentSetNames.lang "$PART0$ $PART1$ Set $PART2$": a school, a purpose from its second wheel, a number).
+pub const GEAR_PAGE: &str = "EquipmentManagerWindow";
+pub const GEAR_ROWS: usize = 9;
+const GEAR_PURPOSES: [&str; 9] = ["Main", "Questing", "Boss", "Dungeon", "PvP", "Speed", "Attack", "Shield", "Healer"];
+
+/// What the character's equipment is in a set's terms.
+pub fn gear_now(sheet: &Sheet) -> Vec<(u32, i32)> {
+    GEAR_SLOTS.iter().map(|s| (*s, sheet.equipment[*s as usize])).collect()
+}
+
+/// A new set's name (Wizard101's naming), the n-th set of a character whose school is `school`.
+pub fn gear_name(school: &str, n: usize) -> String {
+    format!("{school} {} Set {}", GEAR_PURPOSES[n % GEAR_PURPOSES.len()], n % 9 + 1)
+}
+
+/// The character's Wizard101 school (the Character page's badge): from the highest casting stat, Balance when none
+/// is past 20.
+pub fn char_school(sheet: &Sheet) -> &'static str {
+    let [int, fai, arc] = [sheet.attributes[5], sheet.attributes[6], sheet.attributes[7]];
+    if int.max(fai).max(arc) <= 20 { "Balance" }
+    else if int >= fai && int >= arc { "Myth" } else if fai >= arc { "Life" } else { "Death" }
+}
+
+/// An empty slot's param ID: unarmed (110000) in a hand, the bare head / body / arms / legs (10000-10300), -1 or 0
+/// for arrows and talismans.
+pub fn gear_empty(slot: u32, id: i32) -> bool {
+    match slot {
+        0..=5 => id == 110000 || id < 0,
+        12..=15 => id < 0 || (10000..=10300).contains(&id) && id % 100 == 0,
+        _ => id <= 0,
+    }
+}
+
+/// The inventory item ID (with its category bits) of a set's param ID in `slot`.
+pub fn gear_item(slot: u32, id: i32) -> u32 {
+    let category = match slot {
+        12..=15 => 0x1000_0000,
+        17..=20 => 0x2000_0000,
+        _ => 0,
+    };
+    category | id as u32
+}
+
+/// Wizard101's Equipment Sets page: the character picture on the left as on the Backpack, the saved sets as
+/// item rows on the right (the closed hand beside the one being worn), and along the bottom its Create (+),
+/// Equip (fist), Delete (-), Move Down and Move Up buttons; the Backpack button under the picture goes back.
+fn gear_sets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
+    st.subs = 1;
+    if let Some(c) = l.find("Tab_EquipSet") {
+        v.checked.insert(c);
+        v.plain_tip(l.nodes[c].rect, vec!["Equipment Sets".into()]);
+    }
+    v.set(l.find("title"), centre("Equipment Sets"));
+    v.set(l.find("Backpack_Toggle2"), centre("Backpack"));
+    for (b, tip) in [("Create", "Save what you wear as a new set"), ("Equip", "Equip"), ("Delete", "Delete"),
+                     ("MoveUpButton", "Move Up"), ("MoveDownButton", "Move Down"), ("Backpack_Toggle", "Backpack"),
+                     ("Backpack_Toggle2", "Backpack")] {
+        if let Some(n) = l.find(b) {
+            v.plain_tip(l.nodes[n].rect, vec![tip.into()]);
+        }
+    }
+    if let Some(p) = l.find("3DCharacter") {
+        v.node_images.insert(p, MODEL_FULL.into());
+    }
+    let sets = d.gear_sets;
+    st.gear_chosen = st.gear_chosen.min(sets.len().saturating_sub(1));
+    let now = d.sheet.map(gear_now);
+    for i in 0..GEAR_ROWS {
+        let (Some(row), icon) = (l.find(&format!("Item_{i}")), l.find(&format!("equippedIcon{i}"))) else { continue };
+        let Some(set) = sets.get(i) else {
+            v.show(Some(row), false);
+            v.show(icon, false);
+            continue;
+        };
+        let r = l.nodes[row].rect;
+        v.add([r[0] + 26.0, r[1], r[2] - 14.0, r[3]], set.name.clone(),
+              TextStyle::new("WizardFancy", 0.42, LIGHT_YELLOW).centred());
+        let worn = now.as_ref().is_some_and(|n| *n == set.slots);
+        v.show(icon, worn);
+        if i == st.gear_chosen {
+            v.checked.insert(row);
+        }
+        // What the set holds, in the plain tooltip.
+        let names: Vec<String> = set.slots.iter().filter(|(slot, id)| !gear_empty(*slot, *id))
+            .map(|(slot, id)| d.names.item(gear_item(*slot, *id))).collect();
+        v.plain_tip(r, vec![set.name.clone(), names.join("\n")]);
+        st.hits.push((r, Hit::GearSet(i)));
+    }
+    if sets.is_empty() {
+        v.add([415.0, 200.0, 692.0, 300.0], "No equipment sets yet.\nPut on what you want, then click +.",
+              TextStyle::new("WizardNormal", 0.45, BLACK).centred().wrapped());
+    }
+    if sets.is_empty() {
+        grey(l, v, &["Equip", "Delete", "MoveUpButton", "MoveDownButton"]);
+    }
+    if st.gear_chosen == 0 {
+        grey(l, v, &["MoveUpButton"]);
+    }
+    if st.gear_chosen + 1 >= sets.len() {
+        grey(l, v, &["MoveDownButton"]);
+    }
+    if sets.len() >= GEAR_ROWS || d.sheet.is_none() {
+        grey(l, v, &["Create"]);
+    }
+}
+
 pub fn backpack_zoom(sub: usize) -> [f32; 2] {
     match BACKPACK[sub % BACKPACK.len()].1 {
         Filter::Head => [1.58, 0.62],
@@ -853,9 +1013,19 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             v.show(l.find(&format!("{prefix}{i}")), false);
         }
     }
-    grey(l, v, &["Tab_HousingStuff", "Tab_MonsterMagic", "Tab_Photography", "EquipmentManager"]);
-    // Only the equip button and the (greyed) armor sets button stay along the bottom.
+    grey(l, v, &["Tab_HousingStuff", "Tab_MonsterMagic", "Tab_Photography"]);
+    // Only the equip button and the equipment sets button stay along the bottom.
     hide(l, v, &["Lock_Item", "Socket_Item", "btnFeedPet", "RecyclingBinButton", "QuickSell_Item", "Trash_Item"]);
+    // Wizard101's hover texts (the buttons' m_sTip, in the plain tooltip): each tab's category, the equipment
+    // sets button.
+    for (b, _, title) in BACKPACK {
+        if let Some(n) = l.find(b) {
+            v.plain_tip(l.nodes[n].rect, vec![if b == "Tab_All" { "All Items" } else { title }.to_string()]);
+        }
+    }
+    if let Some(n) = l.find("EquipmentManager") {
+        v.plain_tip(l.nodes[n].rect, vec!["Equipment Sets".into()]);
+    }
     let rows: Vec<usize> = (1..=8).filter_map(|i| l.find(&format!("Item_{i}"))).collect();
     let Some(sheet) = d.sheet else {
         for r in &rows {
@@ -942,6 +1112,7 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             if *equipped {
                 v.node_art.insert(b, UNEQUIP_ART.into());
             }
+            v.plain_tip(l.nodes[b].rect, vec![if *equipped { "Unequip" } else { "Equip" }.into()]);
         }
         _ => grey(l, v, &["Equip_Item"]),
     }
@@ -994,9 +1165,11 @@ pub fn pet_age(level: u32) -> usize {
 
 fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.subs = 1;
-    grey(l, v, &["SnackButton", "EquipJewelButton", "ToggleTalentDisplay", "PetTomeButton", "PetBadgesButton"]);
+    // Only the equip button stays along the bottom (Ryan, round 16: no greyed Pedigree, Snack, Jewel, Tome or
+    // Badges buttons).
+    hide(l, v, &["SnackButton", "EquipJewelButton", "ToggleTalentDisplay", "PetTomeButton", "PetBadgesButton"]);
     hide(l, v, &["wndRatingBkg", "wndAgingBkg", "eggHatchTimer", "_NOT_USED_SnackToggleWin", "ctrlGenetics", "cardBkg",
-                 "spellCard", "spellCardSmall1", "spellCardSmall2", "spellCardSmall3", "spriteSchoolIcon"]);
+                 "spellCard", "spellCardSmall1", "spellCardSmall2", "spellCardSmall3"]);
     // (name, kind, upgrade level, item)
     let mut pets: Vec<(String, String, Option<u32>, u32)> = Vec::new();
     if let Some(sheet) = d.sheet {
@@ -1026,7 +1199,6 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         v.show(l.find("wndContent"), false);
         v.show(l.find("wndMessage"), true);
         v.set(l.path("wndMessage/txtMessage"), centre("You do not have Torrent or any spirit ashes yet."));
-        grey(l, v, &["PetTomeButton"]);
         return;
     }
     st.pets = pets.len();
@@ -1036,14 +1208,31 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     // The equip button (Wizard101's, which makes a pet the one that follows you): a spirit ash goes into the
     // quick items, where Elden Ring uses it from; the open hand when it is there already (a click takes it out),
     // the fist when not. Torrent is always at hand.
+    let equipped = level.is_some() && d.sheet.is_some_and(|sheet| sheet.quick_items.contains(id));
     match (d.sheet, level) {
-        (Some(sheet), Some(_)) => {
+        (Some(_), Some(_)) => {
             st.equip_target = Some(*id);
-            if sheet.quick_items.contains(id) {
+            if equipped {
                 v.node_art.insert(l.find("EquipButton").unwrap_or(usize::MAX), UNEQUIP_ART.into());
             }
         }
         _ => grey(l, v, &["EquipButton"]),
+    }
+    if let (Some(b), Some(_)) = (l.find("EquipButton"), level) {
+        v.plain_tip(l.nodes[b].rect, vec![if equipped { "Unequip" } else { "Equip" }.into()]);
+    }
+    for (b, text) in [("btnPrevPet", "Previous Pet"), ("btnNextPet", "Next Pet")] {
+        if let (Some(n), true) = (l.find(b), pets.len() > 1) {
+            v.plain_tip(l.nodes[n].rect, vec![text.into()]);
+        }
+    }
+    // The closed hand right of the name (wndEquippedIcon) only on the spirit ash that is equipped.
+    v.show(l.find("wndEquippedIcon"), equipped);
+    // The pet's school (spriteSchoolIcon, Art_School_<School>, left of "Spirit Ash (n of m)").
+    let school = if level.is_some() { ash_school(name) } else { "Life" };
+    if let Some(i) = l.find("spriteSchoolIcon") {
+        v.show(Some(i), true);
+        v.node_art.insert(i, school_art(school));
     }
     v.set(l.find("txtPetName"), centre(name));
     // Between the arrow buttons.
@@ -1108,11 +1297,14 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     };
     // No Pet Derby here (Wizard101 puts the Derby tab beside it), so the Talents tab runs the column's full width
     // (the talent rows' 293).
-    let tab = [ox, oy - 3.0, ox + 293.0, oy + 28.0];
+    // PetGeneticsControl's btnTalents at its own size (0,-3 - 149,28), centred over the rows (Ryan, round 16),
+    // with lblTalents (7,2 - 79,21) and txtTalents (85,2 - 140,21, right): yellow WizardFancy 0.45, drop shadow.
+    let tx = ox + (293.0 - 149.0) / 2.0;
+    let tab = [tx, oy - 3.0, tx + 149.0, oy + 28.0];
     v.backs.push((tab, "GUI/Shopping/Button_Item.png".into(), [0.0, 0.0, 1.0, 0.125]));
-    let gold = TextStyle::new("WizardFancy", 0.45, YELLOW);
-    v.add([ox + 9.0, oy + 2.0, ox + 140.0, oy + 21.0], "Talents", gold.clone());
-    v.add([ox + 150.0, oy + 2.0, ox + 284.0, oy + 21.0], format!("{0}/{0}", talents.len()), gold.right());
+    let gold = TextStyle::new("WizardFancy", 0.45, YELLOW).shadowed();
+    v.add([tx + 7.0, oy + 2.0, tx + 79.0, oy + 21.0], "Talents", gold.clone());
+    v.add([tx + 85.0, oy + 2.0, tx + 140.0, oy + 21.0], format!("{0}/{0}", talents.len()), gold.right());
     let mut y = oy + 24.0;
     for (t, cell) in &talents {
         // PetTalentControl.gui, in its own drawing order: the window's Background_Pet_Talent, then sprtFrame
@@ -1160,8 +1352,8 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         let owned = pets.iter().filter(|p| p.2.is_some()).count();
         let rows: Vec<(&str, String)> = match level {
             // (The upgrade level is the hat bar's alone, Ryan round 15; the age is the age bar's.)
-            Some(level) => vec![
-                ("Age", PET_AGES[pet_age(*level)].1.to_string()),
+            // (No age: the age bar above shows it, Ryan round 16.)
+            Some(_) => vec![
                 ("Summoned", "Rebirth Monuments".into()),
                 ("Upgraded by", "Roderika".into()),
                 ("Spirit ashes", owned.to_string()),
@@ -1346,7 +1538,8 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
     }
     // What it does: Wizard101's type icon in the box at the picture's bottom right (98,97 .. 125,124).
     let (y0, y1) = (card(100.0, 99.0), card(123.0, 122.0));
-    v.images.push(([y0[0], y0[1], y1[0], y1[1]], spell_type(d.items, raw).into(), [0.0, 0.0, 1.0, 1.0]));
+    let kind = spell_type(d.items, raw);
+    v.images.push(([y0[0], y0[1], y1[0], y1[1]], kind.into(), [0.0, 0.0, 1.0, 1.0]));
     let (t0, t1) = (card(8.0, 4.0), card(120.0, 28.0));
     v.add([t0[0], t0[1], t1[0], t1[1]], name, TextStyle::new("WizardFancy", 0.34 * k, YELLOW).centred().outlined());
     if let Some(spell) = spell {
@@ -1357,17 +1550,35 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
         let mut needs: Vec<String> = ["Int", "Fai", "Arc"].iter().zip(spell.requirements).filter(|(_, v)| *v > 0)
             .map(|(n, v)| format!("{n} {v}")).collect();
         needs.insert(0, format!("{} slot{}", spell.slots.max(1), if spell.slots > 1 { "s" } else { "" }));
-        let text = if effect.is_empty() { needs.join("  ") } else { format!("{effect}\n{}", needs.join("  ")) };
+        // Wizard101's card text grammar (Spell.lang: "80-120 #1:$dT_image$ #2:$Damage_image$", the client
+        // drawing $dT_image$ as Icons/Icon_<School> and $Damage_image$ as Icons/Type_Damage): attacks read
+        // "<school symbol><attack symbol>", area attacks put Wizard101's all-enemies symbol (Type_AOE) first, other
+        // spells show their type symbol (Heal, Ward, Charm, ...). Elden Ring keeps no damage number per spell
+        // (it comes from the cast's bullets), so the symbols lead the line on their own.
+        let school_pic = deck_school_icon(DECK_TABS[tab].0).map(|i| format!("<image;{i}>")).unwrap_or_default();
+        let symbols = match kind {
+            "GUI/Icons/Type_AOE.png" => format!("<image;{kind}>: {school_pic}<image;GUI/Icons/Type_Damage.png>"),
+            "GUI/Icons/Type_Damage.png" | "GUI/Icons/Type_DamageOverTime.png" => format!("{school_pic}<image;{kind}>"),
+            _ => format!("<image;{kind}>"),
+        };
+        let mut lines = vec![symbols];
+        if !effect.is_empty() {
+            lines.push(effect);
+        }
+        lines.push(needs.join("  "));
+        // In the parchment box, centred both ways, at Wizard101's card text size (shrinking only when it would
+        // not fit).
         let (b0, b1) = (card(10.0, 124.0), card(118.0, 190.0));
-        v.add([b0[0], b0[1], b1[0], b1[1]], text,
-              TextStyle::new("SpellDescription", CARD_TEXT_SCALE * k, BLACK).centred().wrapped());
+        let mut style = TextStyle::new("SpellDescription", CARD_TEXT_SCALE * k, BLACK).centred().wrapped();
+        style.middle = true;
+        v.add([b0[0], b0[1], b1[0], b1[1]], lines.join("\n"), style);
     }
 }
 
-/// SpellDescription's scale on a list-sized (97 px) card; wrapped text shrinks from it to fit the parchment.
-const CARD_TEXT_SCALE: f32 = 0.42;
-/// How much bigger the card is that shows while the mouse is over a memorised spell in the deck.
-const HOVER_CARD: f32 = 1.9;
+/// SpellDescription's scale on a list-sized (97 px) card; wrapped text shrinks from it (to 60%) to fit the
+/// parchment. Measured on Wizard101's own card (w101_reference/reagent_card_balance_azoth.png, a 130 px card):
+/// "Balance Azoth" is 78 px wide there, 91 SpellDescription pixels, i.e. 0.857 on a 130 px card = 0.64 on 97 px.
+const CARD_TEXT_SCALE: f32 = 0.64;
 
 fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.subs = DECK_TABS.len();
@@ -1393,7 +1604,7 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         let nr = [x, r[1], x + (r[2] - r[0]), r[3]];
         v.rect.insert(b, nr);
         v.show(Some(b), true);
-        v.tip(nr, vec![if class.is_empty() { "All Spells".to_string() } else { title.to_string() }]);
+        v.plain_tip(nr, vec![if class.is_empty() { "All Spells".to_string() } else { title.to_string() }]);
         row = Some(row.map_or(nr, |a: [f32; 4]| [a[0].min(nr[0]), a[1].min(nr[1]), a[2].max(nr[2]), a[3].max(nr[3])]));
     }
     v.tab_row = row;
@@ -1448,8 +1659,8 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                         v.over_fills.push((inner, ImColor32::from_rgba(40, 25, 10, 140)));
                     }
                     // Hovering it shows the spell's card (as Wizard101's deck shows a card when you point at
-                    // it), enlarged, on the deck beside the slots, not a stats tooltip.
-                    let (cw, ch) = (97.0 * HOVER_CARD, 148.0 * HOVER_CARD);
+                    // it), the size of the list's cards (Ryan, round 16), on the deck under the slot.
+                    let [cw, ch] = l.find("AllPageSpellList").and_then(|n| l.nodes[n].card).unwrap_or([97.0, 148.0]);
                     // Under the slot, kept on the deck's page (InvBorder: 39,101 - 382,566).
                     let gx = ((cell[0] + cell[2]) / 2.0 - cw / 2.0).clamp(r[0], r[2] - cw);
                     let gy = (cell[3] + 6.0).min(560.0 - ch);
@@ -1458,8 +1669,8 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                     v.hovers.push((cell, Box::new(card)));
                     st.hits.push((cell, Hit::Forget(i)));
                 }
-                None => v.tip(cell, vec![format!("Memory slot {}", c + 1), "Empty".into(),
-                                         "Click a spell on the right".into()]),
+                None => v.plain_tip(cell, vec![format!("Memory slot {}: empty", c + 1),
+                                               "Click a spell on the right".into()]),
             }
         }
     }
@@ -1494,11 +1705,9 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         let x = r[0] + cx * (cw + gx);
         let y = r[1] + cy * (ch + gy);
         let raw = id & 0x0FFF_FFFF;
+        // Everything is on the card itself: no tooltip over it (Ryan, round 16).
         spell_card(l, d, v, *id, name, [x, y, x + cw, y + ch]);
         let memorised = sheet.spells.contains(&(raw as i32));
-        let mut tip = d.items.tooltip(*id, 1, d.names, false);
-        tip.push(if memorised { "Memorised (click it in the deck to forget it)".into() } else { "Click: memorise".into() });
-        v.tip([x, y, x + cw, y + ch], tip);
         if memorised {
             // Already in the deck: dimmed, as Wizard101 dims cards it can't add.
             v.fills.push(([x, y, x + cw, y + ch], IN_DECK));
@@ -1995,6 +2204,33 @@ const REAGENT_TABS: [(&str, &str); 5] = [
 const REAGENT_FRAME: &str = "GUI/Cards/School_Resource_Blnk.png";
 /// Its blank medallion (the round picture behind the card's window).
 const REAGENT_MEDALLION: &str = crate::crafting::MEDALLION;
+
+/// A Wizard101 school's round badge (GUI/Schools/Art_School_<School>, 128 x 128: the symbol on the school's colour
+/// in a gold ring), as the Character page's SchoolIcon and the Pets page's spriteSchoolIcon show it.
+pub fn school_art(school: &str) -> String {
+    format!("GUI/Schools/Art_School_{school}.png")
+}
+
+/// The Wizard101 school of a spirit ash (the book's own choice, Ryan round 16), by what the summon is, with the
+/// deck's school meanings: Myth = glintstone sorcery and conjured copies, Ice = Carian and crystal, Fire = fire
+/// and the Fire Monks / Messmer's soldiers, Storm = wind, storm and Farum Azula, Life = the Golden Order, the
+/// Erdtree and beasts, Death = the dead, rot and blood, Shadow = night and sleep, Balance = everyone else
+/// (soldiers, sellswords and nobles).
+pub fn ash_school(name: &str) -> &'static str {
+    const SCHOOLS: [(&str, &[&str]); 8] = [
+        ("Shadow", &["Nightmaiden", "Dolores", "Black Knife", "Tiche"]),
+        ("Death", &["Skeletal", "Putrid", "Rot", "Rotten", "Rat", "Jarwight", "Bloodfiend", "Gravebird",
+                    "Mausoleum", "Dung Eater", "Lhutel", "Fingercreeper", "Man-Fly", "Man-Serpent", "Ghost"]),
+        ("Fire", &["Fire Monk", "Pumpkin", "Messmer", "Fanged Imp", "Bigmouth", "Spider Scorpion", "Inquisitor"]),
+        ("Ice", &["Crystalian", "Raya Lucaria", "Jellyfish", "Twinsage", "Latenna"]),
+        ("Myth", &["Glintstone", "Sorcerer", "Page", "Clayman", "Albinauric", "Mimic", "Marionette", "Avionette"]),
+        ("Storm", &["Nepheli", "Azula", "Warhawk", "Winged Misbegotten", "Horned Warrior", "Stormhawk"]),
+        ("Life", &["Oracle", "Leyndell", "Haligtree", "Therolina", "Miranda", "Ancestral", "Wolf", "Land Squirt",
+                   "Finger Maiden"]),
+        ("Balance", &[]),
+    ];
+    SCHOOLS.iter().find(|(_, words)| words.iter().any(|w| name.contains(w))).map_or("Balance", |s| s.0)
+}
 
 /// A Wizard101 school's icon (GUI/Icons/Icon_<School>, 32 x 32, the art the reagent cards show in their circle).
 fn school_icon(school: &str) -> String {

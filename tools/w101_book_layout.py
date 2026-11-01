@@ -44,6 +44,8 @@ WADS = ["Root.wad", "_Shared-WorldData.wad", "WizardCity-WorldData.wad"]
 PAGES = [
     "SpellBookPrefsWindow", "CharStatsSpellbookPage", "InventorySpellbookPage", "PetStatsSpellbookPage",
     "DeckConfiguration", "QuestListWindow", "MapSpellbookPage", "RecipeWindow", "HelpSpellbookPage", "Settings", "QuestInfoWindow",
+    # The Backpack's Equipment Sets page (its EquipmentManager button).
+    "EquipmentManagerWindow",
 ]
 # The Wizard City loading screen, the loading bar, and the wand mouse cursor (GUI/Cursors.xml "Default"; its
 # cursor.cur twin puts the hot spot at 5, 5 of 45).
@@ -82,6 +84,10 @@ EXTRA_ART += [f"GUI/Icons/Type_{t}.dds" for t in ("AOE", "Heal", "HealOverTime",
               "Absorb", "Cloak", "Mutate", "Shadow_Self", "Shadow_Creature", "MaxHealth", "MaxMana")]
 # The Pets page's talent rows (PetTalentControl.gui's background) and Wizard101's talent icon sheet.
 EXTRA_ART += ["GUI/Backgrounds/Background_Pet_Talent.dds", "GUI/Talents/PetTalent_Complete_Color01.dds"]
+# The school badges (the Character page's SchoolIcon, the Pets page's spriteSchoolIcon: symbol on the school's colour
+# in a gold ring).
+EXTRA_ART += [f"GUI/Schools/Art_School_{s}.dds" for s in
+              ("Balance", "Death", "Fire", "Ice", "Life", "Myth", "Storm", "Shadow", "Astral")]
 # Fonts the DLL draws with that no page names: the card description and card title fonts.
 EXTRA_FONTS = ["SpellDescription", "SpellTitle_sm"]
 FONT_FILE = re.compile(r"([A-Za-z0-9_]+)\.xml$")
