@@ -1547,10 +1547,8 @@ impl Book {
         {
             // Over the book's frame around the map: the book's cursor, for its tabs, and the page buttons' plain
             // tooltips (the magnifier's "back" among them).
-            if let Some((_, lines)) = view.tips.iter().rev().find(|(r, _)| layout::inside(mouse, *r)) {
-                if let Some((_, rest)) = lines.split_first().filter(|(f, _)| *f == layout::PLAIN_TIP) {
-                    self.draw_plain_tip(&canvas, rest, mouse, [width, height]);
-                }
+            if let Some((_, text)) = view.bubbles.iter().rev().find(|(r, _)| layout::inside(mouse, *r)) {
+                draw_bubble(&canvas, text, mouse, [width, height], 1.0);
             }
             draw_cursor(&draw, &self.textures, pointer.pos, height);
         }
