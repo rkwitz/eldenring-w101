@@ -189,6 +189,11 @@ pub trait RenderContext {
         None
     }
 
+    /// w101_orbs: the same, only when it is the copy of `resource` (so two users don't take each other's).
+    fn take_readback_of(&mut self, _resource: usize) -> Option<Readback> {
+        None
+    }
+
     /// w101_orbs: asks for a GPU copy of `region` (left, top, right, bottom, in pixels) of subresource 0 of a
     /// game 2D texture (`resource`, a raw `ID3D12Resource*` the caller holds a reference to, assumed to be in
     /// D3D12 state `state`; moved to COPY_SOURCE and back around the copy) into texture `slot` (0 or 1). Made
@@ -214,6 +219,10 @@ pub unsafe extern "C" fn blend_callback(
 pub const BLEND_ADDITIVE: usize = 0x5710_1AD0;
 /// w101_orbs: see [`blend_callback`].
 pub const BLEND_NORMAL: usize = 0x5710_1A10;
+
+/// w101_orbs: [`RenderContext::request_readback`]'s `resource` for the back buffer as the game drew it (before the
+/// overlay); its `state` is ignored.
+pub const READBACK_SCREEN: usize = usize::MAX;
 
 /// w101_orbs: a CPU copy of a texture: `pitch` bytes per row (256-aligned), `height` rows.
 pub struct Readback {

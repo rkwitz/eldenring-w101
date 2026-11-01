@@ -23,6 +23,20 @@
 //!   another tab), the menu is closed with ForceCloseMenu, then CloseMenu; if it stays open the log says so and
 //!   the book lets go (close it in Elden Ring with B).
 //!
+//! - Round 15:
+//!   - Idle (A1): Elden Ring's mirror model stands in a fixed pose (the copy is made every frame: turning it shows at
+//!     once), so the picture gets a slow breathing movement drawn here (`breath_strips`, layout.rs): head and
+//!     shoulders lift a few pixels and the chest widens slightly, feet fixed, a 4.2 s cycle.
+//!   - Sets (A2): sets 0 and 2 are the same equipped picture; of the bare ones, set 1's head skin can come out black
+//!     (its face skin not filled in; eyes, beard and hair fine), set 3's was right every time. F9 now toggles
+//!     between the equipped set (ini `live_preview_slot`, 0) and the bare one (ini `live_preview_bare`, 3).
+//!   - World (A3): the game keeps running under the mirror menu (60 fps, the camera and the player moved during
+//!     F10 visits); what stood still was our cover, a screenshot. The cover is now a live copy of the world scene's
+//!     own picture (a screen-sized RGBA8 render target the world renderer made, before Elden Ring's menu is drawn
+//!     over it). Which target that is gets measured in normal play: each candidate is read back once next to the
+//!     back buffer and the one that matches it (correlation of a 32x18 brightness grid) wins; "live: world" lines
+//!     log it. Until one is found, the old screenshot stays.
+//!
 //! Fail-safe: no target, no copy, no dispatcher, or the menu not opening / closing: the software picture stays and
 //! a "live:" line says why. Nothing here writes game memory; phase 2 calls one game function.
 
@@ -55,6 +69,21 @@ const DEFAULT_STATE: u32 = 0xC0;
 /// The book's full character picture (pages::MODEL_FULL) and the teleport poof's world copy (teleport.rs).
 const MODEL_FULL: &str = crate::pages::MODEL_FULL;
 const TELEPORT_WORLD: &str = "@screen/teleport_world";
+/// The live copy of the world scene's picture (A3), and the copy slot it uses (slot 0 is the character).
+const LIVE_WORLD: &str = "@screen/live_world";
+const WORLD_SLOT: usize = 1;
+/// The bare set F9 shows unless the ini says otherwise (set 1's face skin can be black, A2).
+const DEFAULT_BARE: usize = 3;
+/// A world candidate must correlate at least this well with the back buffer.
+const WORLD_MATCH: f32 = 0.85;
+/// The brightness grid compared (columns, rows).
+const GRID: [usize; 2] = [32, 18];
+/// Breathing (A1): seconds per breath, how far the head lifts and how much the chest widens (fractions of the
+/// picture).
+const BREATH_PERIOD: f32 = 4.2;
+const BREATH_LIFT: f32 = 0.006;
+const BREATH_WIDEN: f32 = 0.005;
+const BREATH_STRIPS: usize = 24;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 /// The dispatcher's address (0: not looked for or not found), and whether the scan ran.
@@ -79,6 +108,28 @@ struct Shared {
 }
 
 static SHARED: Mutex<Shared> = Mutex::new(Shared { targets: Vec::new(), last_made: None, burst: 0 });
+
+/// Screen-shaped RGBA8 render targets the game made (candidates for the world scene's picture, A3).
+struct WorldTarget {
+    resource: usize,
+    width: u32,
+    height: u32,
+    /// The return addresses that tell it apart (RVAs after the render-target helper), for the log.
+    stack: Vec<usize>,
+    batch: u32,
+    retired: Option<Instant>,
+}
+
+struct World {
+    targets: Vec<WorldTarget>,
+    last_made: Option<Instant>,
+    batch: u32,
+}
+
+static WORLD: Mutex<World> = Mutex::new(World { targets: Vec::new(), last_made: None, batch: 0 });
+/// The live picture is in the book this frame (the breathing applies to it only).
+static SHOWING: AtomicBool = AtomicBool::new(false);
+static BREATH_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 /// The book's full character picture this frame (its size in pixels, when it was drawn): book.rs reports it.
 static PICTURE: Mutex<Option<([u32; 2], Instant)>> = Mutex::new(None);
 
@@ -100,6 +151,11 @@ fn picture() -> Option<[u32; 2]> {
 
 /// probe.rs's creation hooks: a 2D render target or depth texture the game just made.
 pub fn on_created(width: u64, height: u32, format: u32, flags: u32, resource: usize) {
+    if enabled() && resource != 0 && format == 28 && flags & 0x1 != 0 && width != height as u64 && width >= 1024
+        && height >= 576 {
+        on_world_created(width as u32, height, resource);
+        return;
+    }
     if !enabled() || resource == 0 || format != 28 || flags & 0x1 == 0 || width != height as u64
         || !(256..=2048).contains(&height) {
         return;
@@ -138,6 +194,151 @@ pub fn on_created(width: u64, height: u32, format: u32, flags: u32, resource: us
     }
 }
 
+/// A screen-shaped RGBA8 render target: kept as a candidate for the world scene's picture. A new batch (more than
+/// 3 s after the last one: a load, a resolution change) replaces the old ones.
+fn on_world_created(width: u32, height: u32, resource: usize) {
+    let mut frames = [std::ptr::null_mut::<std::ffi::c_void>(); 24];
+    let n = unsafe {
+        windows_sys::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace(
+            1, frames.len() as u32, frames.as_mut_ptr(), std::ptr::null_mut())
+    } as usize;
+    let rvas: Vec<usize> = frames[..n.min(24)].iter().map(|f| *f as usize).filter(|f| probe::in_image(*f))
+        .map(probe::rva).collect();
+    // The allocator frames are the same for every target; keep what follows 0x19f4347 (the render-target helper).
+    let stack: Vec<usize> = match rvas.iter().position(|r| *r == FINAL_CHAIN[0]) {
+        Some(i) => rvas[i + 1..].iter().take(4).copied().collect(),
+        None => rvas.iter().rev().take(4).copied().collect(),
+    };
+    let now = Instant::now();
+    let mut w = WORLD.lock().unwrap_or_else(|e| e.into_inner());
+    if w.last_made.is_none_or(|t| now - t > Duration::from_secs(3)) {
+        w.batch += 1;
+        for t in w.targets.iter_mut().filter(|t| t.retired.is_none()) {
+            t.retired = Some(now);
+        }
+    }
+    w.last_made = Some(now);
+    if w.targets.iter().filter(|t| t.retired.is_none()).count() >= 24 {
+        return;
+    }
+    unsafe { probe::com_add_ref(resource) };
+    let batch = w.batch;
+    tracing::info!("live: world candidate {width}x{height} {resource:#x} (batch {batch}, stack {:x?})", stack);
+    w.targets.push(WorldTarget { resource, width, height, stack, batch, retired: None });
+}
+
+/// A 32x18 grid of brightness (0-255) over a readback, for the formats the game and the swap chain use.
+fn brightness_grid(rb: &hudhook::Readback) -> Option<Vec<f32>> {
+    let (w, h, pitch) = (rb.width as usize, rb.height as usize, rb.pitch as usize);
+    let bpp = match rb.format {
+        28 | 29 | 87 | 91 | 24 => 4,
+        10 => 8,
+        _ => return None,
+    };
+    if w < GRID[0] * 4 || h < GRID[1] * 4 || rb.data.len() < pitch * h {
+        return None;
+    }
+    let half = |b: u16| -> f32 {
+        let (sign, exp, frac) = ((b >> 15) as u32, ((b >> 10) & 0x1f) as i32, (b & 0x3ff) as f32);
+        let v = if exp == 0 {
+            frac / 1024.0 * 2f32.powi(-14)
+        } else if exp == 31 {
+            0.0
+        } else {
+            (1.0 + frac / 1024.0) * 2f32.powi(exp - 15)
+        };
+        if sign == 1 { 0.0 } else { (v / (1.0 + v)).powf(1.0 / 2.2) * 255.0 }
+    };
+    let pixel = |x: usize, y: usize| -> f32 {
+        let o = y * pitch + x * bpp;
+        let d = &rb.data[o..o + bpp];
+        let (r, g, b) = match rb.format {
+            28 | 29 => (d[0] as f32, d[1] as f32, d[2] as f32),
+            87 | 91 => (d[2] as f32, d[1] as f32, d[0] as f32),
+            24 => {
+                let v = u32::from_le_bytes([d[0], d[1], d[2], d[3]]);
+                let c = |s: u32| ((v >> s) & 1023) as f32 * 255.0 / 1023.0;
+                (c(0), c(10), c(20))
+            }
+            _ => (half(u16::from_le_bytes([d[0], d[1]])), half(u16::from_le_bytes([d[2], d[3]])),
+                  half(u16::from_le_bytes([d[4], d[5]]))),
+        };
+        0.299 * r + 0.587 * g + 0.114 * b
+    };
+    let mut grid = Vec::with_capacity(GRID[0] * GRID[1]);
+    for cy in 0..GRID[1] {
+        for cx in 0..GRID[0] {
+            let mut sum = 0.0;
+            for sy in 0..4 {
+                for sx in 0..4 {
+                    let x = ((cx * 4 + sx) * 2 + 1) * w / (GRID[0] * 8);
+                    let y = ((cy * 4 + sy) * 2 + 1) * h / (GRID[1] * 8);
+                    sum += pixel(x, y);
+                }
+            }
+            grid.push(sum / 16.0);
+        }
+    }
+    Some(grid)
+}
+
+/// Correlation of two grids (1: the same picture up to brightness and contrast) and their mean difference.
+fn compare(a: &[f32], b: &[f32]) -> (f32, f32) {
+    let n = a.len().min(b.len()) as f32;
+    if n == 0.0 {
+        return (0.0, 255.0);
+    }
+    let (ma, mb) = (a.iter().sum::<f32>() / n, b.iter().sum::<f32>() / n);
+    let (mut sab, mut saa, mut sbb, mut diff) = (0.0, 0.0, 0.0, 0.0);
+    for (x, y) in a.iter().zip(b) {
+        sab += (x - ma) * (y - mb);
+        saa += (x - ma) * (x - ma);
+        sbb += (y - mb) * (y - mb);
+        diff += (x - y).abs();
+    }
+    let r = if saa > 1e-3 && sbb > 1e-3 { sab / (saa * sbb).sqrt() } else { 0.0 };
+    (r, diff / n)
+}
+
+/// layout.rs, for the full character picture: the strips (top and bottom as fractions of the picture, and the uv
+/// rect each shows) that draw it breathing, while the live picture is in it. None: draw it as it is.
+pub fn breath_strips(name: &str) -> Option<Vec<([f32; 2], [f32; 4])>> {
+    if name != MODEL_FULL || !SHOWING.load(Ordering::Relaxed) {
+        return None;
+    }
+    let t = BREATH_START.get_or_init(Instant::now).elapsed().as_secs_f32();
+    // 0 (breathed out) .. 1 (in), eased.
+    let b = 0.5 - 0.5 * (t * std::f32::consts::TAU / BREATH_PERIOD).cos();
+    // How much each height lifts (head and shoulders all of it, nothing from the hips down) and widens (the chest).
+    let lift = |y: f32| BREATH_LIFT * b * ((0.55 - y) / (0.55 - 0.18)).clamp(0.0, 1.0);
+    let widen = |y: f32| BREATH_WIDEN * b * (1.0 - ((y - 0.3) / 0.15).powi(2)).max(0.0);
+    Some((0..BREATH_STRIPS).map(|k| {
+        let (y0, y1) = (k as f32 / BREATH_STRIPS as f32, (k + 1) as f32 / BREATH_STRIPS as f32);
+        let half = 0.5 / (1.0 + widen((y0 + y1) / 2.0));
+        ([y0, y1], [0.5 - half, (y0 + lift(y0)).min(1.0), 0.5 + half, (y1 + lift(y1)).min(1.0)])
+    }).collect())
+}
+
+/// Finding the world scene's picture among the candidates: the back buffer and each candidate are read back in
+/// turn (one readback every few frames) and compared.
+#[derive(Default)]
+struct WorldSearch {
+    batch: u32,
+    /// Candidates still to compare, and the readback asked for.
+    queue: Vec<usize>,
+    pending: Option<usize>,
+    screen: Option<Vec<f32>>,
+    scores: Vec<(usize, f32, f32)>,
+    frames: u32,
+    /// The chosen picture (resource, width, height) for `batch`, or when the search last gave up.
+    chosen: Option<(usize, u32, u32)>,
+    gave_up: Option<Instant>,
+    /// While a menu is up: the last grid of the chosen picture, to log whether the world still moves under it.
+    menu_grid: Option<Vec<f32>>,
+    menu_samples: u32,
+    menu_said: Option<bool>,
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Drive {
     Off,
@@ -150,6 +351,12 @@ enum Drive {
 
 pub struct LivePreview {
     set: usize,
+    /// F9 toggles between these two sets (equipped, bare).
+    sets: [usize; 2],
+    world_state: u32,
+    search: WorldSearch,
+    /// The live world copy is ready this frame.
+    world_live: bool,
     state: u32,
     drive: Drive,
     hud: Option<u8>,
@@ -174,15 +381,24 @@ impl LivePreview {
             return None;
         }
         let set = get("live_preview_slot").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0).min(3);
+        let bare = get("live_preview_bare").and_then(|v| v.parse::<usize>().ok()).unwrap_or(DEFAULT_BARE).min(3);
+        let world_state = get("live_world_state")
+            .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(DEFAULT_STATE);
         let state = get("live_preview_state")
             .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok())
             .unwrap_or(DEFAULT_STATE);
         let drive = get("live_preview_drive").as_deref() == Some("1");
         ENABLED.store(true, Ordering::Relaxed);
-        tracing::info!("live: live preview on (set {set}, assumed state {state:#x}, drive {drive}); F9 cycles the \
-                        set, F10 arms / disarms the book-driven mirror");
+        tracing::info!("live: live preview on (set {set}, bare set {bare}, assumed state {state:#x}, world state \
+                        {world_state:#x}, drive {drive}); F9 toggles equipped / bare, F10 arms / disarms the \
+                        book-driven mirror");
         Some(LivePreview {
             set,
+            sets: [set, bare],
+            world_state,
+            search: WorldSearch::default(),
+            world_live: false,
             state,
             drive: if drive { Drive::Armed } else { Drive::Off },
             hud: None,
@@ -253,6 +469,18 @@ impl LivePreview {
                 !old
             });
         }
+        {
+            let mut w = WORLD.lock().unwrap_or_else(|e| e.into_inner());
+            let now = Instant::now();
+            w.targets.retain(|t| {
+                let old = t.retired.is_some_and(|r| now - r > Duration::from_secs(3));
+                if old {
+                    unsafe { probe::com_release(t.resource) };
+                }
+                !old
+            });
+        }
+        self.world_search(render, hud);
         let box_size = picture();
         let target = if hud != Some(3) { self.current() } else { None };
         let copied = match (box_size, target) {
@@ -307,6 +535,142 @@ impl LivePreview {
             }
         }
         crate::input::pass_right_stick(self.showing.is_some());
+        SHOWING.store(self.showing.is_some(), Ordering::Relaxed);
+        // The world behind the book while Elden Ring's menu covers the screen: a live copy of the world scene's own
+        // picture, once it is known.
+        self.world_live = false;
+        if hud.is_some_and(|h| h != 3) && (self.showing.is_some() || self.drives()) {
+            if let Some((resource, w, h)) = self.search.chosen {
+                if let Some(id) = render.copy_texture(WORLD_SLOT, resource, self.world_state, [0, 0, w, h]) {
+                    textures.set(LIVE_WORLD, id, [w as f32, h as f32]);
+                    self.world_live = true;
+                }
+                self.world_moving(render, resource);
+            }
+        } else {
+            self.search.menu_grid = None;
+            self.search.menu_samples = 0;
+        }
+    }
+
+    fn drives(&self) -> bool {
+        matches!(self.drive, Drive::Opening(_) | Drive::Open | Drive::Closing(..))
+    }
+
+    /// In normal play (Elden Ring's HUD up, no fade), finds which world candidate is the world scene's picture.
+    fn world_search(&mut self, render: &mut dyn RenderContext, hud: Option<u8>) {
+        let (batch, live): (u32, Vec<(usize, u32, u32, Vec<usize>)>) = {
+            let w = WORLD.lock().unwrap_or_else(|e| e.into_inner());
+            (w.batch, w.targets.iter().filter(|t| t.retired.is_none() && t.batch == w.batch)
+                .map(|t| (t.resource, t.width, t.height, t.stack.clone())).collect())
+        };
+        let plain = hud == Some(3) && self.hud_stable(3, 2.0) && crate::game::faded() < 0.05;
+        let se = &mut self.search;
+        if se.batch != batch {
+            // A new batch: search again (the old choice went with its batch).
+            *se = WorldSearch { batch, queue: live.iter().map(|t| t.0).collect(), ..Default::default() };
+        }
+        if se.chosen.is_some_and(|c| !live.iter().any(|t| t.0 == c.0)) {
+            se.chosen = None;
+        }
+        // A readback asked for earlier.
+        if let Some(p) = se.pending.filter(|_| se.chosen.is_none()) {
+            if let Some(rb) = render.take_readback_of(p) {
+                se.pending = None;
+                let grid = brightness_grid(&rb);
+                if p == hudhook::READBACK_SCREEN {
+                    if grid.is_none() {
+                        tracing::info!("live: world: back buffer format {} not compared; no live world", rb.format);
+                        se.gave_up = Some(Instant::now());
+                        se.queue.clear();
+                    }
+                    se.screen = grid;
+                } else if let (Some(g), Some(screen)) = (grid, se.screen.take()) {
+                    let (r, diff) = compare(&g, &screen);
+                    let stack = live.iter().find(|t| t.0 == p).map(|t| t.3.clone()).unwrap_or_default();
+                    tracing::info!("live: world candidate {p:#x}: correlation {r:.3}, mean difference {diff:.1} \
+                                    (stack {stack:x?})");
+                    se.scores.push((p, r, diff));
+                }
+            } else if se.frames > 120 {
+                se.pending = None; // never came (another readback went first): ask again
+            }
+        }
+        se.frames += 1;
+        if se.chosen.is_some() || se.pending.is_some() || !plain || se.frames < 6 {
+            return;
+        }
+        if se.gave_up.is_some_and(|t| t.elapsed() < Duration::from_secs(60)) {
+            return;
+        }
+        if se.queue.is_empty() {
+            if se.scores.is_empty() {
+                // Nothing compared yet (or a retry after giving up): every candidate of this batch.
+                se.queue = live.iter().map(|t| t.0).collect();
+                se.gave_up = None;
+                return;
+            }
+            let best = se.scores.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1));
+            match best.filter(|b| b.1 >= WORLD_MATCH) {
+                Some((resource, r, diff)) => {
+                    if let Some(t) = live.iter().find(|t| t.0 == resource) {
+                        tracing::info!("live: world picture is {resource:#x} {}x{} (correlation {r:.3}, mean \
+                                        difference {diff:.1}, stack {:x?}); it stands behind the book over Elden \
+                                        Ring's menus", t.1, t.2, t.3);
+                        se.chosen = Some((t.0, t.1, t.2));
+                    }
+                }
+                None => {
+                    tracing::info!("live: world: no candidate matched the screen (best {:?}); the screenshot stays \
+                                    behind the book; trying again in 60 s", best);
+                    se.gave_up = Some(Instant::now());
+                }
+            }
+            se.scores.clear();
+            return;
+        }
+        // The back buffer, then the next candidate, a few frames apart.
+        let next = if se.screen.is_none() { hudhook::READBACK_SCREEN } else { se.queue[0] };
+        if render.request_readback(next, if next == hudhook::READBACK_SCREEN { 0 } else { self.world_state }) {
+            if next != hudhook::READBACK_SCREEN {
+                se.queue.remove(0);
+            }
+            se.pending = Some(next);
+            se.frames = 0;
+        }
+    }
+
+    /// While a menu is up: reads the world picture back about once a second (10 times at most per menu) and logs
+    /// whether it changes, i.e. whether Elden Ring still draws the world under its menu.
+    fn world_moving(&mut self, render: &mut dyn RenderContext, resource: usize) {
+        let se = &mut self.search;
+        se.frames += 1;
+        if se.pending == Some(resource) {
+            if let Some(rb) = render.take_readback_of(resource) {
+                se.pending = None;
+                if let Some(g) = brightness_grid(&rb) {
+                    if let Some(prev) = se.menu_grid.replace(g.clone()) {
+                        let (_, diff) = compare(&prev, &g);
+                        let moving = diff > 0.05;
+                        if se.menu_said != Some(moving) {
+                            tracing::info!("live: world under the menu {} (mean difference {diff:.2} between two \
+                                            looks a second apart)",
+                                           if moving { "is drawn and moving" } else { "did not change" });
+                            se.menu_said = Some(moving);
+                        }
+                    }
+                }
+            } else if se.frames > 240 {
+                se.pending = None;
+            }
+            return;
+        }
+        if se.pending.is_none() && se.menu_samples < 10 && se.frames >= 120
+            && render.request_readback(resource, self.world_state) {
+            se.pending = Some(resource);
+            se.menu_samples += 1;
+            se.frames = 0;
+        }
     }
 
     fn hotkeys(&mut self) {
@@ -316,8 +680,9 @@ impl LivePreview {
         }
         let down = unsafe { [GetAsyncKeyState(VK_F9 as i32) < 0, GetAsyncKeyState(VK_F10 as i32) < 0] };
         if down[0] && !self.keys[0] {
-            self.set = (self.set + 1) % 4;
-            tracing::info!("live: F9, showing set {}", self.set);
+            self.set = if self.set == self.sets[1] { self.sets[0] } else { self.sets[1] };
+            tracing::info!("live: F9, showing set {} ({})", self.set,
+                           if self.set == self.sets[1] { "bare" } else { "equipped" });
         }
         if down[1] && !self.keys[1] {
             self.drive = match self.drive {
@@ -387,11 +752,13 @@ impl LivePreview {
             }
             d => d,
         };
-        if matches!(self.drive, Drive::Opening(_) | Drive::Open | Drive::Closing(..)) && self.hud != Some(3) {
-            // Elden Ring's mirror menu stays hidden behind the world as it was before the book opened.
+        if (self.drives() || (self.world_live && self.showing.is_some())) && self.hud != Some(3) {
+            // Elden Ring's mirror menu stays hidden behind the world: live once the world scene's picture is known
+            // (A3), else as it was before the book opened.
             let size = ui.io().display_size;
             let draw = ui.get_background_draw_list();
-            match textures.get(TELEPORT_WORLD) {
+            let world = if self.world_live { textures.get(LIVE_WORLD) } else { textures.get(TELEPORT_WORLD) };
+            match world {
                 Some((world, _)) => draw.add_image(world, [0.0, 0.0], size).build(),
                 None => draw.add_rect([0.0, 0.0], size, ImColor32::from_rgba(12, 9, 6, 255)).filled(true).build(),
             }

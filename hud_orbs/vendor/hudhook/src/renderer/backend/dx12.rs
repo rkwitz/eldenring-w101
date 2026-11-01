@@ -230,6 +230,14 @@ impl RenderContext for D3D12RenderEngine {
         self.readback_done.take()
     }
 
+    fn take_readback_of(&mut self, resource: usize) -> Option<crate::Readback> {
+        if self.readback_done.as_ref().is_some_and(|r| r.resource == resource) {
+            self.readback_done.take()
+        } else {
+            None
+        }
+    }
+
     // w101_orbs
     fn copy_texture(&mut self, slot: usize, resource: usize, state: u32, region: [u32; 4]) -> Option<TextureId> {
         let wanted = self.live_wanted.get_mut(slot)?;
@@ -257,7 +265,17 @@ impl RenderEngine for D3D12RenderEngine {
             self.command_list.Reset(&fc.command_allocator, None)?;
 
             // w101_orbs: a requested copy of a game texture, recorded first (the game's frame is done with it).
+            // w101_orbs: crate::READBACK_SCREEN asks for the back buffer (in PRESENT, as the game hands it over).
             let readback = match self.readback_request.take() {
+                Some((crate::READBACK_SCREEN, _)) => {
+                    match self.record_readback(render_target.as_raw() as usize, 0) {
+                        Ok(r) => Some((crate::READBACK_SCREEN, r.1, r.2, r.3)),
+                        Err(e) => {
+                            error!("readback of the back buffer: {e:?}");
+                            None
+                        },
+                    }
+                },
                 Some((resource, state)) => match self.record_readback(resource, state) {
                     Ok(r) => Some(r),
                     Err(e) => {

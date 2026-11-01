@@ -1282,7 +1282,7 @@ impl Probe {
     /// frame, two seconds after the last one was made while a menu is open, and writes each to
     /// orbs\probe_dumps\ as a PNG (at most DUMP_CAP per session), so one look shows which is the preview picture.
     pub fn render_frame(&mut self, render: &mut dyn hudhook::RenderContext, folder: &std::path::Path) {
-        if let Some(rb) = render.take_readback() {
+        if let Some(rb) = self.reading.map(|r| r.0).and_then(|r| render.take_readback_of(r)) {
             let (resource, format, at) = self.reading.take().unwrap_or((rb.resource, rb.format, 0.0));
             let dir = folder.join("probe_dumps");
             let name = format!("s{}_t{at:.0}_{resource:x}_fmt{format}.png", self.sessions);

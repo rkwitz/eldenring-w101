@@ -660,7 +660,17 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
         }
         // A rendered image goes under the node's own art (the portrait ring is drawn over the character).
         if let Some(img) = view.node_images.get(&i) {
-            canvas.image(img, r, [0.0, 0.0, 1.0, 1.0], fade(ImColor32::WHITE, alpha));
+            match crate::live_preview::breath_strips(img) {
+                // The live mirror picture breathes (live_preview.rs).
+                Some(strips) => {
+                    for ([y0, y1], uv) in strips {
+                        let h = r[3] - r[1];
+                        let strip = [r[0], r[1] + h * y0, r[2], r[1] + h * y1];
+                        canvas.image(img, strip, uv, fade(ImColor32::WHITE, alpha));
+                    }
+                }
+                None => canvas.image(img, r, [0.0, 0.0, 1.0, 1.0], fade(ImColor32::WHITE, alpha)),
+            }
         }
         if let Some(img) = view.node_art.get(&i).or(n.img.as_ref()) {
             let uv = if n.is_button() {
