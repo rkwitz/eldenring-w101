@@ -1543,36 +1543,67 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
     let (t0, t1) = (card(8.0, 4.0), card(120.0, 28.0));
     v.add([t0[0], t0[1], t1[0], t1[1]], name, TextStyle::new("WizardFancy", 0.34 * k, YELLOW).centred().outlined());
     if let Some(spell) = spell {
-        let (p0, p1) = (card(2.0, 28.0), card(32.0, 46.0));
+        // The cost in the pip triangle: Wizard101's yellow number with a black outline (its reagent card's rank,
+        // w101_reference/reagent_card_balance_azoth.png: (239,233,111) inside a black edge, the digit about 14 of
+        // the card's 130 px), a little smaller than the name.
+        let (p0, p1) = (card(3.0, 29.0), card(30.0, 45.0));
         v.add([p0[0], p0[1], p1[0], p1[1]], spell.fp.to_string(),
-              TextStyle::new("WizardFancy", 0.36 * k, WHITE).centred().outlined());
-        let effect = d.items.info(raw).unwrap_or("").trim().to_string();
+              TextStyle::new("WizardFancy", 0.3 * k, PIP_YELLOW).centred().outlined());
         let mut needs: Vec<String> = ["Int", "Fai", "Arc"].iter().zip(spell.requirements).filter(|(_, v)| *v > 0)
             .map(|(n, v)| format!("{n} {v}")).collect();
         needs.insert(0, format!("{} slot{}", spell.slots.max(1), if spell.slots > 1 { "s" } else { "" }));
-        // Wizard101's card text grammar (Spell.lang: "80-120 #1:$dT_image$ #2:$Damage_image$", the client
-        // drawing $dT_image$ as Icons/Icon_<School> and $Damage_image$ as Icons/Type_Damage): attacks read
-        // "<school symbol><attack symbol>", area attacks put Wizard101's all-enemies symbol (Type_AOE) first, other
-        // spells show their type symbol (Heal, Ward, Charm, ...). Elden Ring keeps no damage number per spell
-        // (it comes from the cast's bullets), so the symbols lead the line on their own.
-        let school_pic = deck_school_icon(DECK_TABS[tab].0).map(|i| format!("<image;{i}>")).unwrap_or_default();
-        let symbols = match kind {
-            "GUI/Icons/Type_AOE.png" => format!("<image;{kind}>: {school_pic}<image;GUI/Icons/Type_Damage.png>"),
-            "GUI/Icons/Type_Damage.png" | "GUI/Icons/Type_DamageOverTime.png" => format!("{school_pic}<image;{kind}>"),
-            _ => format!("<image;{kind}>"),
+        // What it does, as Wizard101's cards say it (Spell.lang, e.g. Fire Elf "#1:$eA$ + #2:$eA4$
+        // #3:$dT_image$#4:$Damage_image$ over 3 #5:$Rounds_image$"): the numbers from the cast's params
+        // (tools/er_book_data.py), then the school symbol and the type symbol inline, at the text's size, one
+        // paragraph that wraps; only the memory slots and attribute needs get their own line.
+        let school_pic = deck_school_icon(DECK_TABS[tab].0).unwrap_or_else(|| school_art("Astral"));
+        let effect = if spell.card.is_empty() {
+            // Nothing countable in the params (utility spells): the type symbol and Elden Ring's own line.
+            let info = d.items.info(raw).unwrap_or("").trim().to_string();
+            format!("<image;{kind}> {info}")
+        } else {
+            let mut text = spell.card.clone();
+            if kind == "GUI/Icons/Type_AOE.png" {
+                // Area spells: Wizard101's "... to all enemies".
+                text = text.replacen("$dT$$Damage$", "$dT$$Damage$ to all enemies", 1);
+            }
+            card_symbols(&text, &school_pic)
         };
-        let mut lines = vec![symbols];
-        if !effect.is_empty() {
-            lines.push(effect);
-        }
-        lines.push(needs.join("  "));
         // In the parchment box, centred both ways, at Wizard101's card text size (shrinking only when it would
-        // not fit).
-        let (b0, b1) = (card(10.0, 124.0), card(118.0, 190.0));
+        // not fit), the symbols at the text's own size; the slots and needs on one line at the bottom.
+        let (b0, b1) = (card(10.0, 124.0), card(118.0, 177.0));
         let mut style = TextStyle::new("SpellDescription", CARD_TEXT_SCALE * k, BLACK).centred().wrapped();
         style.middle = true;
-        v.add([b0[0], b0[1], b1[0], b1[1]], lines.join("\n"), style);
+        style.picture = CARD_SYMBOL_SIZE;
+        v.add([b0[0], b0[1], b1[0], b1[1]], effect, style);
+        let (n0, n1) = (card(8.0, 176.0), card(120.0, 191.0));
+        v.add([n0[0], n0[1], n1[0], n1[1]], needs.join("  "),
+              TextStyle::new("SpellDescription", CARD_TEXT_SCALE * k, BLACK).centred());
     }
+}
+
+/// The card symbols' side in SpellDescription line heights: about the digits' height, as Wizard101's card
+/// symbols sit in its card text.
+const CARD_SYMBOL_SIZE: f32 = 0.62;
+
+/// The pip cost's yellow (sampled from Wizard101's own card, w101_reference/reagent_card_balance_azoth.png).
+const PIP_YELLOW: ImColor32 = ImColor32::from_rgb(239, 233, 111);
+
+/// Card text symbols (Spell.lang's $..._image$, MadlibIcons.xml's art) as inline pictures: $dT$ is the card's
+/// school.
+fn card_symbols(text: &str, school: &str) -> String {
+    const SYMBOLS: [(&str, &str); 9] = [
+        ("$Damage$", "GUI/Icons/Type_Damage.png"), ("$OT_Damage$", "GUI/Icons/Type_DamageOverTime.png"),
+        ("$Heal$", "GUI/Icons/Type_Heal.png"), ("$OT_Heal$", "GUI/Icons/Type_HealOverTime.png"),
+        ("$Ward$", "GUI/Icons/Type_Ward.png"), ("$Charm$", "GUI/Icons/Type_Charm.png"),
+        ("$Rounds$", "GUI/Icons/Icons_Rounds.png"), ("$All_Enemies$", "GUI/Icons/Icons_All_Enemies.png"),
+        ("$Self$", "GUI/Icons/Icon_Self.png"),
+    ];
+    let mut out = text.replace("$dT$", &format!("<image;{school}>"));
+    for (token, art) in SYMBOLS {
+        out = out.replace(token, &format!("<image;{art}>"));
+    }
+    out
 }
 
 /// SpellDescription's scale on a list-sized (97 px) card; wrapped text shrinks from it (to 60%) to fit the
@@ -1619,12 +1650,13 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     // The book's title stays "Spell Deck" whichever class is shown (the class is the tab's tip).
     let _ = title;
     v.set(l.find("DeckTitle"), centre("Spell Deck"));
-    // Wizard101's item-card row under the deck has no Elden Ring counterpart.
-    hide(l, v, &["ItemSpells", "NextItemSpells", "PrevItemSpells"]);
+    // Wizard101's item-card row under the deck (ItemSpells, its Background_Deck_Equipment strip of empty
+    // placeholder squares) stays, empty as Wizard101 shows it when no gear gives a spell (Ryan, round 17); its page
+    // arrows greyed.
     let Some(sheet) = d.sheet else { return };
     let total = memory_slots(sheet);
-    let used = slots_used(sheet, d.items);
-    v.set(l.find("DeckName"), centre(&format!("Memory Slots {used}/{total}")));
+    // Ryan, round 17: the title is just "Memory Slots" (the free slots show as empty cells).
+    v.set(l.find("DeckName"), centre("Memory Slots"));
     // The deck (Wizard101's grid of the cards in the deck, slot frames edge to edge, Background_Slot's top half):
     // one cell per memory slot, eight to a row filling the deck's width (more slots wrap to the next row). Each memorised spell takes as many cells as
     // it takes memory slots (its icon in the first, the rest shaded), in Elden Ring's order. A click forgets it.

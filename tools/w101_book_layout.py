@@ -82,6 +82,10 @@ EXTRA_ART += [f"GUI/Icons/Icon_{s}.dds" for s in ("Balance", "Death", "Fire", "I
 EXTRA_ART += [f"GUI/Icons/Type_{t}.dds" for t in ("AOE", "Heal", "HealOverTime", "DamageOverTime", "Charm", "Ward",
               "Curse", "Jinx", "Global", "Enchantment", "Manipulation", "Steal", "Aura", "Polymorph", "Blade", "Trap",
               "Absorb", "Cloak", "Mutate", "Shadow_Self", "Shadow_Creature", "MaxHealth", "MaxMana")]
+# Wizard101's card text symbols the spell cards' descriptions use (MadlibIcons.xml: $Rounds_image$ = Icons_Rounds,
+# $All_Enemies_image$, $Self_image$, $Incoming_image$, $Outgoing_image$, $Accuracy_image$, $Stun_image$).
+EXTRA_ART += [f"GUI/Icons/{i}.dds" for i in ("Icons_Rounds", "Icons_All_Enemies", "Icon_Self", "Icon_Incoming",
+              "Icon_Outgoing", "Icon_Accuracy", "Icons_Stun")]
 # The Pets page's talent rows (PetTalentControl.gui's background) and Wizard101's talent icon sheet.
 EXTRA_ART += ["GUI/Backgrounds/Background_Pet_Talent.dds", "GUI/Talents/PetTalent_Complete_Color01.dds"]
 # The school badges (the Character page's SchoolIcon, the Pets page's spriteSchoolIcon: symbol on the school's colour

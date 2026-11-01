@@ -66,6 +66,9 @@ pub struct Spell {
     pub school: String,
     pub er_school: String,
     pub kind: String,
+    /// What the spell does, in Wizard101's card grammar with numbers from the params (tools/er_book_data.py
+    /// Cards.card: "152 $dT$$Damage$"; $..$ are Wizard101's card symbols); empty when the params say nothing.
+    pub card: String,
 }
 
 #[derive(Default)]
@@ -171,6 +174,7 @@ impl ItemData {
                         school: get("school").to_string(),
                         er_school: get("erschool").to_string(),
                         kind: get("kind").to_string(),
+                        card: get("card").to_string(),
                     });
                 }
                 _ => {}

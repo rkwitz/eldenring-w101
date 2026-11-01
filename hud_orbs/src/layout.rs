@@ -36,6 +36,9 @@ pub struct TextStyle {
     pub middle: bool,
     /// The control's m_nKerningAdjust: extra pen advance per glyph, font pixels.
     pub tracking: f32,
+    /// Inline pictures' side in line heights (PICTURE_SIZE unless a caller sets it: the spell cards use the
+    /// text's own size).
+    pub picture: f32,
 }
 
 impl TextStyle {
@@ -51,6 +54,7 @@ impl TextStyle {
             align: Align::Left,
             middle: true,
             tracking: 0.0,
+            picture: PICTURE_SIZE,
         }
     }
 
@@ -158,6 +162,7 @@ impl Layout {
                 align: Align::Left,
                 middle: true,
                 tracking: get("ka").and_then(|v| v.parse().ok()).unwrap_or(0.0),
+                picture: PICTURE_SIZE,
             });
             let frame = |key: &str| get(key).and_then(floats::<4>);
             nodes.push(Node {
@@ -546,7 +551,7 @@ impl Canvas<'_, '_> {
             .or_else(|| self.fonts.values().next());
         let Some(font) = font else { return };
         let t = style.tracking;
-        let picture_w = font.line_height * PICTURE_SIZE;
+        let picture_w = font.line_height * style.picture;
         let pictures_in = |l: &str| l.chars().filter(|c| picture_index(*c).is_some()).count() as f32;
         let measure = |l: &str| font.width_tracked(l, t) + pictures_in(l) * (picture_w + 2.0 * PICTURE_GAP);
         let width = r[2] - r[0];
