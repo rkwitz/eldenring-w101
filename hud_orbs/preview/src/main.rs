@@ -29,6 +29,8 @@ mod sheet;
 mod itemdata;
 #[path = "../../src/quests.rs"]
 mod quests;
+#[path = "../../src/talk.rs"]
+mod talk;
 #[path = "../../src/steam.rs"]
 mod steam;
 #[path = "../../src/model.rs"]
@@ -293,7 +295,16 @@ fn main() {
         ("9j_settings_row_hover", pages::Tab::Settings, 0, [0.70, 0.58], ""),
         ("9k_settings_tab_tip", pages::Tab::Settings, 0, [0.4215, 0.193], "settings:3"),
         ("11_markers", pages::Tab::Character, 0, [0.0, 0.0], "markers"),
-        ("10_dialogue", pages::Tab::Character, 0, [0.0, 0.0], "talk:Ceren Nightchant"),
+        ("11b_markers_close_connelly", pages::Tab::Character, 0, [0.0, 0.0], "markers:5.0029,94.1828,-44.0778"),
+        ("11c_markers_close_ceren", pages::Tab::Character, 0, [0.0, 0.0], "markers:-84.8379,94.4878,-18.4484"),
+        ("11d_markers_close_olivia", pages::Tab::Character, 0, [0.0, 0.0], "markers:-65.8655,92.8248,-7.9762"),
+        ("10_dialogue", pages::Tab::Character, 0, [0.0, 0.0], "talk:ceren_nightchant|ghost_hunters|goal3:0"),
+        ("10b_dialogue_page2", pages::Tab::Character, 0, [0.62, 0.86], "talk:ceren_nightchant|ghost_hunters|goal3:1"),
+        ("10c_dialogue_last", pages::Tab::Character, 0, [0.0, 0.0], "talk:private_connelly|idle:0"),
+        ("10d_offer", pages::Tab::Character, 0, [0.0, 0.0], "talk:olivia_dawnwillow|pesky_pirates|offer:0"),
+        ("10e_offer_accept", pages::Tab::Character, 0, [0.0, 0.0], "talk:olivia_dawnwillow|pesky_pirates|offer:1"),
+        ("10f_offer_oryan", pages::Tab::Character, 0, [0.0, 0.0], "talk:private_connelly|saving_private_oryan|offer:1"),
+        ("10g_intro_gamma", pages::Tab::Character, 0, [0.0, 0.0], "talk:intro|unicorn_way:0"),
         // The loading screen, then Wizard101's page turn that many seconds in.
         ("12_loadscreen", pages::Tab::Character, 0, [0.0, 0.0], "load:"),
         ("12b_flip_0.35", pages::Tab::Character, 0, [0.0, 0.0], "load:0.35"),
@@ -324,8 +335,13 @@ fn main() {
             book.capture(&mut render, true); // the world as it was before the map opened
             book.preview_map();
         }
-        if show == "markers" {
+        *game::CLOSE.lock().unwrap() = None;
+        if let Some(at) = show.strip_prefix("markers") {
             book.preview_closed();
+            let p: Vec<f32> = at.trim_start_matches(':').split(',').filter_map(|v| v.parse().ok()).collect();
+            if p.len() == 3 {
+                *game::CLOSE.lock().unwrap() = Some([p[0], p[1], p[2]]);
+            }
         }
         if show == "gear" {
             book.preview_gear(&game);
@@ -354,9 +370,10 @@ fn main() {
         }
         // A few frames: the first ones queue the art, which loads between frames.
         for frame in 0..4 {
-            if let Some(npc) = show.strip_prefix("talk:") {
+            if let Some(talk) = show.strip_prefix("talk:") {
                 if frame == 2 {
-                    book.preview_talk(npc);
+                    let (key, page) = talk.rsplit_once(':').unwrap_or((talk, "0"));
+                    book.preview_talk(key, page.parse().unwrap_or(0));
                 }
             }
             book.load_art(&mut render);

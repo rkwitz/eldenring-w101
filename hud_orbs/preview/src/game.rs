@@ -5,6 +5,9 @@ pub use crate::sheet::*;
 
 pub struct Game;
 
+/// A giver's MSB position to put the preview camera in front of (11b/11c_markers_close).
+pub static CLOSE: std::sync::Mutex<Option<[f32; 3]>> = std::sync::Mutex::new(None);
+
 /// Quest flags the preview pretends are on.
 const FLAGS: &[u32] = &[10000800, 14000800, 105, 110, 1042362000, 1042362001, 1042362009, 1042362010, 1042362500 + 2, 1042362040, 1042362540,
                         1042362541, 1042362100, 1042362011, 1042362109,
@@ -45,16 +48,25 @@ impl Game {
 
     pub fn position(&self) -> Option<([f32; 3], i32, i32)> {
         // In front of Private Connelly, Olivia Dawnwillow further off (m60_42_36_00).
-        Some(([-20.0, 93.5, -110.0], 0x3C2A2400, 0x3C2A2400))
+        Some((self.spot().1, 0x3C2A2400, 0x3C2A2400))
+    }
+
+    /// (camera, player): up the street, or (CLOSE) about talking distance (4 m) in front of a giver.
+    fn spot(&self) -> ([f32; 3], [f32; 3]) {
+        match CLOSE.lock().unwrap().as_ref() {
+            Some(p) => ([p[0], p[1] + 1.6, p[2] - 5.5], [p[0], p[1], p[2] - 4.0]),
+            None => ([-19.0, 95.3, -115.0], [-20.0, 93.5, -110.0]),
+        }
     }
 
     /// A camera behind the player looking up the street at the quest givers (physics space = chunk space here).
     pub fn camera(&self) -> Option<crate::markers::Camera> {
-        let f = [0.02f32, 0.0, 1.0];
+        let f = [if CLOSE.lock().unwrap().is_some() { 0.0f32 } else { 0.02 }, 0.0, 1.0];
         let n = (f[0] * f[0] + f[2] * f[2]).sqrt();
         let f = [f[0] / n, 0.0, f[2] / n];
-        let matrix = [[f[2], 0.0, -f[0], 0.0], [0.0, 1.0, 0.0, 0.0], [f[0], 0.0, f[2], 0.0], [-19.0, 95.3, -115.0, 1.0]];
-        Some(crate::markers::Camera { matrix, fov: 0.85, player: [-20.0, 93.5, -110.0] })
+        let (c, player) = self.spot();
+        let matrix = [[f[2], 0.0, -f[0], 0.0], [0.0, 1.0, 0.0, 0.0], [f[0], 0.0, f[2], 0.0], [c[0], c[1], c[2], 1.0]];
+        Some(crate::markers::Camera { matrix, fov: 0.85, player })
     }
 
     pub fn sheet(&self) -> Option<Sheet> {

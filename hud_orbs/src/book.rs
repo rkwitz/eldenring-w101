@@ -15,8 +15,8 @@
 //! back when the map closes (or a book tab is clicked), unless the player travelled (to a grace). While the book is
 //! open the game gets no input at all, the mouse included (see input.rs).
 //!
-//! Quests: the quest event flags (quests.rs) fill the Quests page, and an NPC's talk flag shows its dialogue in a
-//! Wizard101-style box (then the flag is cleared).
+//! Quests: the quest event flags (quests.rs) fill the Quests page; a talk event's request flag shows that
+//! conversation in Wizard101's own dialogue box and quest offer (talk.rs), answered through DIALOG_OK / DIALOG_CANCEL.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -36,7 +36,8 @@ use crate::names::Names;
 use crate::pages::{self, Action, Data, Hit, Tab, TABS};
 use crate::markers;
 use crate::nameplates;
-use crate::quests::{Active, Quests, Talk};
+use crate::quests::{Active, Quests};
+use crate::talk::{self, Conversation, Press};
 
 /// The book window (SpellBookPrefsWindow.gui, 800x600, centred) in Wizard101 pixels.
 const BOOK: [f32; 2] = [800.0, 600.0];
@@ -97,8 +98,6 @@ const QUIT_SETTLE: f32 = 3.0;
 const NOTE_TIME: Duration = Duration::from_secs(4);
 /// How often the quest flags are read.
 const QUEST_POLL: Duration = Duration::from_millis(250);
-/// How long after a talk press the quest flags are compared (the map's events update them on the same press).
-const TALK_SETTLE: Duration = Duration::from_millis(500);
 
 const GOLD: ImColor32 = ImColor32::from_rgb(214, 170, 72);
 const PARCHMENT_DARK: ImColor32 = ImColor32::from_rgba(28, 18, 10, 236);
@@ -121,12 +120,6 @@ struct Pointer {
     down: bool,
     clicked: bool,
     wheel: f32,
-}
-
-struct Dialogue {
-    talk: Talk,
-    line: usize,
-    opened: Instant,
 }
 
 pub struct Book {
@@ -160,9 +153,9 @@ pub struct Book {
     flags: HashMap<u32, bool>,
     flags_time: Option<Instant>,
     active: Vec<Active>,
-    /// A talk press waiting for the quest flags to settle: NPC name, the flags before it, when.
-    talk: Option<(String, HashMap<u32, bool>, Instant)>,
-    dialogue: Option<Dialogue>,
+    /// The conversations the map's talk events can ask for (talk.rs, dialogue.tsv), and the one on screen.
+    requests: Vec<talk::Request>,
+    dialogue: Option<Conversation>,
     /// The book's cursor (screen pixels), the system cursor last seen, DirectInput's buttons last seen.
     cursor: [f32; 2],
     last_os: [f32; 2],
@@ -384,7 +377,7 @@ impl Book {
             flags: HashMap::new(),
             flags_time: None,
             active: Vec::new(),
-            talk: None,
+            requests: Vec::new(),
             dialogue: None,
             cursor: [0.0; 2],
             last_os: [-1.0; 2],
@@ -451,6 +444,17 @@ impl Book {
         self.quests = Quests::load(&folder.join("quests.tsv"));
         self.quest_flags = self.quests.flags();
         self.quest_flags.extend(markers::flags());
+        // w101_quests: the talk events' conversation requests (round 17) and Wizard101's dialogue box.
+        self.requests = talk::load(&folder.join("dialogue.tsv"));
+        self.quest_flags.extend(self.requests.iter().map(|r| r.flag));
+        for page in [talk::WINDOW, talk::IMAGE] {
+            match Layout::load(&folder.join(format!("{page}.lay"))) {
+                Ok(l) => {
+                    self.layouts.insert(page, l);
+                }
+                Err(e) => tracing::warn!("dialogue: {e}"),
+            }
+        }
         self.quest_flags.sort();
         self.quest_flags.dedup();
         // The game's parts folder: next to eldenring.exe (W101_PARTS overrides, for the preview).
@@ -706,20 +710,22 @@ impl Book {
         self.state.pet = pet;
     }
 
-    /// Shows the dialogue of a talk press on `npc` (the preview renderer).
+    /// Shows conversation `key` (dialogue.tsv) on page `page` (the preview renderer).
     #[allow(dead_code)]
-    pub fn preview_talk(&mut self, npc: &str) {
+    pub fn preview_talk(&mut self, key: &str, page: usize) {
         self.set_open(false);
-        let before = |_: u32| false;
-        let after = |f: u32| game::event_flag(f) == Some(true);
-        if let Some(talk) = self.quests.talk(npc, &before, &after) {
-            self.dialogue = Some(Dialogue { talk, line: 0, opened: Instant::now() - Duration::from_secs(1) });
+        if let Some(k) = self.requests.iter().position(|r| r.key == key) {
+            if let Some(mut c) = self.conversation(k) {
+                c.page = page.min(c.pages.len().saturating_sub(1));
+                c.opened = Instant::now() - Duration::from_secs(1);
+                self.dialogue = Some(c);
+            }
         }
     }
 
     /// Draws the quest markers over the quest givers (markers.rs) in normal play, from the last quest flags read.
     pub fn draw_markers(&mut self, ui: &Ui, cx: &Context) {
-        self.textures.want([markers::OFFER, markers::TALK].map(String::from));
+        self.textures.want([markers::OFFER, markers::TALK, markers::SPIRAL].map(String::from));
         if !cx.gameplay || self.blocking() || self.map != MapState::Idle || self.flags.is_empty() {
             return;
         }
@@ -1679,95 +1685,168 @@ impl Book {
         }
     }
 
-    /// Reads the quest flags; a talk flag that is on is cleared and, once the quest flags have settled, its dialogue
-    /// is shown.
+    /// Reads the quest flags. A conversation request (talk.rs) that is on opens Wizard101's dialogue box; one that
+    /// went off while its box is up (the player walked away, the event withdrew it) closes the box.
     fn poll_quests(&mut self, cx: &Context) {
         if self.quests.quests.is_empty() || self.flags_time.is_some_and(|t| t.elapsed() < QUEST_POLL) {
             return;
         }
         self.flags_time = Some(Instant::now());
         let first = self.flags.is_empty();
-        let before = std::mem::take(&mut self.flags);
         let mut now: HashMap<u32, bool> = HashMap::new();
         for f in &self.quest_flags {
             if let Some(on) = game::event_flag(*f) {
                 now.insert(*f, on);
             }
         }
-        for (_, flag, name) in &self.quests.npcs {
-            if now.get(flag) == Some(&true) {
-                game::set_event_flag(*flag, false);
-                now.insert(*flag, false);
-                // A flag left on from before the HUD started has nothing to compare with.
-                if !first && self.talk.is_none() {
-                    self.talk = Some((name.clone(), before.clone(), Instant::now()));
-                }
-            }
-        }
         self.flags = now;
         let flags = &self.flags;
         self.active = self.quests.active(&|f| flags.get(&f) == Some(&true));
-        let ready = self.talk.as_ref().is_some_and(|t| t.2.elapsed() >= TALK_SETTLE);
-        if ready && cx.gameplay && !self.open {
-            let (npc, before, _) = self.talk.take().expect("checked");
-            let talk = self.quests.talk(&npc, &|f| before.get(&f) == Some(&true), &|f| flags.get(&f) == Some(&true));
-            if let Some(talk) = talk {
-                tracing::info!("dialogue: {} ({}, {:?})", talk.npc, talk.quest, talk.event);
-                self.dialogue = Some(Dialogue { talk, line: 0, opened: Instant::now() });
+        let on = |f: u32| flags.get(&f) == Some(&true);
+        if let Some(d) = &self.dialogue {
+            if !on(self.requests[d.request].flag) {
+                tracing::info!("dialogue: {} withdrawn by its event", self.requests[d.request].key);
+                self.end_dialogue();
+            }
+            return;
+        }
+        let Some(k) = self.requests.iter().position(|r| on(r.flag)) else { return };
+        if first {
+            // Left on in the save from a conversation cut short by quitting: its event no longer waits for it.
+            for r in self.requests.iter().filter(|r| on(r.flag)) {
+                game::set_event_flag(r.flag, false);
+            }
+            return;
+        }
+        if !cx.gameplay || self.open {
+            return; // the box comes once the book or the game's menu is closed
+        }
+        match self.conversation(k) {
+            Some(c) => {
+                tracing::info!("dialogue: {} ({} pages{})", self.requests[k].key, c.pages.len(),
+                               if c.offer { ", offer" } else { "" });
+                self.dialogue = Some(c);
                 input::set_book_open(true);
+            }
+            None => {
+                tracing::info!("dialogue: {} has no lines; answered OK", self.requests[k].key);
+                Self::answer(&self.requests[k], talk::Answer::Ok);
             }
         }
     }
 
-    /// The NPC dialogue box: A, Enter, Space or a click for the next line; B or Esc closes it.
+    /// The conversation for request `k`: its lines, or for a quest offer without them the quest's own text.
+    fn conversation(&self, k: usize) -> Option<Conversation> {
+        let r = &self.requests[k];
+        let mut pages = r.pages.clone();
+        if pages.is_empty() && r.offer() {
+            pages = self.quests.offer_lines(&r.quest);
+        }
+        (!pages.is_empty()).then(|| Conversation { request: k, pages, page: 0, offer: r.offer(), opened: Instant::now() })
+    }
+
+    /// Answers request `r` for its talk event: the answer flag on, the request off.
+    fn answer(r: &talk::Request, answer: talk::Answer) {
+        tracing::info!("dialogue: {} answered {answer:?}", r.key);
+        game::set_event_flag(if answer == talk::Answer::Ok { talk::DIALOG_OK } else { talk::DIALOG_CANCEL }, true);
+        game::set_event_flag(r.flag, false);
+    }
+
+    fn end_dialogue(&mut self) {
+        self.dialogue = None;
+        self.holding = true;
+        self.closed_at = Some(Instant::now());
+        input::set_book_open(self.blocking());
+    }
+
+    /// Wizard101's dialogue box (talk.rs): its buttons by mouse; A / Enter / Space / E for NEXT (DONE) or ACCEPT,
+    /// LB / Left / Backspace for BACK, B / Esc to close (on an offer's last page: DECLINE).
     fn dialogue_frame(&mut self, ui: &Ui, pressed: u16, pointer: &Pointer) {
         input::set_book_open(true);
-        let Some(d) = self.dialogue.as_mut() else { return };
-        let settled = d.opened.elapsed() > Duration::from_millis(250);
-        let next = pressed & input::A != 0
-            || ui.is_key_pressed_no_repeat(Key::Enter)
-            || ui.is_key_pressed_no_repeat(Key::Space)
-            || ui.is_key_pressed_no_repeat(Key::E)
-            || pointer.clicked;
-        let close = pressed & (input::B | input::BACK) != 0 || ui.is_key_pressed_no_repeat(Key::Escape);
-        if settled && next {
-            d.line += 1;
-        }
-        if (settled && close) || d.line >= d.talk.lines.len() {
-            self.dialogue = None;
-            self.holding = true;
-            self.closed_at = Some(Instant::now());
-            input::set_book_open(self.blocking());
+        let (Some(window), Some(d)) = (self.layouts.get(talk::WINDOW), self.dialogue.as_ref()) else {
+            // No DialogWindow.lay: answer at once rather than leave the event waiting.
+            if let Some(d) = self.dialogue.take() {
+                Self::answer(&self.requests[d.request], talk::Answer::Ok);
+            }
+            self.end_dialogue();
             return;
+        };
+        let request = &self.requests[d.request];
+        let screen = ui.io().display_size;
+        let (s, origin) = talk::placement(window, screen);
+        let view = d.view(window, request);
+        // Ask for the art this frame needs (the box, its buttons, the portrait, the quest card); it loads before the
+        // next frame.
+        let mut wanted = window.images();
+        wanted.extend(view.node_art.values().cloned());
+        if d.choosing() {
+            if let Some(card) = self.layouts.get(pages::QUEST_CARD) {
+                wanted.extend(card.images());
+            }
         }
-        // A box along the bottom of the screen, in page pixels of a centred book.
-        let [width, height] = ui.io().display_size;
-        let s = height / SCREEN;
+        wanted.push(CURSOR.into());
+        self.textures.want(wanted);
         let draw = ui.get_foreground_draw_list();
         let canvas = Canvas {
             draw: &draw,
             textures: &self.textures,
             fonts: &self.fonts,
-            origin: [(width - BOOK[0] * s) / 2.0, height - 190.0 * s],
+            origin,
             s,
-            mouse: [-1.0e4; 2],
-            mouse_down: false,
+            mouse: [(pointer.pos[0] - origin[0]) / s, (pointer.pos[1] - origin[1]) / s],
+            mouse_down: pointer.down,
             alpha: (d.opened.elapsed().as_secs_f32() / 0.15).min(1.0),
             hole: Cell::new(None),
         };
-        let r = [40.0, 0.0, 760.0, 150.0];
-        let (p0, p1) = (canvas.at(r[0], r[1]), canvas.at(r[2], r[3]));
-        draw.add_rect(p0, p1, PARCHMENT_DARK).filled(true).rounding(10.0 * s).build();
-        draw.add_rect(p0, p1, GOLD).rounding(10.0 * s).thickness(3.0 * s).build();
-        canvas.text(&d.talk.npc, [r[0] + 22.0, r[1] + 10.0, r[2] - 200.0, r[1] + 40.0],
-                    &TextStyle::new("WizardFancy", 0.6, YELLOW).outlined(), false);
-        canvas.text(&format!("<right>{}</right>", d.talk.quest), [r[2] - 300.0, r[1] + 12.0, r[2] - 22.0, r[1] + 36.0],
-                    &TextStyle::new("WizardFancy", 0.42, GOLD), false);
-        canvas.text(&d.talk.lines[d.line], [r[0] + 24.0, r[1] + 46.0, r[2] - 24.0, r[3] - 26.0],
-                    &TextStyle::new("WizardNormal", 0.5, WHITE).wrapped(), false);
-        let more = if input::pad_connected() { "A: next   B: close" } else { "Enter or click: next   Esc: close" };
-        canvas.text(&format!("<right>{}/{}   {more}</right>", d.line + 1, d.talk.lines.len()),
-                    [r[0] + 24.0, r[3] - 26.0, r[2] - 24.0, r[3] - 6.0], &TextStyle::new("WizardNormal", 0.36, GOLD), false);
+        // An offer's last page: the quest card (QuestInfoWindow, as on the Quests page) in DialogImage's square.
+        if d.choosing() {
+            if let (Some(card), Some(active)) = (self.layouts.get(pages::QUEST_CARD), self.quests.offer_card(&request.quest)) {
+                let square = talk::picture_rect(self.layouts.get(talk::IMAGE), screen);
+                let c = card.nodes[0].rect;
+                let (cw, ch) = (c[2] - c[0], c[3] - c[1]);
+                let k = ((square[2] - square[0]) / cw).min((square[3] - square[1]) / ch);
+                let at = [(square[0] + square[2] - cw * k) / 2.0, (square[1] + square[3] - ch * k) / 2.0];
+                let mut view = View::default();
+                pages::quest_card(card, &active, &mut view);
+                let inner = Canvas {
+                    draw: &draw,
+                    textures: &self.textures,
+                    fonts: &self.fonts,
+                    origin: at,
+                    s: k,
+                    mouse: [-1.0e4; 2],
+                    mouse_down: false,
+                    alpha: canvas.alpha,
+                    hole: Cell::new(None),
+                };
+                layout::draw(card, &view, &inner, |_| true);
+                layout::draw_extra(&view, &inner);
+            }
+        }
+        let hits = layout::draw(window, &view, &canvas, |_| true);
+        draw_cursor(&draw, &self.textures, pointer.pos, screen[1]);
+        if d.opened.elapsed() < Duration::from_millis(250) {
+            return;
+        }
+        let key = |k: Key| ui.is_key_pressed_no_repeat(k);
+        let click = hits.button.filter(|_| pointer.clicked).and_then(|b| talk::button(&window.nodes[b].name));
+        let press = click.or_else(|| {
+            if pressed & input::A != 0 || key(Key::Enter) || key(Key::Space) || key(Key::E) {
+                Some(if d.choosing() { Press::Accept } else { Press::Next })
+            } else if pressed & input::LB != 0 || key(Key::LeftArrow) || key(Key::Backspace) {
+                Some(Press::Back)
+            } else if pressed & (input::B | input::BACK) != 0 || key(Key::Escape) {
+                Some(if d.choosing() { Press::Decline } else { Press::Close })
+            } else {
+                None
+            }
+        });
+        let Some(press) = press else { return };
+        let d = self.dialogue.as_mut().expect("checked");
+        if let Some(answer) = d.press(press) {
+            Self::answer(&self.requests[d.request], answer);
+            self.end_dialogue();
+        }
     }
 
     /// Changes row `row` of the Settings page's current tab by `step` (options.rs). The row's value shows the change;

@@ -1,7 +1,12 @@
 //! Wizard101's quest markers over the Unicorn Way quest givers (round 15: Elden Ring characters talked to with the
-//! game's "Talk" prompt, tools/msb_add_npcs.py), and the Wizard101 names over every street NPC. Wizard101's yellow
-//! "!" (GUI/QuestButtons/Quest_Start) while they have a quest to offer, its "?" medallion (Art_Quest_Complete) while a
-//! current goal is to talk to them.
+//! game's "Talk" prompt, tools/msb_add_npcs.py), and the Wizard101 names over every street NPC.
+//!
+//! Round 17 (F1): the markers are Wizard101's own wizbangs (WizBangs.xml: StartQuest = Wizbang/Quest_Marker_Start.nif,
+//! the yellow "!", while they have a quest to offer; CompleteQuestGoal = Quest_Marker_Complete.nif, the yellow "?",
+//! while a current goal is to talk to them, which includes handing a quest in). Each nif is a camera-facing quad
+//! 76.2 units (0.762 m) square centred 38.71 units over the marker's origin, with the red Quest_Spiral (59 units)
+//! turning behind it once every 6.67 s; the sign does not bob or pulse. Wizard101 hangs it on the character's
+//! ChatNode (Human_WCGuard_A.nif: 2.90 m, 1.01 m over the head bone). The textures come from tools/w101_quest_art.py.
 //!
 //! The positions are the MSB's (m60_42_36_00, tile-local metres). The player's place in the tile grid comes from
 //! ChrIns's chunk position and block origin; the camera works in the physics space, so a giver is drawn at the
@@ -14,19 +19,24 @@ use hudhook::imgui::{DrawListMut, ImColor32};
 
 use crate::layout::Textures;
 
-pub const OFFER: &str = "GUI/QuestButtons/Quest_Start.png";
-pub const TALK: &str = "GUI/QuestButtons/Art_Quest_Complete.png";
+pub const OFFER: &str = "Wizbang/Quest_Start.png";
+pub const TALK: &str = "Wizbang/Quest_Complete.png";
+pub const SPIRAL: &str = "Wizbang/Quest_Spiral.png";
 
 /// The tile the givers are in (m60_42_36_00).
 const TILE: [i32; 2] = [42, 36];
-/// (slug, entity, MSB position): round 15, the street characters of tools/msb_add_npcs.py (Elden Ring NPCs with
-/// the "Talk" prompt, entities 1042360820-824) in place of the invisible giver assets (1042361870-874).
-const GIVERS: [(&str, u32, [f32; 3]); 5] = [
-    ("private_connelly", 1042360820, [5.0029, 94.1828, -44.0778]),
-    ("ceren_nightchant", 1042360821, [-84.8379, 94.4878, -18.4484]),
-    ("olivia_dawnwillow", 1042360822, [-65.8655, 92.8248, -7.9762]),
-    ("lady_oriel", 1042360823, [-335.1056, 93.4988, 103.5473]),
-    ("private_oryan", 1042360824, [-160.8270, 93.4878, -54.0237]),
+/// (slug, entity, MSB position, marker origin over the feet in metres): round 15, the street characters of
+/// tools/msb_add_npcs.py (Elden Ring NPCs with the "Talk" prompt, entities 1042360820-824) in place of the invisible
+/// giver assets (1042361870-874). The origin is Wizard101's ChatNode scaled to the Elden Ring stand-in (ChatNode over
+/// the head bone: guard 290 / 189.2 units, ShopKeepF 214.8 / 157, Seraph 285.9 / 152.4, times the stand-in's head
+/// bone: c0000 about 1.55 m, Melina 1.5 m), but never lower than the top of the name plate (NPC_PLATES + 0.35 m), so
+/// the sign sits over the name as in Wizard101: Connelly, Ceren, Olivia and O'Ryan 2.55, Oriel 2.81.
+const GIVERS: [(&str, u32, [f32; 3], f32); 5] = [
+    ("private_connelly", 1042360820, [5.0029, 94.1828, -44.0778], 2.55),
+    ("ceren_nightchant", 1042360821, [-84.8379, 94.4878, -18.4484], 2.55),
+    ("olivia_dawnwillow", 1042360822, [-65.8655, 92.8248, -7.9762], 2.55),
+    ("lady_oriel", 1042360823, [-335.1056, 93.4988, 103.5473], 2.81),
+    ("private_oryan", 1042360824, [-160.8270, 93.4878, -54.0237], 2.55),
 ];
 
 /// Wizard101 names over the street characters (msb_add_npcs.py; the givers at the same spots as GIVERS):
@@ -70,9 +80,12 @@ const TALKS: &[(&str, u32, u32, u32, &[u32])] = &[
 
 /// Markers are drawn this far (metres) and fade out over the last part.
 const RANGE: f32 = 150.0;
-/// Height of the marker's centre above the giver's feet (over the name plate), and its size, in metres.
-const LIFT: f32 = 3.1;
-const SIZE: f32 = 0.9;
+/// Quest_Marker_*.nif: the billboard's height over the marker's origin, the sign's and the spiral's quad sides (W101
+/// units = cm), and the spiral's turn (its z rotation keys: -2 pi over 6.67 s).
+const CENTRE: f32 = 0.3871;
+const SIGN: f32 = 0.762;
+const SPIRAL_SIDE: f32 = 0.59;
+const SPIRAL_TURN: f32 = 6.6667;
 
 /// The game camera: rows right, up, forward, position; vertical field of view in radians; and the player's physics
 /// position (the camera's space).
@@ -180,7 +193,8 @@ pub fn npc_plates(camera: &Camera, position: ([f32; 3], i32, i32), screen: [f32;
     out
 }
 
-/// Draws the markers. `position` is Game::position (chunk position, block, block origin), `time` seconds for the bob.
+/// Draws the markers. `position` is Game::position (chunk position, block, block origin), `time` seconds for the
+/// spiral's turn.
 pub fn draw(
     draw: &DrawListMut,
     textures: &Textures,
@@ -192,9 +206,8 @@ pub fn draw(
 ) {
     let (chunk, _, origin) = position;
     let flag = |f: u32| flags.get(&f) == Some(&true);
-    let bob = (time * 2.2).sin() * 0.08;
     let mut drawn: Vec<(f32, [f32; 2], f32, u8, &str)> = Vec::new();
-    for (slug, _, local) in GIVERS {
+    for (slug, _, local, lift) in GIVERS {
         let Some(kind) = marker(slug, &flag) else { continue };
         // The giver's offset from the player in the tile grid, added to the player's physics position.
         let Some(delta) = offset(local, chunk, origin) else { return };
@@ -204,20 +217,28 @@ pub fn draw(
             continue;
         }
         let p = camera.player;
-        let world = [p[0] + delta[0], p[1] + delta[1] + LIFT + bob, p[2] + delta[2]];
+        let world = [p[0] + delta[0], p[1] + delta[1] + lift + CENTRE, p[2] + delta[2]];
         let Some((at, z)) = camera.project(world, screen) else { continue };
-        // Never smaller than a readable icon far away, nor huge up close.
-        let px = (SIZE * camera.scale(z, screen[1])).clamp(screen[1] * 0.03, screen[1] * 0.11);
-        drawn.push((z, at, px, alpha, if kind == Marker::Offer { OFFER } else { TALK }));
+        // Wizard101 draws it at its world size; far away it is kept to a still readable 1.5 % of the screen.
+        let metre = camera.scale(z, screen[1]).max(screen[1] * 0.015 / SIGN);
+        drawn.push((z, at, metre, alpha, if kind == Marker::Offer { OFFER } else { TALK }));
     }
     // Far ones first, so near ones cover them.
     drawn.sort_by(|a, b| b.0.total_cmp(&a.0));
-    for (_, at, px, alpha, name) in drawn {
+    // The spiral turns clockwise on the screen, a full turn every SPIRAL_TURN seconds.
+    let angle = (time / SPIRAL_TURN).fract() * std::f32::consts::TAU;
+    for (_, at, metre, alpha, name) in drawn {
+        let tint = ImColor32::from_rgba(255, 255, 255, alpha);
+        if let Some((spiral, _)) = textures.get(SPIRAL) {
+            let h = SPIRAL_SIDE * metre / 2.0;
+            let (sin, cos) = angle.sin_cos();
+            let corner = |x: f32, y: f32| [at[0] + (x * cos - y * sin) * h, at[1] + (x * sin + y * cos) * h];
+            draw.add_image_quad(spiral, corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0))
+                .col(tint)
+                .build();
+        }
         let Some((texture, _)) = textures.get(name) else { continue };
-        // Quest_Start's "!" fills about the middle third of its square, the medallion all of its own.
-        let side = if name == OFFER { px * 1.6 } else { px * 1.2 };
-        let min = [at[0] - side / 2.0, at[1] - side / 2.0];
-        let max = [min[0] + side, min[1] + side];
-        draw.add_image(texture, min, max).col(ImColor32::from_rgba(255, 255, 255, alpha)).build();
+        let h = SIGN * metre / 2.0;
+        draw.add_image(texture, [at[0] - h, at[1] - h], [at[0] + h, at[1] + h]).col(tint).build();
     }
 }

@@ -118,8 +118,47 @@ REMOVED = [
 IDLE = {"c0000": (90100, 0), "c2180": (0, 1)}
 CHARACTER_PART_ID = 9100  # part header 0x08 / name suffix of the first character (<model>_9100..)
 TALK_NPC_BUTTON = 6000  # ActionButtonParam "Talk" (category 4, radius 2.5 m), as vanilla m60_51_36 1051360734 on a character
-DIALOG_OK, DIALOG_CANCEL = 1042362620, 1042362621  # set by a dialog page's OK / back (2007[10])
+# Round 17: the HUD's answer to a dialogue request (DIALOGUE_FLAG + k): OK = the last page was read / the quest was
+# accepted; CANCEL = closed early / the quest was declined (rounds 15-16: ER's 2007[10] OK / back buttons).
+DIALOG_OK, DIALOG_CANCEL = 1042362620, 1042362621
 CHARACTER = {c[0]: c for c in CHARACTERS}
+
+# Round 17 (F2/F3): the conversations are shown by the HUD DLL in Wizard101's own dialogue box (DialogWindow.gui),
+# not ER's 2007[10]. A talk event sets the request flag of a dialogue key and waits for DIALOG_OK / DIALOG_CANCEL (or
+# the player walking off); the DLL reads which flag is on, shows that key's pages (the text is read at runtime from
+# w101_orbs/book/dialogue.tsv on Ryan's PC, tools/w101_book_dialogue.py) and answers. 1042362400-499 is free (quests
+# 000-159, crafting 160-182 / 350-399, counters 500-515, cages 540-543, talk 600-604, dialog 620/621, vanilla
+# 732-734, doors 900-999).
+DIALOGUE_FLAG = 1042362400
+# Wizard101's portrait of each speaker (DialogWindow's imgPortrait): the NpcPortraits file the speaker's ObjectData
+# template names (Root.wad ObjectData/WC/WC-ST01-NPC0n.xml; the intro is Gamma's).
+PORTRAITS = {
+    "private_connelly": "GUI/NpcPortraits/Human_WCGuard_A.png",  # WC-ST01-NPC04
+    "ceren_nightchant": "GUI/NpcPortraits/Art_Portrait_Boy_Life02.png",  # WC-ST01-NPC01
+    "olivia_dawnwillow": "GUI/NpcPortraits/Human_WCShopKeepF_A_NPC.png",  # WC-ST01-NPC03
+    "lady_oriel": "GUI/NpcPortraits/Portrait_Seraph_Aerial_B_NPC.png",  # WC-ST01-NPC02
+    "private_oryan": "GUI/NpcPortraits/Human_WCGuard_B.png",  # WC-ST01-NPC05
+    "intro": "GUI/NpcPortraits/Portrait_Owl_Gamma_A_NPC.png",
+}
+SPEAKERS = {"intro": "Gamma"}
+
+
+def dialogue_keys():
+    """{dialogue key: request flag}, in a fixed order that doesn't depend on the dialogue text: the intros of quests
+    assigned by walking somewhere, then per character its talk goals, the quests it offers, the quests it is part of
+    (underway) and its idle line."""
+    keys = [f"intro|{q['slug']}" for q in QUESTS if q["assign"] and q["assign"][0] == "goto"]
+    for slug, *_rest in CHARACTERS:
+        talks = [(q, i) for q in QUESTS for i, g in enumerate(q["goals"], 1)
+                 if g["type"] == "talk" and g["target"] == slug]
+        keys += [f"{slug}|{q['slug']}|goal{i}" for q, i in talks]
+        keys += [f"{slug}|{q['slug']}|offer" for q in QUESTS
+                 if q["assign"] and q["assign"][0] == "talk" and q["assign"][1] == slug]
+        keys += [f"{slug}|{q['slug']}|underway" for q in QUESTS
+                 if q["giver"] == slug or any(t[0] is q for t in talks)]
+        keys.append(f"{slug}|idle")
+    assert len(keys) <= 100 and len(set(keys)) == len(keys)
+    return {key: DIALOGUE_FLAG + k for k, key in enumerate(keys)}
 
 # The four quest Bone Cages (W101 WC-FairyCage02..05), placeholder cage asset, entity ids. The cage events keep them
 # disabled (not drawn, no collision) except while Finding Out Why's cage goal is current.

@@ -5,7 +5,7 @@ can be applied on top of other helpers' changes.
 
 Events, in id order (all flags in w101_quests' docstring):
   assign  quests assigned by walking somewhere (Unicorn Way: reaching Private Connelly's sphere), with the
-          quest's intro page (dialogue key "intro|<quest>": Gamma pointing the player to Connelly).
+          quest's intro (dialogue key "intro|<quest>": Gamma pointing the player to Connelly).
   goal    one per goal that is not a talk goal: END if done; WAIT for the quest's assigned flag and the goals before
           it; then wait for the goal's own condition (player in the sphere / kill counter >= N / every cage flag /
           the boss alive and then dead) and set the goal flag; the second-to-last goal also sets "ready", the last
@@ -20,19 +20,22 @@ Events, in id order (all flags in w101_quests' docstring):
           own "Talk" press (ActionButtonParam 6000) on the character, then the first block whose flags match, each
           ending in RESTART so the next press is handled the same way:
             1. a talk goal of any quest that is current and targets this NPC: set the goal flag (and ready /
-               complete / the next quests' assignment, as a goal event would), then that goal's pages
-            2. a side quest this NPC hands out whose prerequisite is on and which is not assigned: assign it, pages
-            3. a quest of this NPC's that is assigned and not complete and has "underway" pages: those pages
-            4. the NPC's idle pages
-          Flags are set before the pages, so leaving the dialog early never loses progress.
+               complete / the next quests' assignment, as a goal event would), then that goal's conversation
+            2. a side quest this NPC hands out whose prerequisite is on and which is not assigned: the offer
+               conversation; the quest is assigned only when it is accepted (round 17)
+            3. a quest of this NPC's that is assigned and not complete and has "underway" lines: that conversation
+            4. the NPC's idle conversation
   idle    (round 16) one per street character: one frame after every load, ForceAnimation its idle
           (w101_quests.IDLE), then END.
-Pages are ER's generic dialog box (2007[10] "Display Generic Dialog and Set Event Flags", OK only, as vanilla
-common.emevd 4852 shows its messages) with EventTextForMap text from er_text.py --dialogue: OK shows the next page,
-the back button or walking away from the NPC ends the conversation. Message ids come from a dialogue file
-(--dialogue npc_dialogue.json: {"pages": {"<npc>|<quest>|goal<i>" / "|offer" / "|underway", "<npc>|idle",
-"intro|<quest>": [[message id, text], ...]}}); that file holds Wizard101 text and lives outside the repo. Without
-it the events still work, silently. The HUD's own dialogue box (talk flags 600-604) is no longer cued.
+Conversations (round 17, F2/F3) are shown by the HUD DLL in Wizard101's own dialogue box, not ER's 2007[10]: a
+conversation is one request, `talk(key, entity)`: clear DIALOG_OK / DIALOG_CANCEL, set the key's request flag
+(w101_quests.dialogue_keys(), 1042362400+), wait for OK, CANCEL or the player walking LEAVE_DISTANCE away, clear the
+request flag again, and RESTART unless OK was answered. The DLL pages through the key's lines (NEXT / BACK / DONE)
+and answers OK after the last one, CANCEL when closed early. For a quest offer its last page is the quest card with
+ACCEPT / DECLINE: OK = accept, and only then does the event assign the quest; DECLINE, closing or walking away leave
+it offered (the "!" stays). Talk goals still set their flags before the conversation, so leaving early never loses
+progress. A dialogue file (--dialogue npc_dialogue.json: {"pages": {key: [[id, text], ...]}}; Wizard101 text, outside
+the repo) only decides which "underway" blocks exist; the text itself never enters the EMEVD.
 
 Usage: python emevd_quests.py [--dialogue npc_dialogue.json] in.emevd[.dcx] out.emevd[.dcx]   (DFLT DCX in -> out)
 """
@@ -49,9 +52,8 @@ import w101_quests as Q  # noqa: E402
 
 PLAYER = 10000
 GE = 4  # comparison: GreaterOrEqual
-DIALOG_DISTANCE = 5.0  # the dialog closes when the player is farther than this from the NPC
-LEAVE_DISTANCE = 6.0  # walking this far away ends the conversation (in case the dialog closes without a flag)
-PAGE_GAP = 0.2  # seconds between one page closing and the next one opening
+LEAVE_DISTANCE = 6.0  # walking this far away from the NPC ends the conversation
+PAGE_GAP = 0.2  # seconds after a conversation before the next talk press is taken
 
 
 def if_flag(group, state, flag):
@@ -115,29 +117,23 @@ def wait(seconds):
     return _i(1001, 0, "<f", seconds)
 
 
-def dialog(message, entity, distance):
-    """ER's generic dialog, OK button only; OK sets DIALOG_OK, back sets DIALOG_CANCEL."""
-    return _i(2007, 10, "<ihhIfIII", message, 1, 1, entity, distance, Q.DIALOG_OK, Q.DIALOG_CANCEL, Q.DIALOG_CANCEL)
-
-
 END = _i(1000, 4, "<Bxxx", 0)
 WAIT_FRAME = _i(1001, 1, "<i", 1)  # WaitFixedNumberOfFrames(1)
 RESTART = _i(1000, 4, "<Bxxx", 1)
 
-DIALOGUE = {}  # dialogue key -> [message id, ...] (main: --dialogue)
+DIALOGUE = {}  # dialogue keys that have lines (main: --dialogue); decides which "underway" blocks exist
+REQUESTS = Q.dialogue_keys()  # dialogue key -> the flag that asks the HUD to show it
 
 
-def pages(key, entity=0):
-    """One dialog per page of `key`; after each, the event restarts unless OK was pressed (back, or walked off)."""
-    out = []
-    for message in DIALOGUE.get(key, []):
-        out += [set_flag(Q.DIALOG_OK, 0), set_flag(Q.DIALOG_CANCEL, 0),
-                dialog(message, entity, DIALOG_DISTANCE if entity else 100.0),
-                if_flag(-1, 1, Q.DIALOG_OK), if_flag(-1, 1, Q.DIALOG_CANCEL)]
-        if entity:
-            out.append(if_near(-1, 0, entity, LEAVE_DISTANCE))
-        out += [if_group(0, 1, -1), end_if_flag(Q.DIALOG_OK, 0, restart=True), wait(PAGE_GAP)]
-    return out
+def talk(key, entity=0):
+    """One conversation in the HUD's Wizard101 dialogue box: request `key`, wait for the answer (or the player walking
+    away from `entity`), withdraw the request, and restart the event unless the answer was OK."""
+    request = REQUESTS[key]
+    out = [set_flag(Q.DIALOG_OK, 0), set_flag(Q.DIALOG_CANCEL, 0), set_flag(request),
+           if_flag(-1, 1, Q.DIALOG_OK), if_flag(-1, 1, Q.DIALOG_CANCEL)]
+    if entity:
+        out.append(if_near(-1, 0, entity, LEAVE_DISTANCE))
+    return out + [if_group(0, 1, -1), set_flag(request, 0), end_if_flag(Q.DIALOG_OK, 0, restart=True), wait(PAGE_GAP)]
 
 
 def block(conditions, body):
@@ -186,18 +182,19 @@ def npc_event(slug, entity):
         for i, g in enumerate(q["goals"], 1):
             if g["type"] == "talk" and g["target"] == slug:
                 key = f"{slug}|{q['slug']}|goal{i}"
-                body += block(current(q, i), goal_done(q, i) + pages(key, entity) + [RESTART])
+                body += block(current(q, i), goal_done(q, i) + talk(key, entity) + [RESTART])
     for q in Q.QUESTS:  # 2. side quests offered by talking
         if q["assign"] and q["assign"][0] == "talk" and q["assign"][1] == slug:
             conditions = [(Q.assigned(q["slug"]), 0)]
             if q["assign"][2]:
                 conditions.append((prereq_flag(q["assign"][2]), 1))
-            body += block(conditions, assign(q["slug"]) + pages(f"{slug}|{q['slug']}|offer", entity) + [RESTART])
+            # Round 17 (F3): assigned only once the offer is accepted (talk() restarts on decline / walking off).
+            body += block(conditions, talk(f"{slug}|{q['slug']}|offer", entity) + assign(q["slug"]) + [RESTART])
     for q in Q.QUESTS:  # 3. underway
         key = f"{slug}|{q['slug']}|underway"
         if DIALOGUE.get(key):
-            body += block([(Q.assigned(q["slug"]), 1), (Q.complete(q["slug"]), 0)], pages(key, entity) + [RESTART])
-    return body + pages(f"{slug}|idle", entity) + [RESTART]  # 4. idle
+            body += block([(Q.assigned(q["slug"]), 1), (Q.complete(q["slug"]), 0)], talk(key, entity) + [RESTART])
+    return body + talk(f"{slug}|idle", entity) + [RESTART]  # 4. idle
 
 
 def quest_events():
@@ -211,7 +208,7 @@ def quest_events():
         if prereq:
             body.append(wait_flag(prereq_flag(prereq)))
         body.append(if_area(0, 1, Q.REGION_ENTITY[target]))
-        events.append(body + assign(q["slug"]) + pages(f"intro|{q['slug']}") + [END])
+        events.append(body + assign(q["slug"]) + talk(f"intro|{q['slug']}") + [END])
     counters = Q.counters()
     kills = []  # (instructions, parameters, enemies)
     for q in Q.QUESTS:  # goals (talk goals are in the NPC events)
@@ -275,13 +272,13 @@ def add_quests(d):
     for event_id, body, pars, _instances in new:
         events.append({"id": event_id, "rest": 1, "pars": pars, "ins": body})
     print(f"{len(new)} quest events {new[0][0]}..{new[-1][0]}, {len(inits)} starts, "
-          f"{sum(len(v) for v in DIALOGUE.values())} dialogue pages")
+          f"{len(REQUESTS)} dialogue keys, {len(DIALOGUE)} with lines")
     return build(e, events)
 
 
 def load_dialogue(path):
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    return {key: [message for message, _text in entries] for key, entries in data["pages"].items()}
+    return {key: len(entries) for key, entries in data["pages"].items() if entries}
 
 
 def main(argv):

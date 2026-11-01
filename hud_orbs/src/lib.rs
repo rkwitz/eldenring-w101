@@ -27,6 +27,7 @@ mod pages;
 mod probe;
 mod live_preview;
 mod quests;
+mod talk;
 mod settings;
 mod options;
 mod sheet;

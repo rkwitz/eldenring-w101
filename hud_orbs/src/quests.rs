@@ -1,5 +1,5 @@
-//! The Unicorn Way quests for the Quests page and NPC dialogue: `w101_orbs/book/quests.tsv` (made by
-//! tools/w101_book_quests.py) plus the quest event flags the map's events set.
+//! The Unicorn Way quests for the Quests page and the quest offers of the dialogue box (talk.rs):
+//! `w101_orbs/book/quests.tsv` (made by tools/w101_book_quests.py) plus the quest event flags the map's events set.
 //!
 //! Quest n uses flags 1042362000 + 10n: +0 assigned (stays on), +1..+6 goal i done, +8 ready to turn in, +9 complete.
 //! A quest is shown while assigned and not complete; its current goals are those not done whose "after" goals are.
@@ -35,6 +35,7 @@ pub struct Quest {
     pub assigned: u32,
     pub ready: u32,
     pub complete: u32,
+    #[allow(dead_code)]
     pub giver: String,
     pub turn_in: String,
     pub goals: Vec<Goal>,
@@ -59,29 +60,6 @@ pub struct Active {
 #[derive(Default)]
 pub struct Quests {
     pub quests: Vec<Quest>,
-    /// NPC slug -> (talk flag, name).
-    pub npcs: Vec<(String, u32, String)>,
-    /// Dialogue for a talk press: (quest slug, event: offer, goal<n>, turnin or underway) -> lines.
-    pub dialogue: HashMap<(String, String), Vec<String>>,
-}
-
-/// What a talk press did, from the quest flags that changed on it (the quests README): assigned on = the offer, a
-/// goal flag on = that goal's talk, complete on = the turn-in; none of those = the quest is underway.
-#[derive(Clone, Debug, PartialEq)]
-pub enum TalkEvent {
-    Offer,
-    Goal(usize),
-    TurnIn,
-    Underway,
-}
-
-/// A dialogue to show for a talk press.
-#[derive(Clone, Debug)]
-pub struct Talk {
-    pub npc: String,
-    pub quest: String,
-    pub event: TalkEvent,
-    pub lines: Vec<String>,
 }
 
 impl Quests {
@@ -131,12 +109,6 @@ impl Quests {
                         out.quests[q].text.push(f[3].to_string());
                     }
                 }
-                Some("D") if f.len() >= 4 => {
-                    out.dialogue.entry((f[1].to_string(), f[2].to_string())).or_default().push(f[3].to_string());
-                }
-                Some("N") if f.len() >= 4 => {
-                    out.npcs.push((f[1].into(), num(2), f[3].into()));
-                }
                 _ => {}
             }
         }
@@ -157,7 +129,6 @@ impl Quests {
                 }
             }
         }
-        out.extend(self.npcs.iter().map(|n| n.1));
         out.retain(|f| *f != 0);
         out.sort();
         out.dedup();
@@ -205,62 +176,20 @@ impl Quests {
         out
     }
 
-    /// The dialogue for a press of `npc_name`'s talk button: `before` are the flags before the press, `after` after.
-    pub fn talk(&self, npc_name: &str, before: &dyn Fn(u32) -> bool, after: &dyn Fn(u32) -> bool) -> Option<Talk> {
-        let involved = |q: &Quest| {
-            q.giver == npc_name || q.turn_in == npc_name || q.goals.iter().any(|g| g.text.contains(npc_name))
-        };
-        let changed = |f: u32| f != 0 && !before(f) && after(f);
-        let mut found: Option<(&Quest, TalkEvent)> = None;
-        for q in self.quests.iter().filter(|q| involved(q)) {
-            let event = if changed(q.complete) {
-                Some(TalkEvent::TurnIn)
-            } else if let Some(n) = q.goals.iter().position(|g| changed(g.flag)) {
-                Some(TalkEvent::Goal(n + 1))
-            } else if changed(q.assigned) {
-                Some(TalkEvent::Offer)
-            } else {
-                None
-            };
-            if let Some(event) = event {
-                found = Some((q, event));
-                break;
-            }
-        }
-        if found.is_none() {
-            found = self
-                .quests
-                .iter()
-                .find(|q| involved(q) && after(q.assigned) && !after(q.complete))
-                .map(|q| (q, TalkEvent::Underway));
-        }
-        let (q, event) = found?;
-        let key = match &event {
-            TalkEvent::Offer => "offer".to_string(),
-            TalkEvent::Goal(n) => format!("goal{n}"),
-            TalkEvent::TurnIn => "turnin".to_string(),
-            TalkEvent::Underway => "underway".to_string(),
-        };
-        let current = self.active(after).into_iter().find(|a| a.title == q.title);
-        let lines = match self.dialogue.get(&(q.slug.clone(), key)) {
-            Some(lines) => lines.clone(),
-            // Without dialogue sorted by event: the quest's opening lines for the offer, else the quest state.
-            None => {
-                let mut lines = Vec::new();
-                if event == TalkEvent::Offer {
-                    lines.extend(
-                        q.text.iter().filter(|t| t.len() > 30 && t.contains(' ')).take(3).cloned(),
-                    );
-                }
-                match (&event, &current) {
-                    (TalkEvent::TurnIn, _) => lines.push(format!("Quest complete: {}", q.title)),
-                    (_, Some(a)) => lines.push(format!("{}: {}", q.title, a.goal)),
-                    _ => {}
-                }
-                lines
-            }
-        };
-        (!lines.is_empty()).then(|| Talk { npc: npc_name.to_string(), quest: q.title.clone(), event, lines })
+    /// The quest card of quest `slug` as it would be just after accepting it (talk.rs's offer page): its first
+    /// current goals with nothing done.
+    pub fn offer_card(&self, slug: &str) -> Option<Active> {
+        let q = self.quests.iter().find(|q| q.slug == slug)?;
+        self.active(&|f| f == q.assigned).into_iter().find(|a| a.title == q.title)
     }
 
+    /// Lines for an offer that dialogue.tsv has no lines for: the quest's own opening lines (client order).
+    pub fn offer_lines(&self, slug: &str) -> Vec<String> {
+        let Some(q) = self.quests.iter().find(|q| q.slug == slug) else { return Vec::new() };
+        let mut lines: Vec<String> = q.text.iter().filter(|t| t.len() > 30 && t.contains(' ')).take(3).cloned().collect();
+        if lines.is_empty() {
+            lines.push(q.title.clone());
+        }
+        lines
+    }
 }
