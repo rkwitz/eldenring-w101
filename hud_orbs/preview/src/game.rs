@@ -38,6 +38,9 @@ impl Game {
         crate::markers::NPCS.iter().filter(|n| n.0 != "lady_oriel" && models.contains(&n.3) && ids.contains(&n.2))
             .map(|n| (n.2, n.4)).collect()
     }
+    pub fn entity_render_bits(&self, _models: &[u32], _ids: &[u32]) -> Vec<(u32, u8, u8, u32)> {
+        Vec::new()
+    }
 
     pub fn set_spell(&self, index: usize, spell: i32) -> bool {
         SPELLS.lock().unwrap()[index] = spell;

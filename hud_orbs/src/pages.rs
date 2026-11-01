@@ -1013,7 +1013,8 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             v.show(l.find(&format!("{prefix}{i}")), false);
         }
     }
-    grey(l, v, &["Tab_HousingStuff", "Tab_MonsterMagic", "Tab_Photography"]);
+    // Round 20 B1: the greyed Monstrology (top left) and Housing (top right) arrows beside the tabs are gone.
+    hide(l, v, &["Tab_HousingStuff", "Tab_MonsterMagic", "Tab_Photography"]);
     // Only the equip button and the equipment sets button stay along the bottom.
     hide(l, v, &["Lock_Item", "Socket_Item", "btnFeedPet", "RecyclingBinButton", "QuickSell_Item", "Trash_Item"]);
     // Wizard101's hover texts (the buttons' m_sTip, in the plain tooltip): each tab's category, the equipment
@@ -1541,8 +1542,11 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
     // Round 19 (Ryan D7): smaller, inside the box's frame as Wizard101's type symbol sits (the Sunbird and
     // Lightning Bats help pictures: the fist covers about 70% of the grey box), not filling it.
     let kind = spell_type(d.items, raw);
-    let inset = (23.0 * (1.0 - CARD_TYPE_FILL)) / 2.0;
-    let (y0, y1) = (card(100.0 + inset, 99.0 + inset), card(123.0 - inset, 122.0 - inset));
+    // Round 20 (Ryan B4): a bit bigger again, and centred on the box's brown inside (101..123 x 102..122 in the
+    // frame art, above its lit bottom edge at 123); it sat about 1.5 px high at (111.5, 110.5).
+    let half = 23.0 * CARD_TYPE_FILL / 2.0;
+    let [tx, ty] = CARD_TYPE_CENTRE;
+    let (y0, y1) = (card(tx - half, ty - half), card(tx + half, ty + half));
     v.images.push(([y0[0], y0[1], y1[0], y1[1]], kind.into(), [0.0, 0.0, 1.0, 1.0]));
     // The accuracy in the bottom-left circle (Ryan D6): Wizard101 prints the percentage over the frame's
     // bullseye, which shows dimmed under it (Background_Tutorial_Card's Sunbird "100%",
@@ -1600,7 +1604,9 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
         style.picture = CARD_SYMBOL_SIZE;
         style.leading = CARD_LEADING;
         v.add([b0[0], b0[1], b1[0], b1[1]], effect, style);
-        let top = CARD_TEXT_TOP + 2.0 * pitch;
+        // Round 20 (Ryan B3): the needs line sits at the bottom of the parchment box (its inside ends at 188 in
+        // the frame art), no longer right under the two description lines.
+        let top = (CARD_NEEDS_BOTTOM - line).max(CARD_TEXT_TOP + 2.0 * pitch);
         let (n0, n1) = (card(CARD_NEEDS_X[0], top), card(CARD_NEEDS_X[1], top + line));
         let mut needs_style = TextStyle::new("SpellDescription", CARD_TEXT_SCALE * k, BLACK).centred();
         needs_style.picture = CARD_SYMBOL_SIZE;
@@ -1624,8 +1630,10 @@ const CARD_NAME: [f32; 4] = [6.0, 4.0, 122.0, 25.0];
 const CARD_NAME_SCALE: f32 = 0.27;
 /// The accuracy's WizardFancy scale on a 97 px card ("100%" across the circle, as on the Sunbird picture).
 const CARD_ACCURACY_SCALE: f32 = 0.2;
-/// How much of the type box the type symbol covers (Ryan round 19 D7).
-const CARD_TYPE_FILL: f32 = 0.72;
+/// How much of the type box (23 px) the type symbol covers (Ryan round 19 D7: 0.72, too small; round 20 B4: 0.86)
+/// and its centre in the frame art.
+const CARD_TYPE_FILL: f32 = 0.86;
+const CARD_TYPE_CENTRE: [f32; 2] = [112.0, 112.5];
 /// Short card names for the Elden Ring spells whose names do not fit one row at CARD_NAME_SCALE (wider than 320
 /// WizardFancy pixels, the box's 87.9 page px / 0.27): chosen by hand, every one checked against the font's glyph
 /// widths (Ryan round 19 D4: one row, never "...").
@@ -1728,7 +1736,9 @@ fn card_name(name: &str) -> &str {
 /// (its letters start about 5 px under the box's top edge), the description's and the needs line's sides.
 const CARD_TEXT_TOP: f32 = 128.0;
 const CARD_TEXT_X: [f32; 2] = [12.0, 116.0];
-const CARD_NEEDS_X: [f32; 2] = [8.0, 120.0];
+const CARD_NEEDS_X: [f32; 2] = [7.0, 121.0];
+/// Where the needs line's cell ends (frame art pixels; Ryan round 20 B3).
+const CARD_NEEDS_BOTTOM: f32 = 189.0;
 /// The memory slots symbol on the needs line (the item tooltip's "Memory Slots" icon).
 const SLOT_ICON: &str = "GUI/Icons/Type_PowerPips.png";
 /// Line pitch of the card text in line heights: three lines in the box (SpellDescription's 21 px cells have
@@ -1778,8 +1788,9 @@ fn card_symbols(text: &str, school: &str) -> String {
 /// which three lines (two of text, the slots and needs) fit the parchment box. Round 17's 0.64 came from a
 /// reagent card's name, which Wizard101 draws smaller. Round 19 (Ryan D1, from playing Wizard101): that was too
 /// big for the two description lines and the needs line (0.6) too small; all three lines now share one size,
-/// 0.72, which keeps the longest needs line ("2 Fai 28 Arc 17" with the slot symbol) on one row.
-const CARD_TEXT_SCALE: f32 = 0.72;
+/// 0.72, which keeps the longest needs line ("2 Fai 28 Arc 17" with the slot symbol) on one row. Round 20 (Ryan B2):
+/// a little bigger, 0.78, still one size and the longest needs line still one row.
+const CARD_TEXT_SCALE: f32 = 0.78;
 
 fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.subs = DECK_TABS.len();
