@@ -16,8 +16,18 @@
 //! (TARGETS) comes from the map itself (tools/w101_quest_targets.py reading m60_42_36_00.msb): talk goals point at
 //! the NPC, goto goals at their sphere, defeat goals at the nearest enemy of the kind, the Bone Cages at the nearest
 //! cage, bosses at the boss; for a goal in a room (60 m under the street) the arrow points at the room's door
-//! until the player is inside. txtDistance is left empty: the client fills it from code with no string in its
-//! .lang files to copy.
+//! until the player is inside.
+//!
+//! Round 20 (Q8): txtDistance shows the steps to the goal. Wizard101's players' guide (wizard101.com
+//! w101playersguide/questing3): the arrow shows "the approximate number of steps it will take your Wizard to reach
+//! that destination". The walk is measured along Wizard101's own walk graph of Unicorn Way (zone.nav, 1079 nodes on
+//! a 4.8 m grid, decoded by tools/w101_pathing.py, moved into this map's coordinates: w101_orbs/book/quest_nav.tsv,
+//! Wizard101 data, made on the PC), from the node nearest the player to the one nearest the goal, plus the two ends;
+//! where the graph doesn't reach (the hedge maze, the rooms) it is the straight distance. One step is STEP metres
+//! (the client's own stride length isn't in its data files; a walking stride).
+
+use std::collections::BinaryHeap;
+use std::path::Path;
 
 use hudhook::imgui::{DrawListMut, ImColor32};
 
@@ -136,11 +146,88 @@ pub fn arrow_quad(layout: &Layout, bearing: f32) -> [[f32; 2]; 4] {
     q.map(|p| [p[0] + shift[0], p[1] + shift[1]])
 }
 
-/// QuestHelperHud's view: the goal's name in txtGoalName; txtDistance and the button left empty.
-pub fn view(layout: &Layout, active: &Active) -> View {
+/// Round 20 (Q8): metres per step, and how far from the walk graph a point still joins it.
+const STEP: f32 = 0.75;
+const NAV_REACH: f32 = 12.0;
+
+/// Wizard101's walk graph of the street (quest_nav.tsv: "N x z" nodes in MSB metres, "E a b" edges).
+#[derive(Default)]
+pub struct Nav {
+    nodes: Vec<[f32; 2]>,
+    edges: Vec<Vec<(usize, f32)>>,
+}
+
+impl Nav {
+    pub fn load(path: &Path) -> Nav {
+        let mut nav = Nav::default();
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        for line in text.lines() {
+            let f: Vec<&str> = line.split('\t').collect();
+            match (f.first().copied(), f.get(1).and_then(|v| v.parse::<f32>().ok()), f.get(2).and_then(|v| v.parse::<f32>().ok())) {
+                (Some("N"), Some(x), Some(z)) => nav.nodes.push([x, z]),
+                (Some("E"), Some(a), Some(b)) => {
+                    let (a, b) = (a as usize, b as usize);
+                    if a < nav.nodes.len() && b < nav.nodes.len() {
+                        nav.edges.resize(nav.nodes.len(), Vec::new());
+                        let d = dist(nav.nodes[a], nav.nodes[b]);
+                        nav.edges[a].push((b, d));
+                        nav.edges[b].push((a, d));
+                    }
+                }
+                _ => {}
+            }
+        }
+        tracing::info!("quest helper: walk graph {} nodes from {}", nav.nodes.len(), path.display());
+        nav
+    }
+
+    fn nearest(&self, p: [f32; 2]) -> Option<(usize, f32)> {
+        self.nodes.iter().enumerate().map(|(i, n)| (i, dist(*n, p))).min_by(|a, b| a.1.total_cmp(&b.1))
+            .filter(|(_, d)| *d <= NAV_REACH)
+    }
+
+    /// The walk from `a` to `b` along the graph (metres), or None when either end is off it or no path joins them.
+    pub fn walk(&self, a: [f32; 2], b: [f32; 2]) -> Option<f32> {
+        let ((start, da), (goal, db)) = (self.nearest(a)?, self.nearest(b)?);
+        let mut best = vec![f32::INFINITY; self.nodes.len()];
+        let mut heap = BinaryHeap::new();
+        best[start] = 0.0;
+        heap.push((std::cmp::Reverse((0.0f32).to_bits()), start));
+        while let Some((std::cmp::Reverse(bits), i)) = heap.pop() {
+            let d = f32::from_bits(bits);
+            if i == goal {
+                return Some(da + d + db);
+            }
+            if d > best[i] {
+                continue;
+            }
+            for &(j, w) in self.edges.get(i).map(|e| e.as_slice()).unwrap_or(&[]) {
+                if d + w < best[j] {
+                    best[j] = d + w;
+                    heap.push((std::cmp::Reverse((d + w).to_bits()), j));
+                }
+            }
+        }
+        None
+    }
+}
+
+fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+}
+
+/// Round 20 (Q8): the steps from the player to the goal (MSB positions): the walk along the graph, else straight.
+pub fn steps(nav: &Nav, player: [f32; 3], goal: [f32; 3]) -> u32 {
+    let (a, b) = ([player[0], player[2]], [goal[0], goal[2]]);
+    let metres = nav.walk(a, b).unwrap_or_else(|| dist(a, b));
+    (metres / STEP).round() as u32
+}
+
+/// QuestHelperHud's view: the goal's name in txtGoalName, the steps to it in txtDistance (round 20), no button.
+pub fn view(layout: &Layout, active: &Active, steps: u32) -> View {
     let mut v = View::default();
     v.set(layout.find("txtGoalName"), format!("<center>{}</center>", active.goal));
-    v.set(layout.find("txtDistance"), String::new());
+    v.set(layout.find("txtDistance"), format!("<center>{steps}</center>"));
     v.show(layout.find("btnQuestHelper"), false);
     v
 }

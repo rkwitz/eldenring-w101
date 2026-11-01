@@ -42,6 +42,8 @@ pub struct Quest {
     pub giver: String,
     pub turn_in: String,
     pub goals: Vec<Goal>,
+    /// Round 20 (Q3): the reward in runes (REWARDS).
+    pub reward: u32,
     /// Dialogue lines in client order.
     pub text: Vec<String>,
 }
@@ -63,7 +65,32 @@ pub struct Active {
     pub slug: String,
     pub goal_index: usize,
     pub picture: String,
+    /// Round 20 (Q3): the reward in runes, shown at the bottom of the card.
+    pub reward: u32,
 }
+
+/// Round 20 (Q3): each quest's reward in runes (tools/w101_quests.py REWARDS, keep in step): Wizard101's quest
+/// rewards are server-side, so these are Wizard City-sized gold amounts given as the same number of runes.
+pub const REWARDS: &[(&str, u32)] = &[
+    ("unicorn_way", 25), ("ghost_hunters", 35), ("skeleton_crew", 45), ("monsters_and_mazes", 55),
+    ("finding_out_why", 75), ("who_could_it_be_now", 60), ("sinister_skeleton", 150), ("pesky_pirates", 50),
+    ("saving_private_oryan", 120), ("fear_of_fire", 150),
+];
+/// Quest base + 7 (w101_quests.REWARD_OFFSET): on once the reward has been given (book.rs sets it).
+pub const REWARD_OFFSET: u32 = 7;
+
+/// Round 20 (Q4): Wizard101 goal pictures of an older quests.tsv -> the Elden Ring stand-in's picture
+/// (w101_quests.GOAL_PICTURES), used when that file is in the book's art folder.
+const ER_PICTURES: &[(&str, &str)] = &[
+    ("GUI/NpcPortraits/Portrait_Ghost_LostSoul_MOB_A.png", "GUI/NpcPortraits/ER/lost_soul.png"),
+    ("GUI/NpcPortraits/Portrait_Skeleton_Pirate_A_MOB.png", "GUI/NpcPortraits/ER/skeletal_pirate.png"),
+    ("GUI/NpcPortraits/Fairy_DarkMinion_MOB.png", "GUI/NpcPortraits/ER/dark_fairy.png"),
+    ("GUI/NpcPortraits/Human_WCGuard_A.png", "GUI/NpcPortraits/ER/private_connelly.png"),
+    ("GUI/NpcPortraits/Art_Portrait_Boy_Life02.png", "GUI/NpcPortraits/ER/ceren_nightchant.png"),
+    ("GUI/NpcPortraits/Human_WCShopKeepF_A_NPC.png", "GUI/NpcPortraits/ER/olivia_dawnwillow.png"),
+    ("GUI/NpcPortraits/Portrait_Seraph_Aerial_B_NPC.png", "GUI/NpcPortraits/ER/lady_oriel.png"),
+    ("GUI/NpcPortraits/Human_WCGuard_B.png", "GUI/NpcPortraits/ER/private_oryan.png"),
+];
 
 #[derive(Default)]
 pub struct Quests {
@@ -90,6 +117,7 @@ impl Quests {
                         complete: num(6),
                         giver: f[7].into(),
                         turn_in: f[8].into(),
+                        reward: REWARDS.iter().find(|r| r.0 == f[1]).map_or(0, |r| r.1),
                         ..Quest::default()
                     });
                 }
@@ -110,7 +138,14 @@ impl Quests {
                         counter,
                         text: f[7].into(),
                         place: f[8].into(),
-                        picture: f.get(9).map(|p| p.to_string()).unwrap_or_default(),
+                        picture: {
+                            let p = f.get(9).copied().unwrap_or_default();
+                            let art = path.parent().map(|b| b.join("art"));
+                            match ER_PICTURES.iter().find(|e| e.0 == p) {
+                                Some((_, er)) if art.as_ref().is_some_and(|a| a.join(er).exists()) => er.to_string(),
+                                _ => p.to_string(),
+                            }
+                        },
                     });
                 }
                 Some("X") if f.len() >= 4 => {
@@ -128,7 +163,7 @@ impl Quests {
     pub fn flags(&self) -> Vec<u32> {
         let mut out = Vec::new();
         for q in &self.quests {
-            out.extend([q.assigned, q.ready, q.complete]);
+            out.extend([q.assigned, q.ready, q.complete, q.assigned + REWARD_OFFSET]);
             for g in &q.goals {
                 out.push(g.flag);
                 match &g.counter {
@@ -183,10 +218,20 @@ impl Quests {
                 slug: q.slug.clone(),
                 goal_index,
                 picture,
+                reward: q.reward,
             });
         }
         out.sort_by_key(|a| !a.main);
         out
+    }
+
+    /// Round 20 (Q3): quests complete whose reward hasn't been given: (title, runes, reward flag).
+    pub fn rewards_due(&self, flag: &dyn Fn(u32) -> bool) -> Vec<(String, u32, u32)> {
+        self.quests
+            .iter()
+            .filter(|q| q.reward > 0 && flag(q.complete) && !flag(q.assigned + REWARD_OFFSET))
+            .map(|q| (q.title.clone(), q.reward, q.assigned + REWARD_OFFSET))
+            .collect()
     }
 
     /// The quest card of quest `slug` as it would be just after accepting it (talk.rs's offer page): its first

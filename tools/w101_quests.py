@@ -126,7 +126,11 @@ DIALOG_OK, DIALOG_CANCEL = 1042362620, 1042362621
 # (round 17's intro assigned Unicorn Way unasked), so the round 18 flow (Ambrose's offer first) never started. The
 # reset event clears every quest flag (QUEST_FLAG_RANGES) once and sets QUEST_RESET; the quest events wait for it.
 # A later round that needs another reset takes the next flag (1042362691 + ...), never reuses this one.
-QUEST_RESET = 1042362690
+QUEST_RESET_R19 = 1042362690
+# Round 20 (Q2): version 2 of the reset. Ryan's round 19 save has Unicorn Way done and Ghost Hunters assigned through
+# Ambrose's offer; round 20 starts the line at Private Connelly's "!" instead, so every quest flag is cleared once
+# more (QUEST_RESET_R19 too) and QUEST_RESET (the flag the events and the DLL wait for) is this one.
+QUEST_RESET = 1042362691
 # Round 19 (E1): on when Ambrose's intro offer has been shown once. The first offer comes anywhere on the street
 # (INTRO_ANCHOR within INTRO_RADIUS m: Ceren stands in the middle of the street, near where a load puts the player);
 # after a "no" it is offered again on reaching Private Connelly (street_start), as in round 18.
@@ -135,7 +139,7 @@ INTRO_ANCHOR, INTRO_RADIUS = 1042360821, 200.0
 # Every flag the quests use: quests (n = 0..15), dialogue requests, counters and cages, the old talk flags, the
 # dialog answers, INTRO_SEEN. (first, last) inclusive.
 QUEST_FLAG_RANGES = [(1042362000, 1042362159), (1042362400, 1042362499), (1042362500, 1042362543),
-                     (1042362600, 1042362621), (INTRO_SEEN, INTRO_SEEN)]
+                     (1042362600, 1042362621), (INTRO_SEEN, INTRO_SEEN), (QUEST_RESET_R19, QUEST_RESET_R19)]
 CHARACTER = {c[0]: c for c in CHARACTERS}
 
 # Round 17 (F2/F3): the conversations are shown by the HUD DLL in Wizard101's own dialogue box (DialogWindow.gui),
@@ -193,8 +197,9 @@ def dialogue_keys():
     goals, the quests it offers, the quests it is part of (underway) and its idle line."""
     keys = []
     for q in QUESTS:
-        if q["assign"] and q["assign"][0] == "intro":
-            keys += [f"intro|{q['slug']}", f"intro|{q['slug']}|after"]
+        # Round 20: Unicorn Way's intro keys stay (unused) so every request flag keeps its number in dialogue.tsv.
+        if q["assign"] and q["assign"][0] in ("intro", "greet"):
+            keys +=[f"intro|{q['slug']}", f"intro|{q['slug']}|after"]
     for slug, *_rest in CHARACTERS:
         talks = [(q, i) for q in QUESTS for i, g in enumerate(q["goals"], 1)
                  if g["type"] == "talk" and g["target"] == slug]
@@ -258,7 +263,10 @@ def goal(type_, target, count=1, after=None):
 #       (Connelly: Unicorn Way done -> Ghost Hunters), else the npc shows "!" and offers it on the next talk.
 # `then` is no longer used to hand out quests (rounds 10-17 assigned the next main quest without asking).
 QUESTS = [
-    dict(n=0, slug="unicorn_way", w101="1625BF", giver="merle_ambrose", assign=("intro", "street_start", None),
+    # Round 20 (Q2, Ryan): no Merle Ambrose offer; the line starts with a "!" over Private Connelly, and talking to
+    # him takes Unicorn Way ("greet": assigned and its talk goal done at once; in Wizard101 the student arrives with
+    # it) and plays its goal conversation, which ends in the Ghost Hunters card (follow_up).
+    dict(n=0, slug="unicorn_way", w101="1625BF", giver="merle_ambrose", assign=("greet", "private_connelly", None),
          goals=[goal("talk", "private_connelly")], then=[]),
     dict(n=1, slug="ghost_hunters", w101="1625C2", giver="private_connelly",
          assign=("talk", "private_connelly", "unicorn_way:complete"),
@@ -309,6 +317,23 @@ GOAL_PICTURES = {  # Root.wad ObjectData/WC/<template>.xml of each mob
     "bone_cage": "GUI/QuestButtons/Art_HD_WC_BoneCage.png",
 }
 GOAL_PICTURES.update({slug: PORTRAITS[slug] for slug in PORTRAITS if slug != "intro"})
+# Round 20 (Q4, Ryan: "the picture of the enemy should correspond to the actual Elden Ring enemy"): the street's
+# Elden Ring stand-ins in Wizard101's portrait ring. Mobs: Elden Ring's own picture of that enemy, its spirit-ash icon
+# (Spirit Jellyfish Ashes 236000 icon 111, Skeletal Militiaman Ashes 212000 icon 102, Winged Misbegotten Ashes 210000
+# icon 120); NPCs: their round 18 ER face portraits. Art made on the PC, never in the repo; the DLL also swaps the
+# old paths of an older quests.tsv (quests.rs ER_PICTURES). Rattlebones (Giant Skeleton Torso: Elden Ring has no
+# picture of it), Lady Blackhope and Fear of Fire (not placed in Elden Ring) keep Wizard101's.
+ER_PICTURES = "GUI/NpcPortraits/ER"
+GOAL_PICTURES.update({slug: f"{ER_PICTURES}/{slug}.png" for slug in ("lost_soul", "skeletal_pirate", "dark_fairy")})
+GOAL_PICTURES.update({c[0]: f"{ER_PICTURES}/{c[0]}.png" for c in CHARACTERS})
+
+# Round 20 (Q3): each quest's reward in runes, shown on its card and given once on completion by the HUD DLL
+# (quests.rs REWARDS, keep in step). Wizard101's quest rewards are server-side, not in the client's files, and its
+# wiki could not be reached, so these are Wizard City-sized gold amounts given as the same number of runes.
+REWARDS = {"unicorn_way": 25, "ghost_hunters": 35, "skeleton_crew": 45, "monsters_and_mazes": 55,
+           "finding_out_why": 75, "who_could_it_be_now": 60, "sinister_skeleton": 150, "pesky_pirates": 50,
+           "saving_private_oryan": 120, "fear_of_fire": 150}
+REWARD_OFFSET = 7  # quest base + 7: its reward was given (set by the DLL; the reset clears it with the rest)
 
 
 def goal_picture(g):

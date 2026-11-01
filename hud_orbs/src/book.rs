@@ -147,6 +147,11 @@ pub struct Book {
     sheet_time: Option<Instant>,
     state: pages::State,
     quests: Quests,
+    /// Round 20 (Q7): the quest picked on the Quests page (its slug); the Quest Helper follows it. None: the first
+    /// quest in progress (main quests first), as before.
+    tracked: Option<String>,
+    /// Round 20 (Q8): Wizard101's walk graph of the street for the Quest Helper's step count (quest_nav.tsv).
+    nav: crate::questhelper::Nav,
     quest_flags: Vec<u32>,
     flags: HashMap<u32, bool>,
     flags_time: Option<Instant>,
@@ -359,6 +364,8 @@ impl Book {
             sheet_time: None,
             state: pages::State::default(),
             quests: Quests::default(),
+            tracked: None,
+            nav: Default::default(),
             quest_flags: Vec::new(),
             flags: HashMap::new(),
             flags_time: None,
@@ -428,6 +435,7 @@ impl Book {
         self.items = ItemData::load(&folder.join("er"));
         crate::crafting::load(&folder.join("er"));
         self.quests = Quests::load(&folder.join("quests.tsv"));
+        self.nav = crate::questhelper::Nav::load(&folder.join("quest_nav.tsv"));
         self.quest_flags = self.quests.flags();
         self.quest_flags.extend(markers::flags());
         // w101_quests: the talk events' conversation requests (round 17) and Wizard101's dialogue box.
@@ -739,7 +747,10 @@ impl Book {
         }
         let (Some(game), Some(layout)) = (cx.game, self.layouts.get(qh::LAYOUT)) else { return };
         let (Some(camera), Some(player)) = (game.camera(), game.position().and_then(qh::player_msb)) else { return };
-        let Some((active, goal)) = self.active.iter().find_map(|a| qh::target(a, player).map(|g| (a, g))) else { return };
+        // Round 20 (Q7/Q8): the tracked quest first, else the first one in progress with a goal on the street.
+        let tracked = self.tracked_index().and_then(|i| self.active.get(i));
+        let Some((active, goal)) = tracked.into_iter().chain(self.active.iter())
+            .find_map(|a| qh::target(a, player).map(|g| (a, g))) else { return };
         let mut wanted = layout.images();
         wanted.push(qh::ARROW.into());
         self.textures.want(wanted);
@@ -758,7 +769,17 @@ impl Book {
             alpha: 1.0,
             hole: Cell::new(None),
         };
-        layout::draw(layout, &qh::view(layout, active), &canvas, |_| true);
+        let steps = qh::steps(&self.nav, player, goal);
+        layout::draw(layout, &qh::view(layout, active, steps), &canvas, |_| true);
+    }
+
+    /// Round 20 (Q7): the tracked quest's index in `active`: the one picked on the Quests page while it is in
+    /// progress, else the first (Wizard101 follows the main quest unless another is picked).
+    fn tracked_index(&self) -> Option<usize> {
+        if self.active.is_empty() {
+            return None;
+        }
+        Some(self.tracked.as_ref().and_then(|t| self.active.iter().position(|a| &a.slug == t)).unwrap_or(0))
     }
 
     /// Wizard101's nameplates over the Unicorn Way enemies (nameplates.rs) in normal play.
@@ -1068,6 +1089,14 @@ impl Book {
             self.set_open(false);
             return;
         }
+        if let Some(pages::Hit::Quest(k)) = hit {
+            // Round 20 (Q7): track this quest (its card glows, Wizard101's tracker arrow at its top left).
+            if let Some(a) = self.active.get(k) {
+                tracing::info!("quests page: tracking {}", a.slug);
+                self.tracked = Some(a.slug.clone());
+            }
+            return;
+        }
         if let Some(hit) = hit {
             let double = self.last_hit.is_some_and(|(h, t)| h == hit && t.elapsed() < Duration::from_millis(450));
             self.last_hit = Some((hit, Instant::now()));
@@ -1172,7 +1201,7 @@ impl Book {
                     self.gear_equip(i, cx);
                 }
             }
-            Hit::Setting(..) | Hit::Warp(_) => {} // handled before (book::frame)
+            Hit::Setting(..) | Hit::Warp(_) | Hit::Quest(_) => {} // handled before (book::frame)
         }
     }
 
@@ -1466,6 +1495,9 @@ impl Book {
             if let Some(card) = self.layouts.get(pages::QUEST_CARD) {
                 wanted.extend(card.images());
             }
+            // Round 20: the art the cards set themselves (goal pictures, reward, tracker, glow; draw_quest_cards).
+            wanted.extend(self.active.iter().map(|a| a.picture.clone()).filter(|p| !p.is_empty()));
+            wanted.extend([pages::REWARD_RUNES, pages::REWARD_SCROLL, pages::QUEST_TRACKER, pages::QUEST_GLOW].map(String::from));
         }
         wanted.extend(view.images.iter().map(|i| i.1.clone()));
         wanted.extend(view.tinted.iter().map(|i| i.1.clone()));
@@ -1691,12 +1723,17 @@ impl Book {
     /// QuestListWindow's four card windows, each with QuestInfoWindow.gui drawn into it for a quest in progress.
     fn draw_quest_cards(&self, page: &Layout, canvas: &Canvas) {
         let Some(card) = self.layouts.get(pages::QUEST_CARD) else { return };
+        let tracked = self.tracked_index();
         for i in 0..pages::QUESTS_PER_PAGE {
-            let Some(quest) = self.active.get(self.state.page * pages::QUESTS_PER_PAGE + i) else { break };
+            let k = self.state.page * pages::QUESTS_PER_PAGE + i;
+            let Some(quest) = self.active.get(k) else { break };
             let Some(window) = page.find(&format!("wndQuestInfo{i}")) else { continue };
             let mut view = View::default();
             pages::quest_card(card, quest, &mut view);
             let r = page.nodes[window].rect;
+            if tracked == Some(k) {
+                pages::quest_tracked(card, &mut view);
+            }
             let inner = Canvas {
                 draw: canvas.draw,
                 textures: canvas.textures,
@@ -1710,6 +1747,19 @@ impl Book {
             };
             layout::draw(card, &view, &inner, |_| true);
             layout::draw_extra(&view, &inner);
+            if tracked == Some(k) {
+                // Round 20 (Q7): Wizard101's Art_Quest_Glow over the selected card's edge, pulsing (its light frame
+                // sits 22/256 in from the picture's edge, here on the card's border). Its pale light (252,253,200)
+                // doesn't show on the parchment with plain alpha blending (Wizard101 adds it), so it is tinted to
+                // yellow and laid on twice.
+                let pulse = 0.65 + 0.35 * (self.opened_at.elapsed().as_secs_f32() * std::f32::consts::TAU / 1.6).sin();
+                let (w, h) = (r[2] - r[0], r[3] - r[1]);
+                let (mx, my) = (w * 26.0 / 212.0, h * 26.0 / 212.0);
+                let tint = ImColor32::from_rgba(255, 236, 70, (pulse * 255.0) as u8);
+                for _ in 0..2 {
+                    canvas.image(pages::QUEST_GLOW, [r[0] - mx, r[1] - my + 3.0, r[2] + mx, r[3] + my], [0.0, 0.0, 1.0, 1.0], tint);
+                }
+            }
         }
     }
 
@@ -1735,13 +1785,28 @@ impl Book {
         };
         let on_now = on_of(&now);
         if first || on_now != on_of(&self.flags) {
-            tracing::info!("quest flags{}: on {:?} ({} read; round 19 reset done: {:?})", if first { " at load" } else { "" },
+            tracing::info!("quest flags{}: on {:?} ({} read; quest reset v2 done: {:?})", if first { " at load" } else { "" },
                            on_now, now.len(), now.get(&markers::QUEST_RESET));
         }
         self.flags = now;
         let flags = &self.flags;
         self.active = self.quests.active(&|f| flags.get(&f) == Some(&true));
         let on = |f: u32| flags.get(&f) == Some(&true);
+        // Round 20 (Q3): a quest just completed gives its reward in runes, once (its reward flag; only after the
+        // quest reset has run, so that the old flags of a save from before it give nothing).
+        if on(markers::QUEST_RESET) {
+            if let Some(game) = cx.game {
+                for (title, runes, flag) in self.quests.rewards_due(&on) {
+                    match game.add_runes(runes) {
+                        Some(held) => {
+                            game::set_event_flag(flag, true);
+                            tracing::info!("quest reward: {title} complete, {runes} runes given ({held} held now)");
+                        }
+                        None => tracing::warn!("quest reward: {title}: the rune count can't be reached"),
+                    }
+                }
+            }
+        }
         if let Some(d) = &self.dialogue {
             if !on(self.requests[d.request].flag) {
                 tracing::info!("dialogue: {} withdrawn by its event", self.requests[d.request].key);
@@ -1824,6 +1889,7 @@ impl Book {
                 wanted.extend(card.images());
             }
             wanted.extend(self.quests.offer_card(&request.card).map(|a| a.picture).filter(|p| !p.is_empty()));
+            wanted.extend([pages::REWARD_RUNES, pages::REWARD_SCROLL].map(String::from));
         }
         wanted.push(CURSOR.into());
         self.textures.want(wanted);
@@ -1883,6 +1949,9 @@ impl Book {
             }
         });
         let Some(press) = press else { return };
+        // Round 20 (Q1): which input answered, so the log shows the controller's A at work.
+        let source = if click.is_some() { "mouse" } else if pressed != 0 { "controller" } else { "keyboard" };
+        tracing::info!("dialogue: {press:?} by {source} (page {}, choosing {})", d.page + 1, d.choosing());
         let d = self.dialogue.as_mut().expect("checked");
         if let Some(answer) = d.press(press) {
             Self::answer(&self.requests[d.request], answer);

@@ -87,6 +87,7 @@ const OFFERS: &[(&str, u32, u32)] = &[
     // Round 19 (E3): Unicorn Way is Merle Ambrose's, offered by his message anywhere on the street (emevd_quests.py)
     // and again on reaching Connelly after a "no"; until it is accepted Connelly shows the "!" so the player can
     // find him. QUEST_RESET is on in every save once the round 19 reset has run.
+    // Round 20 (Q2): no Ambrose offer; the "!" is how the line starts, and talking to Connelly takes Unicorn Way.
     ("private_connelly", 1042362000, QUEST_RESET),
     ("private_connelly", 1042362010, 1042362009), // Ghost Hunters once Unicorn Way is complete
     ("ceren_nightchant", 1042362020, 1042362019), // Skeleton Crew once Ghost Hunters is complete
@@ -99,8 +100,9 @@ const OFFERS: &[(&str, u32, u32)] = &[
     ("olivia_dawnwillow", 1042362150, 1042362109), // Fear of Fire once Pesky Pirates is complete
 ];
 
-/// w101_quests.QUEST_RESET: the round 19 one-shot quest reset has run (the quest events wait for it).
-pub const QUEST_RESET: u32 = 1042362690;
+/// w101_quests.QUEST_RESET: the one-shot quest reset has run (the quest events wait for it). Round 20: version 2
+/// (round 19's was 1042362690), so Ryan's round 19 save starts again at Connelly's "!".
+pub const QUEST_RESET: u32 = 1042362691;
 
 /// Talk goals: (npc, quest assigned flag, quest complete flag, goal flag, flags of the goals it comes after).
 const TALKS: &[(&str, u32, u32, u32, &[u32])] = &[

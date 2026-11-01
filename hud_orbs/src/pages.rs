@@ -129,6 +129,8 @@ pub enum Hit {
     Warp(u32),
     /// An equipment set's row (index): choose it; a double click equips it.
     GearSet(usize),
+    /// Round 20 (Q7): a quest card on the Quests page (index into Data::quests): track it.
+    Quest(usize),
 }
 
 pub enum Action {
@@ -1969,6 +1971,17 @@ fn quests(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     if st.page + 1 >= pages {
         grey(l, v, &["btnNextPage"]);
     }
+    // Round 20 (Q7): a click on a card tracks that quest (book.rs: the pulsing glow, the arrow at its top left, the
+    // Quest Helper follows it).
+    for i in 0..QUESTS_PER_PAGE {
+        let k = st.page * QUESTS_PER_PAGE + i;
+        if k >= d.quests.len() {
+            break;
+        }
+        if let Some(w) = l.find(&format!("wndQuestInfo{i}")) {
+            st.hits.push((l.nodes[w].rect, Hit::Quest(k)));
+        }
+    }
     if d.quests.is_empty() {
         v.add([110.0, 200.0, 680.0, 240.0], "Your quest log is empty.", TextStyle::new("WizardFancy", 0.7, BLACK).centred());
         v.add([150.0, 260.0, 640.0, 400.0],
@@ -2011,7 +2024,18 @@ pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
               TextStyle::new("WizardNormal", 0.36, BLACK).centred().wrapped());
     }
     match q.progress {
-        Some((n, of)) => set(v, "txtGoalCounter", format!("{n}/{of}")),
+        Some((n, of)) => {
+            set(v, "txtGoalCounter", format!("{n}/{of}"));
+            // Round 20 (Q5, Ryan): the count sits over the bottom of the goal's picture (imgGoalObjective1,
+            // 40,67..106,133), not to its right: the counter scroll (110 x 28 at 142,107, its text 17,9 in) made 90
+            // wide and centred under the picture's middle, overlapping its lower edge.
+            if !q.picture.is_empty() {
+                if let (Some(scroll), Some(text)) = (card.find("imgGoalCounter"), card.find("txtGoalCounter")) {
+                    v.rect.insert(scroll, [28.0, 115.0, 118.0, 138.0]);
+                    v.rect.insert(text, [42.0, 121.0, 104.0, 138.0]);
+                }
+            }
+        }
         None => {
             v.show(card.find("imgGoalCounter"), false);
             v.show(card.find("txtGoalCounter"), false);
@@ -2022,6 +2046,38 @@ pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
     set(v, "txtWorld", world);
     v.show(card.find("LeftMainline"), q.main);
     v.show(card.find("RightMainline"), q.main);
+    // Round 20 (Q3): the reward at the bottom of the card, in Wizard101's reward slot (wndReward3, the middle one of
+    // the five along the red band): the gold piece's ring around Elden Ring's rune, the amount on the scroll under it.
+    if q.reward > 0 {
+        let slot = 3;
+        v.show(card.find(&format!("wndReward{slot}")), true);
+        if let Some(id) = card.find(&format!("imgReward{slot}Symbol")) {
+            v.node_art.insert(id, REWARD_RUNES.into());
+        }
+        if let Some(id) = card.find(&format!("imgReward{slot}Scroll")) {
+            v.node_art.insert(id, REWARD_SCROLL.into());
+        }
+        set(v, &format!("txtReward{slot}Amount"), q.reward.to_string());
+    }
+}
+
+/// Round 20 (Q3): the card's reward symbol (Wizard101's Art_Quest_Gold_Piece ring around Elden Ring's Lord's Rune
+/// icon; made on the PC) and Wizard101's scroll under the amount.
+pub const REWARD_RUNES: &str = "GUI/QuestPage/Art_Quest_Rune_Piece.png";
+pub const REWARD_SCROLL: &str = "GUI/QuestPage/Art_Quest_Exp_Scroll.png";
+/// Round 20 (Q7): Wizard101's quest-tracker icon (_Shared-WorldData.wad GUI/QuestPage) and its glow round the
+/// selected quest card (Art_Quest_Glow, a 256 square frame of soft yellow light).
+pub const QUEST_TRACKER: &str = "GUI/QuestPage/Button_Quest_Tracker02.png";
+pub const QUEST_GLOW: &str = "GUI/QuestPage/Art_Quest_Glow.png";
+
+/// Round 20 (Q7): the tracked quest's card: Wizard101's tracker arrow in imgActiveQuest (32 square), moved from
+/// 36,44 (where it covered the goal text's first letters) into the card's top-left corner under the star.
+pub fn quest_tracked(card: &Layout, v: &mut View) {
+    if let Some(id) = card.find("imgActiveQuest") {
+        v.node_art.insert(id, QUEST_TRACKER.into());
+        v.show(Some(id), true);
+        v.rect.insert(id, [4.0, 38.0, 36.0, 70.0]);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------

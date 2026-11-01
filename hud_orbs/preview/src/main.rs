@@ -346,6 +346,16 @@ fn main() {
         ("15g_ceren_offer_skeleton_crew_mouse_yes", pages::Tab::Character, 0, [0.582, 0.873], "talk:ceren_nightchant|ghost_hunters|goal3:5"),
         ("15h_oriel_offer_finding_out_why", pages::Tab::Character, 0, [0.0, 0.0], "talk:lady_oriel|monsters_and_mazes|goal2:5"),
         ("15i_accepted_gamma", pages::Tab::Character, 0, [0.0, 0.0], "talk:private_connelly|ghost_hunters|accepted:0"),
+        // Round 20 (quests Q2-Q8): Connelly's first talk (Unicorn Way's conversation) ending in the Ghost Hunters
+        // card (Spirit Jellyfish picture, 0/2 over its bottom, the rune reward, yes / no); the Quests page with the
+        // tracked card (glow, tracker arrow); the Quest Helper with its steps.
+        ("20a_connelly_first_talk", pages::Tab::Character, 0, [0.0, 0.0], "talk:private_connelly|unicorn_way|goal1:0"),
+        ("20b_ghost_hunters_card_yes_no", pages::Tab::Character, 0, [0.0, 0.0], "talk:private_connelly|unicorn_way|goal1:5"),
+        ("20c_skeleton_crew_card", pages::Tab::Character, 0, [0.0, 0.0], "talk:ceren_nightchant|ghost_hunters|goal3:5"),
+        ("20d_finding_out_why_card", pages::Tab::Character, 0, [0.0, 0.0], "talk:lady_oriel|monsters_and_mazes|goal2:5"),
+        ("20e_quests_page_tracked", pages::Tab::Quests, 0, [0.0, 0.0], ""),
+        ("20f_quest_helper_steps", pages::Tab::Character, 0, [0.0, 0.0], "turn:0"),
+        ("20g_quest_helper_steps_turned", pages::Tab::Character, 0, [0.0, 0.0], "turn:-70"),
         ("14a_quest_helper_ahead", pages::Tab::Character, 0, [0.0, 0.0], "turn:0"),
         ("14b_quest_helper_turned_left", pages::Tab::Character, 0, [0.0, 0.0], "turn:-70"),
         ("14c_quest_helper_behind", pages::Tab::Character, 0, [0.0, 0.0], "turn:150"),

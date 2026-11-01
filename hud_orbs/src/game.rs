@@ -392,6 +392,27 @@ impl Game {
         })
     }
 
+    /// Round 20 (quests Q3): gives the player `runes` (a quest reward): PlayerGameData's rune count, and its rune
+    /// memory (all runes ever held) as picking runes up does. Elden Ring's EMEVD and ItemLotParam have no way to
+    /// give runes as such (only items such as Golden Runes), so the DLL adds them. The new count, or None.
+    pub fn add_runes(&self, runes: u32) -> Option<u32> {
+        use eldenring::cs::PlayerGameData;
+        use std::mem::offset_of;
+        let pgd = read::<usize>(self.game_data_man).and_then(|gdm| read::<usize>(gdm + PLAYER_GAME_DATA))?;
+        let level = read::<u32>(pgd + offset_of!(PlayerGameData, level))?;
+        if !(1..=713).contains(&level) {
+            return None;
+        }
+        let (count_at, memory_at) = (pgd + offset_of!(PlayerGameData, rune_count), pgd + offset_of!(PlayerGameData, rune_memory));
+        let count = read::<u32>(count_at)?.saturating_add(runes).min(999_999_999);
+        let memory = read::<u32>(memory_at)?.saturating_add(runes).min(999_999_999);
+        unsafe {
+            (count_at as *mut u32).write_volatile(count);
+            (memory_at as *mut u32).write_volatile(memory);
+        }
+        Some(count)
+    }
+
     /// Puts `spell` (a magic param ID, -1 = none) in memory slot `index` (EquipMagicData's entries), as Elden
     /// Ring's own Memorize Spell menu does at a grace; false when the slot can't be reached.
     pub fn set_spell(&self, index: usize, spell: i32) -> bool {

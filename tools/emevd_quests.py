@@ -7,7 +7,7 @@ Events, in id order (all flags in w101_quests' docstring):
   assign  quests offered on arrival (Unicorn Way: reaching Private Connelly's sphere): the giver's offer
           ("intro|<quest>": Merle Ambrose's lines and the quest card with yes / no), the quest assigned only on yes,
           then "intro|<quest>|after" (Gamma pointing the player to Connelly). Round 18; rounds 10-17 assigned it
-          before showing anything.
+          before showing anything. Round 20: no quest uses it any more (Unicorn Way is "greet": npc block 0).
   goal    one per goal that is not a talk goal: END if done; WAIT for the quest's assigned flag and the goals before
           it; then wait for the goal's own condition (player in the sphere / kill counter >= N / every cage flag /
           the boss alive and then dead) and set the goal flag; the second-to-last goal also sets "ready", the last
@@ -21,6 +21,8 @@ Events, in id order (all flags in w101_quests' docstring):
   npc     (round 15) one per street character (w101_quests.CHARACTERS, placed by msb_add_npcs.py): wait for ER's
           own "Talk" press (ActionButtonParam 6000) on the character, then the first block whose flags match, each
           ending in RESTART so the next press is handled the same way:
+            0. (round 20) a "greet" quest of this NPC not assigned yet: assign it and go on to block 1, whose talk
+               goal it now is (Connelly: Unicorn Way's conversation, ending in the Ghost Hunters card)
             1. a talk goal of any quest that is current and targets this NPC: set the goal flag (and ready /
                complete / the next quests' assignment, as a goal event would), then that goal's conversation
             2. a side quest this NPC hands out whose prerequisite is on and which is not assigned: the offer
@@ -187,6 +189,9 @@ def after_yes(npc, quest, entity):
 
 def npc_event(slug, entity):
     body = [if_button(0, Q.TALK_NPC_BUTTON, entity)]
+    for q in Q.QUESTS:  # 0. (round 20) a quest this NPC starts by being talked to ("greet"): assigned, then block 1
+        if q["assign"] and q["assign"][0] == "greet" and q["assign"][1] == slug:
+            body += block([(Q.assigned(q["slug"]), 0)], assign(q["slug"]))  # no RESTART: falls into its talk goal
     for q in Q.QUESTS:  # 1. talk goals
         for i, g in enumerate(q["goals"], 1):
             if g["type"] == "talk" and g["target"] == slug:
