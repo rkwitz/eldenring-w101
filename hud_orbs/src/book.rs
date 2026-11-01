@@ -46,7 +46,6 @@ const SCREEN: f32 = 768.0;
 /// How far the player has to move while Elden Ring's map is open to count as travel (map-chunk metres).
 const TRAVEL: f32 = 30.0;
 /// Turning speed of the character picture: right stick (radians per second), mouse drag (radians per pixel).
-const TURN_STICK: f32 = 3.0;
 const TURN_MOUSE: f32 = 0.012;
 /// The map page's stick cursor: dead zone, and full-tilt speed in screen heights per second.
 const MAP_STICK_DEAD: f32 = 0.2;
@@ -560,8 +559,9 @@ impl Book {
             let hex: Vec<String> = sheet.face.iter().take(64).map(|b| format!("{b:02x}")).collect();
             tracing::info!("character: gender {} face {} look {:?}", sheet.gender, hex.join(""), look);
         }
-        let stick = input::right_x();
-        let turn = if stick.abs() > 0.2 { stick * TURN_STICK * dt } else { 0.0 } + pointer_turn;
+        // Round 19 A5: the right stick moves the wand now; the picture turns by its slow spin and drags only.
+        let stick = 0.0f32;
+        let turn = pointer_turn;
         if turn != 0.0 {
             self.yaw = (self.yaw + turn) % std::f32::consts::TAU;
             self.turned = Some(Instant::now());
@@ -620,7 +620,7 @@ impl Book {
             if slot == 0 && look.item.is_none() {
                 // Round 18: the slow spin turns ER's model only when the ini asks (its stick turns the world camera).
                 let rate = if by_hand { pointer_turn / dt.max(1e-3) }
-                    else if spinning && crate::live_preview::auto_spin() { self.spin * SPIN } else { 0.0 };
+                    else if spinning { self.spin * SPIN } else { 0.0 };
                 crate::live_preview::note_box(size, zoom, rate);
             } else if slot == 1 {
                 crate::live_preview::note_portrait(size);
@@ -1050,15 +1050,8 @@ impl Book {
         }
         let mut pointer = pointer;
         if pressed & input::A != 0 || ui.is_key_pressed_no_repeat(Key::Enter) {
-            if self.tab == Tab::Map {
-                // The map page: A / Enter clicks where the cursor is (the grace, the buttons).
-                pointer.clicked = true;
-            } else {
-                self.select(self.tab, true);
-                if !self.open {
-                    return;
-                }
-            }
+            // A / Enter clicks where the wand is (round 19 A5: the right stick moves it on every page).
+            pointer.clicked = true;
         }
 
         let (tab_hit, page_hit, in_model, mouse) = self.draw(ui, cx, &pointer, dt, false);
@@ -1390,9 +1383,12 @@ impl Book {
         if valid {
             self.last_os = os;
         }
-        if self.open && self.tab == Tab::Map && self.map == MapState::Idle {
-            // The map page: either stick moves the cursor over the map (the map itself stays still).
+        if self.open && (self.tab != Tab::Map || self.map == MapState::Idle) {
+            // The map page: either stick moves the cursor over the map (the map itself stays still). Round 19 A5:
+            // every other page: the right stick moves the wand (the camera is locked while the book is open; the
+            // left stick still walks).
             let [lx, ly, rx, ry] = input::sticks();
+            let (lx, ly) = if self.tab == Tab::Map { (lx, ly) } else { (0.0, 0.0) };
             let live = |v: f32| if v.abs() < MAP_STICK_DEAD { 0.0 } else { (v.abs() - MAP_STICK_DEAD) / (1.0 - MAP_STICK_DEAD) * v.signum() };
             let (x, y) = ((live(lx) + live(rx)).clamp(-1.0, 1.0), (live(ly) + live(ry)).clamp(-1.0, 1.0));
             let step = height * MAP_STICK_SPEED * dt;
@@ -1413,7 +1409,8 @@ impl Book {
         Pointer {
             pos: self.cursor,
             delta: [self.cursor[0] - before[0], self.cursor[1] - before[1]],
-            down: io.mouse_down[0] || di_down,
+            // Round 19 A5: the controller's A held drags like the mouse button (turning the picture with the wand).
+            down: io.mouse_down[0] || di_down || (self.open && input::held().0 & input::A != 0),
             clicked,
             wheel: if io.mouse_wheel != 0.0 { io.mouse_wheel } else { wheel as f32 / 120.0 },
         }
