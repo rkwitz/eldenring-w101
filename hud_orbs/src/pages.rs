@@ -1513,9 +1513,10 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
     let tab = DECK_TABS.iter().position(|t| t.1 == class).unwrap_or(1);
     let frame = card_frame(DECK_TABS[tab].0);
     let card = |fx: f32, fy: f32| [x + fx / 128.0 * cw, y + fy / CARD_H * ch];
-    // The picture: the spell's icon in the frame's window, on a dark backing.
+    // The picture: the spell's icon in the frame's window, on Wizard101's parchment spiral (the reagent cards'
+    // backing, Ryan round 18 C5; it was a dark fill).
     let (w0, w1) = (card(10.0, 33.0), card(119.0, 117.0));
-    v.fills.push(([w0[0], w0[1], w1[0], w1[1]], ImColor32::from_rgb(28, 22, 34)));
+    crate::crafting::parchment_spiral(v, [w0[0], w0[1], w1[0], w1[1]]);
     let side = (w1[1] - w0[1]).min(w1[0] - w0[0]);
     let ix = (w0[0] + w1[0] - side) / 2.0;
     icon(v, d.items, id, [ix, w0[1], ix + side, w0[1] + side]);
@@ -1540,7 +1541,8 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
     let (y0, y1) = (card(100.0, 99.0), card(123.0, 122.0));
     let kind = spell_type(d.items, raw);
     v.images.push(([y0[0], y0[1], y1[0], y1[1]], kind.into(), [0.0, 0.0, 1.0, 1.0]));
-    let (t0, t1) = (card(8.0, 4.0), card(120.0, 28.0));
+    // The name inside the title band, clear of its edges (Ryan round 18 C1).
+    let (t0, t1) = (card(CARD_NAME[0], CARD_NAME[1]), card(CARD_NAME[2], CARD_NAME[3]));
     v.add([t0[0], t0[1], t1[0], t1[1]], name, TextStyle::new("WizardFancy", 0.34 * k, YELLOW).centred().outlined());
     if let Some(spell) = spell {
         // The cost in the pip triangle: Wizard101's yellow number with a black outline (its reagent card's rank,
@@ -1564,22 +1566,55 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
         } else {
             let mut text = spell.card.clone();
             if kind == "GUI/Icons/Type_AOE.png" {
-                // Area spells: Wizard101's "... to all enemies".
-                text = text.replacen("$dT$$Damage$", "$dT$$Damage$ to all enemies", 1);
+                // Area spells: Wizard101's "to all enemies" symbol (Icons_All_Enemies; the words no longer fit
+                // the two lines, Ryan round 18 C2).
+                text = text.replacen("$dT$$Damage$", "$dT$$Damage$$All_Enemies$", 1);
             }
             card_symbols(&text, &school_pic)
         };
-        // In the parchment box, centred both ways, at Wizard101's card text size (shrinking only when it would
-        // not fit), the symbols at the text's own size; the slots and needs on one line at the bottom.
-        let (b0, b1) = (card(10.0, 124.0), card(118.0, 177.0));
+        // Wizard101's three card text lines in the parchment box (Ryan round 18 C1-C4): what it does on the first
+        // two, from the box's first line down (a one-line text sits on the first line, not in the middle), the
+        // slots and needs on the third; at Wizard101's card text size, clear of the box's edges. The texts are
+        // written to fit two lines (tools/er_book_data.py SHORT_CARDS); a longer one shrinks to fit.
+        let line = font_line(CARD_TEXT_SCALE * k) / ch * CARD_H;
+        let pitch = line * CARD_LEADING;
+        let (b0, b1) = (card(CARD_TEXT_X[0], CARD_TEXT_TOP), card(CARD_TEXT_X[1], CARD_TEXT_TOP + 2.0 * pitch));
         let mut style = TextStyle::new("SpellDescription", CARD_TEXT_SCALE * k, BLACK).centred().wrapped();
-        style.middle = true;
+        style.middle = false;
         style.picture = CARD_SYMBOL_SIZE;
+        style.leading = CARD_LEADING;
         v.add([b0[0], b0[1], b1[0], b1[1]], effect, style);
-        let (n0, n1) = (card(8.0, 176.0), card(120.0, 191.0));
-        v.add([n0[0], n0[1], n1[0], n1[1]], needs.join("  "),
-              TextStyle::new("SpellDescription", CARD_TEXT_SCALE * k, BLACK).centred());
+        let top = CARD_TEXT_TOP + 2.0 * pitch;
+        let (n0, n1) = (card(CARD_NEEDS_X[0], top), card(CARD_NEEDS_X[1], top + line));
+        v.add([n0[0], n0[1], n1[0], n1[1]], needs.join(" "),
+              TextStyle::new("SpellDescription", CARD_NEEDS_SCALE * k, BLACK).centred());
     }
+}
+
+/// The hovered list card: its size (times the card's) and Wizard101's yellow card highlight around it
+/// (_Shared-WorldData GUI/Art/Art_Card_Selection: a 4 px pale yellow frame in 128 x 128), `CARD_HIGHLIGHT_EDGE`
+/// page pixels outside the card.
+const CARD_HOVER_SCALE: f32 = 1.08;
+const CARD_HIGHLIGHT: &str = "GUI/Art/Art_Card_Selection.png";
+const CARD_HIGHLIGHT_EDGE: f32 = 2.0;
+
+/// The name's box in the card art (128 x CARD_H): inside the title band (y 2..24), 14 px in from each side.
+const CARD_NAME: [f32; 4] = [14.0, 4.0, 114.0, 25.0];
+/// The parchment box (School_*_Blnk: x 8..120, y 129..188 of the art) and the text in it: the first line's top
+/// (its letters start about 5 px under the box's top edge), the description's and the needs line's sides.
+const CARD_TEXT_TOP: f32 = 128.0;
+const CARD_TEXT_X: [f32; 2] = [12.0, 116.0];
+const CARD_NEEDS_X: [f32; 2] = [11.0, 117.0];
+/// Line pitch of the card text in line heights: three lines in the box (SpellDescription's 21 px cells have
+/// about 5 px of space over the capitals).
+const CARD_LEADING: f32 = 0.66;
+/// The slots and needs line's scale, the same on every card: the longest ("2 slots Fai 28 Arc 17", 141
+/// SpellDescription px) fits the box's 80 px at 0.57; shorter ones would otherwise come out larger.
+const CARD_NEEDS_SCALE: f32 = 0.6;
+
+/// SpellDescription's line height (its 21 px glyph cells) at `scale`, in page pixels.
+fn font_line(scale: f32) -> f32 {
+    21.0 * scale
 }
 
 /// The card symbols' side in SpellDescription line heights: about the digits' height, as Wizard101's card
@@ -1603,13 +1638,22 @@ fn card_symbols(text: &str, school: &str) -> String {
     for (token, art) in SYMBOLS {
         out = out.replace(token, &format!("<image;{art}>"));
     }
+    // $Type_<kind>$: the card type icon GUI/Icons/Type_<kind> (the cards without numbers lead with their type).
+    while let Some(at) = out.find("$Type_") {
+        let Some(len) = out[at + 1..].find('$') else { break };
+        let kind = out[at + 6..at + 1 + len].to_string();
+        out.replace_range(at..at + 2 + len, &format!("<image;GUI/Icons/Type_{kind}.png>"));
+    }
     out
 }
 
-/// SpellDescription's scale on a list-sized (97 px) card; wrapped text shrinks from it (to 60%) to fit the
-/// parchment. Measured on Wizard101's own card (w101_reference/reagent_card_balance_azoth.png, a 130 px card):
-/// "Balance Azoth" is 78 px wide there, 91 SpellDescription pixels, i.e. 0.857 on a 130 px card = 0.64 on 97 px.
-const CARD_TEXT_SCALE: f32 = 0.64;
+/// SpellDescription's scale on a list-sized (97 px) card. Round 18 (C4), measured on Wizard101's own card pictures
+/// (_Shared-WorldData GUI/Backgrounds/Background_Help_Interface_Deck_Building, its deck page's list card:
+/// "105-145" is 58% of the card's width = 56 SpellDescription pixels on 97 px, scale 1.0; Background_Tutorial_Card's
+/// Sunbird: digits 11% of the card's width, 1.06; the help card description 0.9 to 1.4): 0.9, the largest at
+/// which three lines (two of text, the slots and needs) fit the parchment box. Round 17's 0.64 came from a
+/// reagent card's name, which Wizard101 draws smaller.
+const CARD_TEXT_SCALE: f32 = 0.9;
 
 fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.subs = DECK_TABS.len();
@@ -1620,7 +1664,9 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     // sell, treasure cards or spell fusion either (Ryan, round 15: not even greyed).
     hide(l, v, &["PrevDeck", "NextDeck", "NewDeckName", "EquipButton", "equipFist", "Help", "QuickSellButton",
                  "TreasureCardButton", "FusionCardButton"]);
-    grey(l, v, &["NextItemSpells", "PrevItemSpells"]);
+    // The item-card strip's page arrows are gone too (Ryan round 18 C6; Wizard101's own deck page shows none while
+    // the strip has one page).
+    hide(l, v, &["NextItemSpells", "PrevItemSpells"]);
     // The spell count's symbol: a normal spell card, not Wizard101's treasure card one.
     if let Some(c) = l.find("TreasureCardIcon") {
         v.show(Some(c), false);
@@ -1691,11 +1737,11 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                         v.over_fills.push((inner, ImColor32::from_rgba(40, 25, 10, 140)));
                     }
                     // Hovering it shows the spell's card (as Wizard101's deck shows a card when you point at
-                    // it), the size of the list's cards (Ryan, round 16), on the deck under the slot.
+                    // it), the size of the list's cards (Ryan, round 16), above the slot and the cursor, as
+                    // Wizard101's card tips sit (Ryan round 18 C8; it was under the slot).
                     let [cw, ch] = l.find("AllPageSpellList").and_then(|n| l.nodes[n].card).unwrap_or([97.0, 148.0]);
-                    // Under the slot, kept on the deck's page (InvBorder: 39,101 - 382,566).
                     let gx = ((cell[0] + cell[2]) / 2.0 - cw / 2.0).clamp(r[0], r[2] - cw);
-                    let gy = (cell[3] + 6.0).min(560.0 - ch);
+                    let gy = cell[1] - 6.0 - ch;
                     let mut card = View::default();
                     spell_card(l, d, &mut card, id, &d.names.item(id), [gx, gy, gx + cw, gy + ch]);
                     v.hovers.push((cell, Box::new(card)));
@@ -1740,6 +1786,19 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         // Everything is on the card itself: no tooltip over it (Ryan, round 16).
         spell_card(l, d, v, *id, name, [x, y, x + cw, y + ch]);
         let memorised = sheet.spells.contains(&(raw as i32));
+        // Under the cursor the card grows a little inside Wizard101's yellow card highlight (Art_Card_Selection),
+        // as Wizard101 lights the card you point at (Ryan round 18 C7).
+        let grow = cw * (CARD_HOVER_SCALE - 1.0) / 2.0;
+        let big = [x - grow, y - grow * ch / cw, x + cw + grow, y + ch + grow * ch / cw];
+        let mut lit = View::default();
+        spell_card(l, d, &mut lit, *id, name, big);
+        if memorised {
+            lit.fills.push((big, IN_DECK));
+        }
+        let edge = CARD_HIGHLIGHT_EDGE;
+        lit.images.push(([big[0] - edge, big[1] - edge, big[2] + edge, big[3] + edge], CARD_HIGHLIGHT.into(),
+                         [0.0, 0.0, 1.0, 1.0]));
+        v.hovers.push(([x, y, x + cw, y + ch], Box::new(lit)));
         if memorised {
             // Already in the deck: dimmed, as Wizard101 dims cards it can't add.
             v.fills.push(([x, y, x + cw, y + ch], IN_DECK));
@@ -2439,7 +2498,16 @@ const HELP: [(&str, &[(HelpPage, HelpPage)]); 6] = [
 ];
 
 /// The help spread's two pages (page pixels, inside the book's margins and clear of the spine).
-const HELP_PAGES: [[f32; 4]; 2] = [[84.0, 112.0, 360.0, 528.0], [412.0, 112.0, 688.0, 528.0]];
+/// Round 18 E1: they start under the tab strip (HELP_STRIP ends at 120, its torn edge about 112).
+const HELP_PAGES: [[f32; 4]; 2] = [[84.0, 132.0, 360.0, 528.0], [412.0, 132.0, 688.0, 528.0]];
+/// The strip behind the topic buttons that sets the two pages apart below it (Ryan round 18 E1): Wizard101's help
+/// windows' "toolbar" sprite (e.g. HelpCombatCardDescription.gui: GUI/InventoryPage/Art_Inventory_Tab_Background at
+/// 62,12 .. 718,120, as on the Backpack and Crafting pages). Drawn in mainBackground's place, under the buttons.
+const HELP_STRIP: [f32; 4] = [62.0, 12.0, 718.0, 120.0];
+const HELP_STRIP_ART: &str = "GUI/InventoryPage/Art_Inventory_Tab_Background.png";
+/// The topic buttons' pitch (HelpSpellbookPage's TabGroup1: 59 px from 76).
+const HELP_TAB_X: f32 = 76.0;
+const HELP_TAB_PITCH: f32 = 59.0;
 /// An icon list's rows: the icon's size and the row pitch (page pixels).
 const HELP_ICON: f32 = 30.0;
 const HELP_ICON_ROW: f32 = 38.0;
@@ -2451,10 +2519,33 @@ fn help(l: &Layout, st: &mut State, v: &mut View) {
     if let Some(c) = chosen {
         v.checked.insert(c);
     }
-    marker(l, v, "TabBackground", "Tab_Questing", chosen);
-    v.tab_row = row_of(l, &HELP.map(|h| h.0));
+    if let Some(bg) = l.find("mainBackground") {
+        v.rect.insert(bg, HELP_STRIP);
+        v.node_images.insert(bg, HELP_STRIP_ART.into());
+    }
     hide(l, v, &["TabGroup2"]);
-    grey(l, v, &["Tab_Housing", "Tab_CrownShop", "Tab_Gardening", "NextHelpPage"]);
+    // Round 18 E2: the topics Elden Ring has nothing for (Housing = Button_Dorm, Crown Shop = Button_Crown_Shop,
+    // Gardening = Button_Garden_All) and the arrow to Wizard101's second topic row (NextHelpPage,
+    // Button_Category_Arrow: Mounts, Fishing, Socketing) are gone rather than greyed; the topics left close up
+    // along TabGroup1's row. To bring one back, add it to HELP and drop it from this list.
+    hide(l, v, &["Tab_Housing", "Tab_CrownShop", "Tab_Gardening", "NextHelpPage"]);
+    let mut row: Option<[f32; 4]> = None;
+    for (i, (button, _)) in HELP.iter().enumerate() {
+        let Some(b) = l.find(button) else { continue };
+        let r = l.nodes[b].rect;
+        let x = HELP_TAB_X + i as f32 * HELP_TAB_PITCH;
+        let nr = [x, r[1], x + (r[2] - r[0]), r[3]];
+        v.rect.insert(b, nr);
+        row = Some(row.map_or(nr, |a| [a[0].min(nr[0]), a[1].min(nr[1]), a[2].max(nr[2]), a[3].max(nr[3])]));
+        if Some(b) == chosen {
+            if let (Some(m), Some(first)) = (l.find("TabBackground"), l.find("Tab_Questing")) {
+                let (mr, fr) = (l.nodes[m].rect, l.nodes[first].rect);
+                let dx = x - fr[0];
+                v.rect.insert(m, [mr[0] + dx, mr[1], mr[2] + dx, mr[3]]);
+            }
+        }
+    }
+    v.tab_row = row;
     // Each topic's spreads turn with the page arrows under the book, as Wizard101's help pages do.
     let page = paging(l, v, st, spreads.len(), 1, ("pageText", "leftscroll", "rightscroll"));
     let (left, right) = spreads[page];

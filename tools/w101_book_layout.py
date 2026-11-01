@@ -86,6 +86,8 @@ EXTRA_ART += [f"GUI/Icons/Type_{t}.dds" for t in ("AOE", "Heal", "HealOverTime",
 # $All_Enemies_image$, $Self_image$, $Incoming_image$, $Outgoing_image$, $Accuracy_image$, $Stun_image$).
 EXTRA_ART += [f"GUI/Icons/{i}.dds" for i in ("Icons_Rounds", "Icons_All_Enemies", "Icon_Self", "Icon_Incoming",
               "Icon_Outgoing", "Icon_Accuracy", "Icons_Stun")]
+# The yellow frame round a hovered spell card (round 18, C7: as Wizard101 lights the card under the cursor).
+EXTRA_ART += ["GUI/Art/Art_Card_Selection.dds"]
 # The Pets page's talent rows (PetTalentControl.gui's background) and Wizard101's talent icon sheet.
 EXTRA_ART += ["GUI/Backgrounds/Background_Pet_Talent.dds", "GUI/Talents/PetTalent_Complete_Color01.dds"]
 # The school badges (the Character page's SchoolIcon, the Pets page's spriteSchoolIcon: symbol on the school's colour

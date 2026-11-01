@@ -87,6 +87,11 @@ impl Game {
             (goods(15000), 12), (goods(15010), 4), (goods(20650), 7), (goods(20660), 2),
             (goods(20760), 6), (goods(20802), 3), (goods(20800), 2), (goods(20801), 1), (goods(15340), 9), // crafting
         ];
+        // PREVIEW_SPELLS=4140,6210,...: these spells instead of the usual ones (to check particular cards).
+        if let Ok(list) = std::env::var("PREVIEW_SPELLS") {
+            items.retain(|(id, _)| id >> 28 != 4 || !(4000..8000).contains(&(id & 0x0FFF_FFFF)));
+            items.extend(list.split(',').filter_map(|s| s.trim().parse::<u32>().ok()).map(|s| (goods(s), 1)));
+        }
         items.extend((0..30).map(|i| (goods(2900 + i), 1)));
         Some(Sheet {
             name: "Ambrose".into(),

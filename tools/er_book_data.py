@@ -230,7 +230,9 @@ class Cards:
     def card(self, goods_id):
         """The spell's card text in Wizard101's card grammar (Spell.lang: "#1:$eA$ + #2:$eA4$ #3:$dT_image$#4:$Damage_image$
         over 3 #5:$Rounds_image$"), with $dT$ (the card's school), $Damage$, $OT_Damage$, $Heal$, $OT_Heal$, $Ward$ and
-        $Rounds$ for the symbols; "" when the params say nothing countable."""
+        $Rounds$ for the symbols; "" when the params say nothing countable. SHORT_CARDS wins (round 18: two lines)."""
+        if goods_id in SHORT_CARDS:
+            return SHORT_CARDS[goods_id]
         f = self.facts(goods_id)
         if f is None:
             return ""
@@ -274,6 +276,96 @@ class Cards:
             what = "all" if len(down) >= 5 else " & ".join(down)
             parts.append(f"$Ward$ -{'/'.join(map(str, pct))}% {what} damage taken" + (f" for {secs(time)} $Rounds$" if time > 0 else ""))
         return ", ".join(parts)
+
+
+# Round 18 (Ryan C2): every card text in at most two lines of the card (pages::spell_card, SpellDescription 0.9 on
+# a 97 px card), the numbers kept: the generated texts shortened (status names short, "/s", "/hit", no "for"/"over",
+# no "Armament"/"damage taken" where needed) and the cards with no numbers given a short line led by their $Type_<kind>$
+# icon. Keyed by goods ID; Cards.card returns these instead of its own text.
+SHORT_CARDS = {
+    4050: '44+49+59+69 $dT$$Damage$',
+    4130: '+23% magic $Damage$ 30s $Rounds$',
+    4140: '$Type_Global$ Lights the area',
+    4210: '54 $dT$$OT_Damage$/hit over 5s $Rounds$',
+    4220: '45+45+49+49 $dT$$Damage$',
+    4361: '330 $dT$$Damage$, +270 frost',
+    4370: '58 $dT$$OT_Damage$/hit over 2s $Rounds$',
+    4400: '199 $dT$$Damage$, +100 frost',
+    4410: '99+74 $dT$$Damage$, +80 frostbite',
+    4431: '133 $dT$$Damage$, +120 frost',
+    4460: '+75 magic $Damage$ for 90s $Rounds$',
+    4470: '$Ward$ -30/70% all 60s $Rounds$',
+    4480: '$Type_Manipulation$ Cures sleep/madness',
+    4500: '127x3 +60 +51x3 $dT$$Damage$',
+    4630: '$Ward$ Deflects spells',
+    4640: '$Ward$ Repels spells',
+    4650: '$Ward$ Draws in spells',
+    4660: '$Type_Cloak$ Invisible weapon',
+    4670: '$Type_Cloak$ Nearly invisible',
+    4900: '200 $dT$$Damage$, +95 bleed',
+    4910: '212 $dT$$Damage$, +25 bleed',
+    5010: '312 $dT$$Damage$, +130 frost',
+    5040: '513 $dT$$Damage$, +50 blight',
+    6040: '$Type_Manipulation$ Cures poison, rot',
+    6050: '+20% fire, phys $Damage$ 30s',
+    6060: '$Ward$ -60% fire for 70s $Rounds$',
+    6210: '244 $dT$$Damage$ +2%HP $OT_Damage$ 2s',
+    6230: '255 $dT$$Damage$ +2%HP $OT_Damage$ 2s',
+    6240: '106 $dT$$Damage$ +2%HP $OT_Damage$ 2s',
+    6250: '+65 fire $Damage$ for 7s $Rounds$',
+    6260: '$Ward$ -35% phys 70s $Rounds$',
+    6270: '+2% HP $OT_Damage$ over 2s $Rounds$',
+    6310: '203 $dT$$Damage$ +3 bleed',
+    6320: '+40 fire $Damage$ +2 bleed 60s',
+    6330: '$Ward$ -60% magic 70s $Rounds$',
+    6340: '$Ward$ -30% affinity 70s',
+    6400: '$Type_Damage$ Pushes foes away',
+    6430: '8 $Heal$/s over 90s $Rounds$',
+    6431: '12 $Heal$/s over 90s $Rounds$',
+    6440: '$Type_Manipulation$ Cures poison',
+    6441: '$Type_Manipulation$ Cures 3 ailments',
+    6450: '$Ward$ -35% fire for 90s $Rounds$',
+    6460: '$Ward$ -35% magic 90s $Rounds$',
+    6470: '$Ward$ -35% lightning 90s',
+    6480: '$Ward$ -35% holy 90s $Rounds$',
+    6490: '$Ward$ -60% holy 70s $Rounds$',
+    6500: '20+32 $dT$$Damage$ over 2s $Rounds$',
+    6510: '$Type_Cloak$ Silent footsteps',
+    6520: '$Type_Cloak$ Shadow lures foes',
+    6530: '$Type_Cloak$ Hides you in darkness',
+    6600: '+15% $Damage$ $Ward$ -10% 80s $Rounds$',
+    6730: '$Type_Manipulation$ Cures all, dispels',
+    6740: '$Type_Enchantment$ Shield resists more',
+    6760: '$Ward$ Strikes back',
+    6770: '+75 holy $Damage$ for 90s $Rounds$',
+    6780: '$Type_Manipulation$ Cures blight',
+    6840: '5 $Heal$/s over 120s $Rounds$',
+    6850: '$Type_Manipulation$ Cures bleed, frost',
+    6921: '547 $dT$$Damage$ +120 frost',
+    6960: '+75 lightning $Damage$ 90s $Rounds$',
+    6970: '+75 lightning $Damage$ 70s $Rounds$',
+    6971: '$Type_Charm$ Lightning body',
+    7020: '135 x3 $dT$$Damage$ +110 frost',
+    7021: '158 $dT$$Damage$, +110 frost',
+    7030: '131 x3 $dT$$Damage$ +65 rot',
+    7031: '155 $dT$$Damage$, +65 rot',
+    7210: '52+15 $dT$$Damage$, +40 bleed',
+    7240: '40 $dT$$Damage$, +150 rot',
+    7330: '22 $dT$$Damage$ +35 mad 25%/40s',
+    7530: '225 $dT$$Damage$ +2%HP $OT_Damage$ 2s',
+    7903: '$Ward$ -60% lightning 70s',
+    2004300: '$Type_Cloak$ Hides you in haze',
+    2004900: '+87 $Damage$ +25 bleed 30s',
+    2004910: '63 $dT$$Damage$, +25 bleed',
+    2006200: '328 $dT$$Damage$, +170 frost',
+    2006210: '80+200 $dT$$Damage$ +40 frost',
+    2006670: '$OT_Heal$ Heals allies near',
+    2006710: '200 $dT$$Damage$ + 40/hit 2s $Rounds$',
+    2006910: '$Type_Charm$ Lightning buff',
+    2007200: '100 $dT$$Damage$, +80 rot',
+    2007410: '214+240 $dT$$Damage$ 2s $Rounds$',
+    2007810: '62 $dT$$OT_Damage$/hit over 2s $Rounds$',
+}
 
 
 TEXT_TABLES = {"WeaponInfo": "W", "ProtectorInfo": "P", "AccessoryInfo": "A", "GoodsInfo": "G", "GemInfo": "E",

@@ -39,6 +39,9 @@ pub struct TextStyle {
     /// Inline pictures' side in line heights (PICTURE_SIZE unless a caller sets it: the spell cards use the
     /// text's own size).
     pub picture: f32,
+    /// Line pitch in line heights (1.0 unless a caller sets it: the spell cards set their lines closer, as
+    /// Wizard101's three card text lines sit in the card's parchment box).
+    pub leading: f32,
 }
 
 impl TextStyle {
@@ -55,6 +58,7 @@ impl TextStyle {
             middle: true,
             tracking: 0.0,
             picture: PICTURE_SIZE,
+            leading: 1.0,
         }
     }
 
@@ -163,6 +167,7 @@ impl Layout {
                 middle: true,
                 tracking: get("ka").and_then(|v| v.parse().ok()).unwrap_or(0.0),
                 picture: PICTURE_SIZE,
+                leading: 1.0,
             });
             let frame = |key: &str| get(key).and_then(floats::<4>);
             nodes.push(Node {
@@ -553,7 +558,11 @@ impl Canvas<'_, '_> {
         let t = style.tracking;
         let picture_w = font.line_height * style.picture;
         let pictures_in = |l: &str| l.chars().filter(|c| picture_index(*c).is_some()).count() as f32;
-        let measure = |l: &str| font.width_tracked(l, t) + pictures_in(l) * (picture_w + 2.0 * PICTURE_GAP);
+        // (A picture's character is not the font's: only the picture's own width counts.)
+        let measure = |l: &str| {
+            let text: String = l.chars().filter(|c| picture_index(*c).is_none()).collect();
+            font.width_tracked(&text, t) + pictures_in(l) * (picture_w + 2.0 * PICTURE_GAP)
+        };
         let width = r[2] - r[0];
         let height = r[3] - r[1];
         let base = if style.scale > 0.0 { style.scale } else { (height * 0.8 / font.line_height).max(0.1) };
@@ -587,7 +596,7 @@ impl Canvas<'_, '_> {
         let mut scale = base;
         let mut lines = wrap_at(scale);
         if style.wrap {
-            while lines.len() as f32 * font.line_height * scale > height * 1.05 && scale > base * 0.6 {
+            while lines.len() as f32 * font.line_height * style.leading * scale > height * 1.05 && scale > base * 0.6 {
                 scale *= 0.93;
                 lines = wrap_at(scale);
             }
@@ -602,20 +611,22 @@ impl Canvas<'_, '_> {
             if tall > height * 1.3 && tall > 0.0 {
                 scale *= (height * 1.3 / tall).max(0.6);
             }
-            let max_w = width / scale;
+            // (A little slack: a line just shrunk to the box's width must not lose its end to rounding.)
+            let max_w = width / scale + 0.5;
             for line in lines.iter_mut().filter(|l| pictures_in(l) == 0.0) {
                 *line = font.fit(line, max_w.max(1.0), t);
             }
         }
         let line_h = font.line_height * scale;
-        let total = line_h * lines.len() as f32;
+        let pitch = line_h * style.leading;
+        let total = pitch * lines.len() as f32;
         let mut y = if style.middle && total < height { r[1] + (height - total) / 2.0 } else { r[1] };
         let colour = if hovered { style.hover.unwrap_or(style.colour) } else { style.colour };
         let colour = fade(colour, self.alpha);
         let dark = fade(ImColor32::from_rgba(0, 0, 0, 200), self.alpha * colour.a as f32 / 255.0);
         for line in lines {
             // Wrapped text stops at the bottom of its box rather than running over what is below.
-            if y + line_h > r[3] + line_h * 0.25 && style.wrap {
+            if y + pitch > r[3] + pitch * 0.25 && style.wrap {
                 break;
             }
             let w = measure(&line) * scale;
@@ -663,7 +674,7 @@ impl Canvas<'_, '_> {
                 }
                 flush(&mut run, &mut pen);
             }
-            y += line_h;
+            y += pitch;
         }
     }
 }

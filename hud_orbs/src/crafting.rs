@@ -480,6 +480,20 @@ fn crop(art: &str) -> Option<[f32; 4]> {
 /// Wizard101 reagent picture (Resource_Black_Lotus, Resource_Bone, ...) is drawn on, filling its whole square.
 pub const MEDALLION: &str = "GUI/Reagents/Resource_Nothing.png";
 
+/// The parchment spiral of Wizard101's reagent pictures (Resource_Nothing's disc inside the gold ring: centre 64,64,
+/// the ring's black inner edge 15 px in, so a radius of 48 is clear parchment) as a rectangle for `r`: the largest
+/// part of the disc with `r`'s shape, centred on the spiral, so nothing of the ring shows. Ryan round 18: the spell
+/// cards' picture window and the recipe's ingredient boxes use it behind their pictures, like the reagent cards.
+pub(crate) fn parchment_spiral(v: &mut View, r: [f32; 4]) {
+    const CENTRE: f32 = 64.0;
+    const RADIUS: f32 = 48.0;
+    let (w, h) = ((r[2] - r[0]).max(1.0), (r[3] - r[1]).max(1.0));
+    let diag = (w * w + h * h).sqrt();
+    let (hw, hh) = (RADIUS * w / diag, RADIUS * h / diag);
+    let uv = [(CENTRE - hw) / 128.0, (CENTRE - hh) / 128.0, (CENTRE + hw) / 128.0, (CENTRE + hh) / 128.0];
+    v.images.push((r, MEDALLION.into(), uv));
+}
+
 /// A material's picture as Wizard101 draws a reagent's (GUI/Reagents/Resource_*: 128 x 128, the medallion filling
 /// the square, the object filling the medallion's window): the medallion over the whole square `r`, the item's
 /// icon cropped to its drawn part (see `crop`) on it, its square `fill` of the side: 0.75 fills the window inside
@@ -493,20 +507,18 @@ pub(crate) fn reagent_picture(v: &mut View, items: &crate::itemdata::ItemData, i
     v.images.push(([cx - half, cy - half, cx + half, cy + half], art, uv));
 }
 
-/// IngredientLayout's background (RecipeWindow.gui): Wizard101's eight square ingredient boxes, 4 x 2 cells of 64 x 64
-/// in its 256 x 128 picture, the picture stretched over the layout's rectangle.
-const INGREDIENT_BOXES: &str = "GUI/Backgrounds/Background_Crafting_Icons01.png";
+/// IngredientLayout's background (RecipeWindow.gui, Background_Crafting_Icons01): Wizard101's eight square
+/// ingredient boxes, 4 x 2 cells of 64 x 64 in its 256 x 128 picture, the picture stretched over the layout's
+/// rectangle.
 const INGREDIENT_ART: [f32; 2] = [256.0, 128.0];
 /// In each 64 x 64 cell (measured on the art): the blue window inside the gold border is x 11..53, y 7..43; the plaque
 /// (Art_Crafting_MiniPlaque02, RecipeWindow's IngredientNumber parent) covers the box's bottom from y 42 on.
 const INGREDIENT_WINDOW: [f32; 4] = [11.0, 7.0, 53.0, 42.0];
-/// A star-free patch of the window's painted blue (cell pixels), stretched over the star when a material is shown.
-const INGREDIENT_BLUE: [f32; 4] = [12.0, 8.0, 20.0, 18.0];
 /// Space between the picture and the border (page pixels).
 const INGREDIENT_MARGIN: f32 = 2.0;
 
-/// A material in ingredient box `slot` (0..8) of IngredientLayout (`layout`, its page rectangle): the box's own blue
-/// painted over its star, and the item's icon (cropped to its drawn part, see `crop`) as large as fits inside the
+/// A material in ingredient box `slot` (0..8) of IngredientLayout (`layout`, its page rectangle): the reagent
+/// cards' parchment spiral over the box's blue window and its star, and the item's icon (cropped to its drawn part, see `crop`) as large as fits inside the
 /// blue window, clear of the gold border and of the have/need plaque under it.
 fn ingredient_picture(v: &mut View, items: &crate::itemdata::ItemData, item: u32, layout: [f32; 4], slot: usize) {
     let (sx, sy) = ((layout[2] - layout[0]) / INGREDIENT_ART[0], (layout[3] - layout[1]) / INGREDIENT_ART[1]);
@@ -514,9 +526,8 @@ fn ingredient_picture(v: &mut View, items: &crate::itemdata::ItemData, item: u32
     let page = |p: [f32; 4]| [layout[0] + (cx + p[0]) * sx, layout[1] + (cy + p[1]) * sy,
                               layout[0] + (cx + p[2]) * sx, layout[1] + (cy + p[3]) * sy];
     let w = page(INGREDIENT_WINDOW);
-    let b = INGREDIENT_BLUE;
-    v.images.push((w, INGREDIENT_BOXES.into(),
-                   [b[0] / INGREDIENT_ART[0], b[1] / INGREDIENT_ART[1], b[2] / INGREDIENT_ART[0], b[3] / INGREDIENT_ART[1]]));
+    // The reagent cards' parchment spiral over the box's blue and its star (Ryan round 18, D1).
+    parchment_spiral(v, w);
     let Some(art) = items.icon(item) else { return };
     let uv = crop(&art).unwrap_or([0.0, 0.0, 1.0, 1.0]);
     let side = (w[2] - w[0]).min(w[3] - w[1]) - 2.0 * INGREDIENT_MARGIN;
