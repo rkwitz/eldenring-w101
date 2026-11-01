@@ -29,6 +29,13 @@ impl Game {
             .into_iter().filter(|e| models.contains(&e.0)).collect()
     }
 
+    /// The street NPCs the game "has loaded": all but Lady Oriel (who then takes the MSB-spot fallback), at their MSB
+    /// spots (the preview's physics space is the tile's).
+    pub fn entities(&self, models: &[u32], ids: &[u32]) -> Vec<(u32, [f32; 3])> {
+        crate::markers::NPCS.iter().filter(|n| n.0 != "lady_oriel" && models.contains(&n.3) && ids.contains(&n.2))
+            .map(|n| (n.2, n.4)).collect()
+    }
+
     pub fn set_spell(&self, index: usize, spell: i32) -> bool {
         SPELLS.lock().unwrap()[index] = spell;
         true

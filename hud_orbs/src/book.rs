@@ -446,6 +446,7 @@ impl Book {
         self.quest_flags.extend(markers::flags());
         // w101_quests: the talk events' conversation requests (round 17) and Wizard101's dialogue box.
         self.requests = talk::load(&folder.join("dialogue.tsv"));
+        markers::er_portraits(&mut self.requests, folder); // round 18 G3: the Elden Ring faces
         self.quest_flags.extend(self.requests.iter().map(|r| r.flag));
         for page in [talk::WINDOW, talk::IMAGE] {
             match Layout::load(&folder.join(format!("{page}.lay"))) {
@@ -732,9 +733,13 @@ impl Book {
             return;
         }
         let Some(game) = cx.game else { return };
-        let (Some(camera), Some(position)) = (game.camera(), game.position()) else { return };
+        let Some(camera) = game.camera() else { return };
+        // Round 18 G1: the NPCs where the game has them (their MSB spots only for ones it hasn't loaded).
+        let (position, entities) = (game.position(), game.entities(&markers::MODELS, &markers::entity_ids()));
+        let spots = markers::locate(&camera, position, &entities);
         let draw = ui.get_background_draw_list();
-        markers::draw(&draw, &self.textures, &camera, position, &self.flags, ui.time() as f32, ui.io().display_size);
+        markers::draw(&draw, &self.textures, &camera, position, &entities, &spots, &self.flags, ui.time() as f32,
+                      ui.io().display_size);
     }
 
     /// Wizard101's nameplates over the Unicorn Way enemies (nameplates.rs) in normal play.
@@ -748,7 +753,8 @@ impl Book {
         let screen = ui.io().display_size;
         let mut plates = nameplates::plates(&camera, &enemies, screen);
         // w101_quests: the street NPCs' names (markers.rs), as the creature plates without the rank line
-        plates.extend(game.position().map(|p| markers::npc_plates(&camera, p, screen)).unwrap_or_default());
+        let entities = game.entities(&markers::MODELS, &markers::entity_ids());
+        plates.extend(markers::npc_plates(&camera, &markers::locate(&camera, game.position(), &entities), screen));
         if plates.is_empty() {
             return;
         }
@@ -756,8 +762,8 @@ impl Book {
         let Some(fancy) = self.fonts.get("WizardFancy") else { return };
         let mut icons = Vec::new();
         for plate in plates {
-            // As Wizard101 shows them (reference nameplate_lost_soul.png): no plate, the name in big yellow
-            // WizardFancy capitals with a dark outline, and under it the school's icon and "RANK n", also yellow.
+            // As Wizard101 shows them (reference nameplate_lost_soul.png): no plate, the name in big WizardFancy
+            // capitals with a dark outline in the name colour, and under it the school's icon and "RANK n" in it too.
             let icon = (!plate.school.is_empty()).then(|| format!("GUI/Icons/Icon_{}.png", plate.school));
             let name = plate.name.to_uppercase();
             let line = plate.line.to_uppercase();
@@ -765,7 +771,9 @@ impl Book {
             let name_w = fancy.width(&name) * name_scale;
             let line_w = fancy.width(&line) * line_scale + if icon.is_some() { icon_side + 3.0 } else { 0.0 };
             let w = name_w.max(line_w) + 8.0;
-            let (name_h, line_h) = (fancy.line_height * name_scale, fancy.line_height * line_scale);
+            // An NPC's plate has no second line: its name sits at the plate's bottom.
+            let line_h = if line.is_empty() && icon.is_none() { 0.0 } else { fancy.line_height * line_scale };
+            let name_h = fancy.line_height * name_scale;
             let h = name_h + line_h;
             let origin = [plate.at[0] - w / 2.0 * plate.k, plate.at[1] - h * plate.k];
             let canvas = Canvas {
@@ -780,7 +788,9 @@ impl Book {
                 hole: Cell::new(None),
             };
             let tint = ImColor32::from_rgba(255, 255, 255, (255.0 * plate.alpha) as u8);
-            let yellow = ImColor32::from_rgba(255, 255, 0, (255.0 * plate.alpha) as u8);
+            // Round 18 G2: Wizard101's name colour (NPCBehaviorTemplate m_nameColor, nameplates.rs / markers.rs).
+            let [r, g, b] = plate.colour;
+            let yellow = ImColor32::from_rgba(r, g, b, (255.0 * plate.alpha) as u8);
             canvas.text(&name, [0.0, 0.0, w, name_h], &TextStyle::new("WizardFancy", name_scale, yellow).centred().outlined(), false);
             let x0 = (w - line_w) / 2.0;
             if let Some(icon) = &icon {

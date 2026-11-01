@@ -319,6 +319,13 @@ fn main() {
         ("11b_markers_close_connelly", pages::Tab::Character, 0, [0.0, 0.0], "markers:5.0029,94.1828,-44.0778"),
         ("11c_markers_close_ceren", pages::Tab::Character, 0, [0.0, 0.0], "markers:-84.8379,94.4878,-18.4484"),
         ("11d_markers_close_olivia", pages::Tab::Character, 0, [0.0, 0.0], "markers:-65.8655,92.8248,-7.9762"),
+        // Round 18 (G1/G2): Lady Oriel (not "loaded": her MSB spot) and Private O'Ryan up close.
+        ("11e_markers_close_oriel", pages::Tab::Character, 0, [0.0, 0.0], "markers:-335.1056,93.4988,103.5473"),
+        ("11f_markers_close_oryan", pages::Tab::Character, 0, [0.0, 0.0], "markers:-160.8270,93.4878,-54.0237"),
+        // Round 18 (G3): the Elden Ring faces in the portrait (Lady Oriel = Melina, Olivia, O'Ryan).
+        ("10h_dialogue_oriel", pages::Tab::Character, 0, [0.0, 0.0], "talk:lady_oriel|monsters_and_mazes|goal2:0"),
+        ("10i_dialogue_olivia", pages::Tab::Character, 0, [0.0, 0.0], "talk:olivia_dawnwillow|idle:0"),
+        ("10j_dialogue_oryan", pages::Tab::Character, 0, [0.0, 0.0], "talk:private_oryan|saving_private_oryan|goal2:0"),
         ("10_dialogue", pages::Tab::Character, 0, [0.0, 0.0], "talk:ceren_nightchant|ghost_hunters|goal3:0"),
         ("10b_dialogue_page2", pages::Tab::Character, 0, [0.62, 0.86], "talk:ceren_nightchant|ghost_hunters|goal3:1"),
         ("10c_dialogue_last", pages::Tab::Character, 0, [0.0, 0.0], "talk:private_connelly|idle:0"),

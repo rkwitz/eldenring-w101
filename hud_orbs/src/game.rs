@@ -154,6 +154,34 @@ impl Game {
         out
     }
 
+    /// w101 npcvis (round 18 G1): the loaded characters of model `models` whose map entity ID (ChrIns
+    /// event_entity_id, the MSB part's EntityID) is in `ids`: (entity, physics position in the camera's space).
+    pub fn entities(&self, models: &[u32], ids: &[u32]) -> Vec<(u32, [f32; 3])> {
+        use eldenring::cs::{CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
+        use std::mem::offset_of;
+        let list = {
+            let mut cache = self.characters.lock().unwrap_or_else(|e| e.into_inner());
+            if cache.0.is_none_or(|t| t.elapsed() > std::time::Duration::from_millis(500)) {
+                *cache = (Some(std::time::Instant::now()), self.characters());
+            }
+            cache.1.clone()
+        };
+        let mut out = Vec::new();
+        for (chr, model) in list {
+            if !models.contains(&model) || read::<u32>(chr + offset_of!(ChrIns, character_id)) != Some(model) {
+                continue;
+            }
+            let Some(id) = read::<u32>(chr + offset_of!(ChrIns, event_entity_id)).filter(|i| ids.contains(i)) else { continue };
+            let Some(modules) = read::<usize>(chr + offset_of!(ChrIns, modules)) else { continue };
+            let Some(physics) = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics)) else { continue };
+            let Some([x, y, z, _]) = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position)) else { continue };
+            if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6) {
+                out.push((id, [x, y, z]));
+            }
+        }
+        out
+    }
+
     /// Every loaded character and its model: (ChrIns address, character_id).
     fn characters(&self) -> Vec<(usize, u32)> {
         use eldenring::cs::{ChrIns, ChrSet, ChrSetEntry, OpenFieldChrSet, WorldChrMan};

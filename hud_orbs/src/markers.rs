@@ -8,9 +8,10 @@
 //! turning behind it once every 6.67 s; the sign does not bob or pulse. Wizard101 hangs it on the character's
 //! ChatNode (Human_WCGuard_A.nif: 2.90 m, 1.01 m over the head bone). The textures come from tools/w101_quest_art.py.
 //!
-//! The positions are the MSB's (m60_42_36_00, tile-local metres). The player's place in the tile grid comes from
-//! ChrIns's chunk position and block origin; the camera works in the physics space, so a giver is drawn at the
-//! player's physics position plus the giver's offset from the player in the tile grid. The flags are those of
+//! Round 18 (G1): the NPCs are found among the loaded characters by their MSB entity ID and the marker and name hang
+//! over where the game has them (the camera's physics space). Only a character the game hasn't loaded falls back to
+//! its MSB spot (m60_42_36_00, tile-local metres), placed by the player's chunk position and block origin. Each
+//! change of state (loaded or not, marker, distance band, MSB error) is logged as "markers:". The flags are those of
 //! tools/w101_quests.py (quest_flags.json).
 
 use std::collections::HashMap;
@@ -25,34 +26,59 @@ pub const SPIRAL: &str = "Wizbang/Quest_Spiral.png";
 
 /// The tile the givers are in (m60_42_36_00).
 const TILE: [i32; 2] = [42, 36];
-/// (slug, entity, MSB position, marker origin over the feet in metres): round 15, the street characters of
-/// tools/msb_add_npcs.py (Elden Ring NPCs with the "Talk" prompt, entities 1042360820-824) in place of the invisible
-/// giver assets (1042361870-874). The origin is Wizard101's ChatNode scaled to the Elden Ring stand-in (ChatNode over
-/// the head bone: guard 290 / 189.2 units, ShopKeepF 214.8 / 157, Seraph 285.9 / 152.4, times the stand-in's head
-/// bone: c0000 about 1.55 m, Melina 1.5 m), but never lower than the top of the name plate (NPC_PLATES + 0.35 m), so
-/// the sign sits over the name as in Wizard101: Connelly, Ceren, Olivia and O'Ryan 2.55, Oriel 2.81.
-const GIVERS: [(&str, u32, [f32; 3], f32); 5] = [
-    ("private_connelly", 1042360820, [5.0029, 94.1828, -44.0778], 2.55),
-    ("ceren_nightchant", 1042360821, [-84.8379, 94.4878, -18.4484], 2.55),
-    ("olivia_dawnwillow", 1042360822, [-65.8655, 92.8248, -7.9762], 2.55),
-    ("lady_oriel", 1042360823, [-335.1056, 93.4988, 103.5473], 2.81),
-    ("private_oryan", 1042360824, [-160.8270, 93.4878, -54.0237], 2.55),
-];
 
-/// Wizard101 names over the street characters (msb_add_npcs.py; the givers at the same spots as GIVERS):
-/// (name, MSB position, height of the plate's bottom over the character's feet, metres: the Elden Ring stand-in's
-/// head + about 0.4; c0000 humans 1.8 m, Melina 1.7). They have no patrol route and stand still, so the HUD draws the
-/// plates at their placed spots. Round 16: only the NPCs a new wizard gets quests from (Diego, Ugo Kalahad and Aegon
-/// Statz were taken off the street, w101_quests.REMOVED).
-const NPC_PLATES: [(&str, [f32; 3], f32); 5] = [
-    ("Private Connelly", [5.0029, 94.1828, -44.0778], 2.2),
-    ("Ceren Nightchant", [-84.8379, 94.4878, -18.4484], 2.2),
-    ("Olivia Dawnwillow", [-65.8655, 92.8248, -7.9762], 2.2),
-    ("Lady Oriel", [-335.1056, 93.4988, 103.5473], 2.1),
-    ("Private O'Ryan", [-160.8270, 93.4878, -54.0237], 2.2),
+/// The street NPCs (tools/w101_quests.py CHARACTERS, placed by msb_add_npcs.py: Elden Ring characters with the
+/// "Talk" prompt): (slug, Wizard101 name (WC-NPCs.lang, as their ObjectData WC-ST01-NPC0n names them), MSB entity
+/// ID, model (ChrIns character_id), MSB position (tile-local metres), the name plate's bottom over the feet, the
+/// marker's origin over the feet).
+///
+/// Round 18 (G1): they are found by their entity ID among the loaded characters (Game::entities) and the plate and
+/// marker hang over where the game has them, as the creature plates do. Only a character the game hasn't loaded falls
+/// back to its MSB spot, moved by the offset seen between the MSB spot and the game's position of the ones that are
+/// loaded (round 17 placed everything from the MSB spots alone, through the player's chunk/block-origin offset).
+///
+/// Plate: just over the top of the Elden Ring stand-in's head, as Wizard101 floats a name (round 18: the head tops
+/// measured in npc_portrait FULL renders of the posed characters: Connelly's helm 1.69 m, Melina's hood 1.72; round
+/// 17's 2.2 left half a metre of air). Marker: Wizard101's ChatNode, where the sign's bottom sits, scaled to the
+/// stand-in by the Wizard City guard's proportion (ChatNode 290 units over the feet / head bone 189.2 = 1.53, times
+/// the stand-in's head bone: c0000 about 1.55 m, Melina 1.5 m), which leaves the sign just over the name. Round 17
+/// used the Seraph's proportion (285.9 / 152.4) for Melina, a winged creature twice her size.
+pub const NPCS: [(&str, &str, u32, u32, [f32; 3], f32, f32); 5] = [
+    ("private_connelly", "Private Connelly", 1042360820, 0, [5.0029, 94.1828, -44.0778], 1.9, 2.38),
+    ("ceren_nightchant", "Ceren Nightchant", 1042360821, 0, [-84.8379, 94.4878, -18.4484], 1.9, 2.38),
+    ("olivia_dawnwillow", "Olivia Dawnwillow", 1042360822, 0, [-65.8655, 92.8248, -7.9762], 1.85, 2.3),
+    ("lady_oriel", "Lady Oriel", 1042360823, 2180, [-335.1056, 93.4988, 103.5473], 1.9, 2.3),
+    ("private_oryan", "Private O'Ryan", 1042360824, 0, [-160.8270, 93.4878, -54.0237], 1.9, 2.38),
 ];
+/// Their models and entity IDs, for Game::entities.
+pub const MODELS: [u32; 2] = [0, 2180];
+pub fn entity_ids() -> Vec<u32> {
+    NPCS.iter().map(|n| n.2).collect()
+}
+
+/// Wizard101's colour for a friendly NPC's name: NPCBehaviorTemplate m_nameColor of every Unicorn Way NPC's
+/// ObjectData (WC-ST01-NPC01..09: bytes 00 FF 00 FF, B G R A), pure green. Wizard101 colours creature names the same
+/// way (nameplates.rs).
+pub const NPC_NAME_COLOUR: [u8; 3] = [0, 255, 0];
+
 /// NPC plates show this far away (metres), fading over the last part, as the creature plates.
 const PLATE_RANGE: f32 = 40.0;
+
+/// Round 18 (G3): each street NPC's dialogue portrait is its Elden Ring stand-in's face on Wizard101's blue portrait
+/// background and gold ring (made offline by tools/w101_npc_portraits.py with the book's FLVER renderer; on Ryan's
+/// PC as art/GUI/NpcPortraits/ER/<slug>.png, never in the repo). A conversation whose speaker has one shows it in
+/// place of the Wizard101 picture; Gamma (the intro) keeps Wizard101's owl.
+pub const ER_PORTRAITS: &str = "GUI/NpcPortraits/ER";
+
+/// Points the conversations of dialogue.tsv at the Elden Ring portraits that are installed under `book`/art.
+pub fn er_portraits(requests: &mut [crate::talk::Request], book: &std::path::Path) {
+    for r in requests.iter_mut() {
+        let picture = format!("{ER_PORTRAITS}/{}.png", r.speaker);
+        if book.join("art").join(&picture).exists() {
+            r.portrait = picture;
+        }
+    }
+}
 
 /// Quests given by talking to their giver: (giver, assigned flag, the flag that makes it available).
 const OFFERS: [(&str, u32, u32); 3] = [
@@ -169,59 +195,123 @@ fn offset(local: [f32; 3], chunk: [f32; 3], origin: i32) -> Option<[f32; 3]> {
     ])
 }
 
-/// The Wizard101 name plates of the street NPCs in view (book.rs draws them with the creature plates).
-pub fn npc_plates(camera: &Camera, position: ([f32; 3], i32, i32), screen: [f32; 2]) -> Vec<crate::nameplates::Plate> {
-    let (chunk, _, origin) = position;
+/// One street NPC's place: index into NPCS, feet in the camera's physics space, and whether the game has the
+/// character loaded (else the place is its MSB spot).
+pub type Spot = (usize, [f32; 3], bool);
+
+/// Where each street NPC stands: the game's own position of the character when it is loaded (`entities` =
+/// Game::entities), else its MSB spot (`position` = Game::position) moved by the mean offset seen between MSB spot
+/// and game position of the loaded ones.
+pub fn locate(camera: &Camera, position: Option<([f32; 3], i32, i32)>, entities: &[(u32, [f32; 3])]) -> Vec<Spot> {
+    let p = camera.player;
+    let msb = |i: usize| {
+        let (chunk, _, origin) = position?;
+        let d = offset(NPCS[i].4, chunk, origin)?;
+        Some([p[0] + d[0], p[1] + d[1], p[2] + d[2]])
+    };
+    let found = |i: usize| entities.iter().find(|e| e.0 == NPCS[i].2).map(|e| e.1);
+    let (mut shift, mut n) = ([0.0f32; 3], 0.0f32);
+    for i in 0..NPCS.len() {
+        if let (Some(f), Some(m)) = (found(i), msb(i)) {
+            shift = [shift[0] + f[0] - m[0], shift[1] + f[1] - m[1], shift[2] + f[2] - m[2]];
+            n += 1.0;
+        }
+    }
+    let shift = if n > 0.0 { shift.map(|v| v / n) } else { [0.0; 3] };
+    (0..NPCS.len())
+        .filter_map(|i| match found(i) {
+            Some(f) => Some((i, f, true)),
+            None => msb(i).map(|m| (i, [m[0] + shift[0], m[1] + shift[1], m[2] + shift[2]], false)),
+        })
+        .collect()
+}
+
+/// Logs the street NPCs' state when it changes (round 18 G1: Ryan saw no marker and the log could not say why): per
+/// NPC whether the game has it loaded, the marker it gets, its distance (in 50 m steps for the change test), and how
+/// far its MSB spot is from where the game has it.
+fn log_state(camera: &Camera, position: Option<([f32; 3], i32, i32)>, entities: &[(u32, [f32; 3])], spots: &[Spot],
+             flag: &dyn Fn(u32) -> bool) {
+    static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    let p = camera.player;
+    let (mut key, mut line) = (String::new(), String::new());
+    for &(i, at, loaded) in spots {
+        let slug = NPCS[i].0;
+        let kind = marker(slug, flag);
+        let d = ((at[0] - p[0]).powi(2) + (at[2] - p[2]).powi(2)).sqrt();
+        let err = position.and_then(|(chunk, _, origin)| {
+            let o = offset(NPCS[i].4, chunk, origin)?;
+            let f = entities.iter().find(|e| e.0 == NPCS[i].2)?.1;
+            Some(((p[0] + o[0] - f[0]).powi(2) + (p[1] + o[1] - f[1]).powi(2) + (p[2] + o[2] - f[2]).powi(2)).sqrt())
+        });
+        key += &format!("{slug}:{loaded}:{kind:?}:{} ", (d / 50.0) as i32);
+        line += &format!(" {slug} {} marker {kind:?} {d:.0} m{};", if loaded { "loaded" } else { "at its MSB spot" },
+                         err.map(|e| format!(" (MSB spot {e:.1} m off)")).unwrap_or_default());
+    }
+    if spots.is_empty() {
+        key = format!("none {position:?}");
+        line = format!(" none placed (position {position:?}, {} loaded)", entities.len());
+    }
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if *last != key {
+        tracing::info!("markers:{line}");
+        *last = key;
+    }
+}
+
+/// The Wizard101 name plates of the street NPCs in view (book.rs draws them with the creature plates): the name in
+/// Wizard101's NPC green, no second line (none of these NPCs has a title in Wizard101's data).
+pub fn npc_plates(camera: &Camera, spots: &[Spot], screen: [f32; 2]) -> Vec<crate::nameplates::Plate> {
     let mut out = Vec::new();
-    for (name, local, lift) in NPC_PLATES {
-        let Some(delta) = offset(local, chunk, origin) else { return out };
-        let d = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
+    let p = camera.player;
+    for &(i, at, _) in spots {
+        let (_, name, _, _, _, lift, _) = NPCS[i];
+        let d = ((at[0] - p[0]).powi(2) + (at[1] - p[1]).powi(2) + (at[2] - p[2]).powi(2)).sqrt();
         if d > PLATE_RANGE {
             continue;
         }
-        let p = camera.player;
-        let Some((at, z)) = camera.project([p[0] + delta[0], p[1] + delta[1] + lift, p[2] + delta[2]], screen) else {
-            continue;
-        };
-        if at[0] < -200.0 || at[0] > screen[0] + 200.0 || at[1] < -100.0 || at[1] > screen[1] + 100.0 {
+        let Some((on_screen, z)) = camera.project([at[0], at[1] + lift, at[2]], screen) else { continue };
+        let [x, y] = on_screen;
+        if x < -200.0 || x > screen[0] + 200.0 || y < -100.0 || y > screen[1] + 100.0 {
             continue;
         }
         let alpha = ((PLATE_RANGE - d) / (PLATE_RANGE * 0.2)).clamp(0.0, 1.0);
         let k = (screen[1] / 768.0) * (8.0 / z.max(1.0)).clamp(0.7, 1.15);
-        out.push(crate::nameplates::Plate { at, k, alpha, name, line: String::new(), school: "" });
+        out.push(crate::nameplates::Plate { at: on_screen, k, alpha, name, line: String::new(), school: "",
+                                             colour: NPC_NAME_COLOUR });
     }
     out
 }
 
-/// Draws the markers. `position` is Game::position (chunk position, block, block origin), `time` seconds for the
-/// spiral's turn.
+/// Draws the markers over the NPCs at `spots` (locate), `position` / `entities` as for locate (for the log), `time`
+/// seconds for the spiral's turn.
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     draw: &DrawListMut,
     textures: &Textures,
     camera: &Camera,
-    position: ([f32; 3], i32, i32),
+    position: Option<([f32; 3], i32, i32)>,
+    entities: &[(u32, [f32; 3])],
+    spots: &[Spot],
     flags: &HashMap<u32, bool>,
     time: f32,
     screen: [f32; 2],
 ) {
-    let (chunk, _, origin) = position;
     let flag = |f: u32| flags.get(&f) == Some(&true);
+    log_state(camera, position, entities, spots, &flag);
+    let p = camera.player;
     let mut drawn: Vec<(f32, [f32; 2], f32, u8, &str)> = Vec::new();
-    for (slug, _, local, lift) in GIVERS {
+    for &(i, at, _) in spots {
+        let (slug, _, _, _, _, _, lift) = NPCS[i];
         let Some(kind) = marker(slug, &flag) else { continue };
-        // The giver's offset from the player in the tile grid, added to the player's physics position.
-        let Some(delta) = offset(local, chunk, origin) else { return };
-        let distance = (delta[0] * delta[0] + delta[2] * delta[2]).sqrt();
+        let distance = ((at[0] - p[0]).powi(2) + (at[2] - p[2]).powi(2)).sqrt();
         let alpha = (255.0 * ((RANGE - distance) / (RANGE * 0.2)).clamp(0.0, 1.0)) as u8;
         if alpha == 0 {
             continue;
         }
-        let p = camera.player;
-        let world = [p[0] + delta[0], p[1] + delta[1] + lift + CENTRE, p[2] + delta[2]];
-        let Some((at, z)) = camera.project(world, screen) else { continue };
+        let Some((on_screen, z)) = camera.project([at[0], at[1] + lift + CENTRE, at[2]], screen) else { continue };
         // Wizard101 draws it at its world size; far away it is kept to a still readable 1.5 % of the screen.
         let metre = camera.scale(z, screen[1]).max(screen[1] * 0.015 / SIGN);
-        drawn.push((z, at, metre, alpha, if kind == Marker::Offer { OFFER } else { TALK }));
+        drawn.push((z, on_screen, metre, alpha, if kind == Marker::Offer { OFFER } else { TALK }));
     }
     // Far ones first, so near ones cover them.
     drawn.sort_by(|a, b| b.0.total_cmp(&a.0));

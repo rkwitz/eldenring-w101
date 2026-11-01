@@ -1,6 +1,7 @@
 //! Wizard101's nameplates over the Unicorn Way enemies, as the game shows them over a creature in the world
-//! (/mnt/project-files/w101_reference/nameplate_lost_soul.png): no plate, the name in big yellow outlined capitals,
-//! and under it the school's icon and "RANK n" (book.rs draws them).
+//! (/mnt/project-files/w101_reference/nameplate_lost_soul.png): no plate, the name in big outlined capitals in the
+//! creature's Wizard101 name colour (yellow for the Lost Soul), and under it the school's icon and "RANK n" (book.rs
+//! draws them). The street NPCs' plates (markers.rs) are drawn the same way in Wizard101's NPC green.
 //!
 //! The enemies are Elden Ring characters re-dressed by the mod; they are told apart by their model (ChrIns
 //! character_id, c4180 = 4180) and read from WorldChrMan's characters-by-distance list (game.rs). The Lost Soul's
@@ -27,15 +28,26 @@ pub enum Title {
 ///   (wing tip L_Wing04) 1.37 -> seen top 1.45, plate 1.8.
 /// - Rattlebones (c4960 giant skeleton torso): capsule 1.0 (the hit box is the crawling body), but the torso rears
 ///   up: head bone 4.61 m, eyelids 5.33 in the model's pose -> skull top about 5.6, plate 5.95.
-pub const CREATURES: [(u32, &str, u32, &str, Title, f32, Option<f32>); 7] = [
-    (4180, "Lost Soul", 1, "Death", Title::Normal, 3.0, None),
-    (3500, "Skeletal Pirate", 1, "Death", Title::Normal, 1.9, None),
-    (3450, "Dark Sprite", 1, "Life", Title::Elite, 2.2, Some(1.8)),
-    (4960, "Rattlebones", 3, "Death", Title::Boss, 1.0, Some(5.95)),
-    (3300, "Lady Blackhope", 3, "Life", Title::Boss, 2.8, None),
-    (4340, "Fear of Fire", 3, "Fire", Title::Boss, 3.2, None),
-    (2120, "Seraph", 2, "Life", Title::Normal, 2.8, None),
+pub const CREATURES: [(u32, &str, u32, &str, Title, f32, Option<f32>, [u8; 3]); 7] = [
+    (4180, "Lost Soul", 1, "Death", Title::Normal, 3.0, None, EASY),
+    (3500, "Skeletal Pirate", 1, "Death", Title::Normal, 1.9, None, NORMAL),
+    (3450, "Dark Sprite", 1, "Life", Title::Elite, 2.2, Some(1.8), ELITE),
+    (4960, "Rattlebones", 3, "Death", Title::Boss, 1.0, Some(5.95), BOSS),
+    (3300, "Lady Blackhope", 3, "Life", Title::Boss, 2.8, None, BOSS),
+    (4340, "Fear of Fire", 3, "Fire", Title::Boss, 3.2, None, BOSS),
+    (2120, "Seraph", 2, "Life", Title::Normal, 2.8, None, NORMAL),
 ];
+
+/// Wizard101's name colours (round 18 G2): NPCBehaviorTemplate m_nameColor in the creatures' ObjectData (Root.wad,
+/// bytes B G R A), one per difficulty (m_mobTitle): Easy 239,228,17 (Ghost-Blue-L01 Lost Soul; the reference
+/// screenshot's "LOST SOUL" measures 223,221,36), Normal 255,165,0 (Skeleton-Pirate-L01 Skeletal Pirate), Elite
+/// 255,0,0, Boss 153,0,255 (Skeleton-Silver-WCBoss-L01 Rattlebones, Ghost-Green-WCBoss-L02 Lady Blackhope). Friendly
+/// NPCs are 0,255,0 (markers::NPC_NAME_COLOUR). Dark Sprite, Fear of Fire and Seraph have no Unicorn Way template of
+/// that name; they take the colour of the title the mod gives them.
+const EASY: [u8; 3] = [239, 228, 17];
+const NORMAL: [u8; 3] = [255, 165, 0];
+const ELITE: [u8; 3] = [255, 0, 0];
+const BOSS: [u8; 3] = [153, 0, 255];
 
 /// Plates show this far away (metres), fading over the last part.
 const RANGE: f32 = 40.0;
@@ -56,13 +68,15 @@ pub struct Plate {
     pub name: &'static str,
     pub line: String,
     pub school: &'static str,
+    /// The name's (and rank line's) colour, sRGB.
+    pub colour: [u8; 3],
 }
 
 /// The plates for the enemies (model, physics position, hit capsule height or 0) in view, farthest first (nearer ones over them).
 pub fn plates(camera: &Camera, enemies: &[(u32, [f32; 3], f32)], screen: [f32; 2]) -> Vec<Plate> {
     let mut out: Vec<(f32, Plate)> = Vec::new();
     for &(model, p, height) in enemies {
-        let Some(&(_, name, rank, school, title, tall, seen)) = CREATURES.iter().find(|c| c.0 == model) else { continue };
+        let Some(&(_, name, rank, school, title, tall, seen, colour)) = CREATURES.iter().find(|c| c.0 == model) else { continue };
         let lift = seen.unwrap_or(if height > 0.0 { height } else { tall } + GAP);
         let d = ((p[0] - camera.player[0]).powi(2) + (p[1] - camera.player[1]).powi(2)
             + (p[2] - camera.player[2]).powi(2)).sqrt();
@@ -81,7 +95,7 @@ pub fn plates(camera: &Camera, enemies: &[(u32, [f32; 3], f32)], screen: [f32; 2
             Title::Elite => " Elite".into(),
             Title::Boss => " Boss".into(),
         };
-        out.push((z, Plate { at, k, alpha, name, line: format!("Rank {rank}{what}"), school }));
+        out.push((z, Plate { at, k, alpha, name, line: format!("Rank {rank}{what}"), school, colour }));
     }
     out.sort_by(|a, b| b.0.total_cmp(&a.0));
     out.into_iter().map(|p| p.1).collect()
