@@ -1790,7 +1790,7 @@ pub(crate) fn materials(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     // ReagentWindow's category tabs (REAGENT_TABS): all, harvested, rare harvested, bought, dropped. Elden
     // Ring's own sort groups say what a material is: creature parts (10, 15) are dropped, plants and stones
     // (20-50) harvested, rare ones (rarity above 0) rare harvested; bought is what a shop sells.
-    st.subs = REAGENT_TABS.len() - 1;
+    st.subs = REAGENT_TABS.len();
     let tab = st.sub % st.subs;
     list.retain(|(_, _, id)| {
         let raw = id & 0x0FFF_FFFF;
@@ -1808,15 +1808,15 @@ pub(crate) fn materials(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
 }
 
 /// Wizard101's reagents page (ReagentWindow.gui) on RecipeWindow's pages: its title, its category tabs on
-/// Art_CraftingTab (all reagents, harvested, rare harvested, bought, dropped, class project; only "all" applies),
+/// Art_CraftingTab (all reagents, harvested, rare harvested, bought, dropped; Wizard101's class project tab is left
+/// out, Elden Ring has none) with Wizard101's plain tooltip (ToolTip.gui) on hover,
 /// the reagents as Background_Reagent cards, four on each page at ReagentWindow's places (each with its picture
 /// on a dark band, its name on the paper below and the count in the sun badge), the page buttons under the left
 /// page, and the toggle back to the recipes with Wizard101's book.
 fn reagents(l: &Layout, d: &Data, st: &mut State, v: &mut View, list: &[(String, u32, u32)], rows: &[usize]) {
     v.set(l.find("title"), centre("Materials"));
     hide(l, v, &["portrait_background", "card_background", "IngredientBackground", "TabLayoutEquipment",
-                 "TabBackground", "CreateButton", "EquipButton"]);
-    // (The filters button stays, greyed as in the crafting view.)
+                 "TabBackground", "CreateButton", "EquipButton", "FiltersButton"]);
     // The kit's name banner and the station's doodles (ReagentWindow keeps only the one down the right edge).
     v.show(l.find("labelItemHighlighted").and_then(|t| l.nodes[t].parent), false);
     for (i, n) in l.nodes.iter().enumerate() {
@@ -1831,18 +1831,11 @@ fn reagents(l: &Layout, d: &Data, st: &mut State, v: &mut View, list: &[(String,
     for (i, (button, tip)) in REAGENT_TABS.iter().enumerate() {
         let x = 71.0 + 49.0 * i as f32;
         v.backs.push(([x - 7.0, 44.0, x + 49.0, 106.0], "GUI/Art/Art_CraftingTab.png".into(), [0.0, 0.0, 1.0, 1.0]));
-        // Frames: normal top left, highlighted top right (the chosen tab). Button_Class_Project is one picture,
-        // not four; Elden Ring has no class projects, so it stays faded.
+        // Frames: normal top left, highlighted top right (the chosen tab).
         let r = [x, 52.0, x + 40.0, 92.0];
-        if i == REAGENT_TABS.len() - 1 {
-            v.images.push((r, format!("GUI/Buttons/{button}.png"), [0.0, 0.0, 1.0, 1.0]));
-            v.over_fills.push((r, ImColor32::from_rgba(150, 140, 120, 130)));
-            v.tip(r, vec![tip.to_string(), "None in Elden Ring".into()]);
-            continue;
-        }
         let uv = if i == chosen { [0.5, 0.0, 1.0, 0.5] } else { [0.0, 0.0, 0.5, 0.5] };
         v.images.push((r, format!("GUI/Buttons/{button}.png"), uv));
-        v.tip(r, vec![tip.to_string()]);
+        v.plain_tip(r, vec![tip.to_string()]);
         st.hits.push((r, Hit::Sub(i)));
     }
     v.tab_row = Some([71.0, 52.0, 71.0 + 49.0 * (REAGENT_TABS.len() - 1) as f32 + 40.0, 92.0]);
@@ -1868,9 +1861,9 @@ fn reagents(l: &Layout, d: &Data, st: &mut State, v: &mut View, list: &[(String,
         let (a, b) = (card(19.0, 16.0), card(118.0, 169.0));
         let at = |px: f32, py: f32| [a[0] + px / 128.0 * (b[0] - a[0]), a[1] + py / 195.0 * (b[1] - a[1])];
         let rect = |x0: f32, y0: f32, x1: f32, y1: f32| { let (p, q) = (at(x0, y0), at(x1, y1)); [p[0], p[1], q[0], q[1]] };
-        // The medallion behind the card's round window, the item's picture on it.
-        v.images.push((rect(64.0 - 48.0, 77.0 - 48.0, 64.0 + 48.0, 77.0 + 48.0), REAGENT_MEDALLION.into(), [0.0, 0.0, 1.0, 1.0]));
-        icon(v, d.items, *id, rect(64.0 - 31.0, 77.0 - 31.0, 64.0 + 31.0, 77.0 + 31.0));
+        // The card's round window: the material's picture as Wizard101's reagent pictures are drawn (the
+        // medallion, the object filling its window).
+        crate::crafting::reagent_picture(v, d.items, *id, rect(64.0 - 48.0, 77.0 - 48.0, 64.0 + 48.0, 77.0 + 48.0), 0.75);
         v.images.push(([a[0], a[1], b[0], b[1]], REAGENT_FRAME.into(), [0.0, 0.0, 1.0, 195.0 / 256.0]));
         // Name on the green band (white), rank in the yellow triangle, school in the circle, name on the paper.
         v.add(rect(6.0, 5.0, 122.0, 24.0), name.clone(), TextStyle::new("WizardFancy", 0.3, WHITE).centred().outlined());
@@ -1903,14 +1896,15 @@ fn reagents(l: &Layout, d: &Data, st: &mut State, v: &mut View, list: &[(String,
 }
 
 /// ReagentWindow's category tabs: (button art, what it is in Wizard101).
-const REAGENT_TABS: [(&str, &str); 6] = [
+const REAGENT_TABS: [(&str, &str); 5] = [
     ("Button_Crafting_Reagents", "All Materials"), ("Button_Crafting_Harvest", "Harvested Materials"),
     ("Button_Crafting_RareHarvest", "Rare Harvested Materials"), ("Button_Gold_Bag", "Bought Materials"),
-    ("Button_Crafting_WorldDrop", "Dropped Materials"), ("Button_Class_Project", "Class Project Materials"),
+    ("Button_Crafting_WorldDrop", "Dropped Materials"),
 ];
-/// Wizard101's reagent card and its blank medallion (the round picture behind the card's window).
+/// Wizard101's reagent card.
 const REAGENT_FRAME: &str = "GUI/Cards/School_Resource_Blnk.png";
-const REAGENT_MEDALLION: &str = "GUI/Reagents/Resource_Nothing.png";
+/// Its blank medallion (the round picture behind the card's window).
+const REAGENT_MEDALLION: &str = crate::crafting::MEDALLION;
 
 /// A Wizard101 school's icon (GUI/Icons/Icon_<School>, 32 x 32, the art the reagent cards show in their circle).
 fn school_icon(school: &str) -> String {

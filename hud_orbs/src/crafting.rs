@@ -19,8 +19,9 @@
 //! Player Item (the amount: an event value counted up to the recipe's set size), and turns DONE on. If anything is
 //! missing it turns FAILED (or FULL) on and changes nothing. The page checks the same things first.
 
-use std::path::Path;
-use std::sync::RwLock;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, RwLock};
 use std::time::Instant;
 
 use hudhook::imgui::ImColor32;
@@ -80,9 +81,14 @@ pub struct Recipe {
 }
 
 static RECIPES: RwLock<Vec<Recipe>> = RwLock::new(Vec::new());
+/// The book's Elden Ring folder (book/er), where the item icons are.
+static ER_FOLDER: RwLock<Option<PathBuf>> = RwLock::new(None);
+/// Each icon's square crop around its drawn part (None: no file or nothing drawn).
+static CROPS: Mutex<Option<HashMap<String, Option<[f32; 4]>>>> = Mutex::new(None);
 
 /// Reads book/er/er_recipes.tsv (tools/er_recipes.py).
 pub fn load(folder: &Path) {
+    *ER_FOLDER.write().unwrap() = Some(folder.to_path_buf());
     let text = std::fs::read_to_string(folder.join("er_recipes.tsv")).unwrap_or_default();
     let mut out = Vec::new();
     for line in text.lines() {
@@ -260,8 +266,7 @@ pub fn bind(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     // Exit and the furniture tab sit where the book's own tabs are (the book has its Close tab); no timers, card
     // crafting or equipping in Elden Ring.
     hide(l, v, &["BonusInfoIcon", "CompletedText", "UnequipButton", "TimerSlot_01", "Exit", "Tab_FurnitureStuff",
-                 "EquipButton", "card_background", "TimerIcon"]);
-    grey(l, v, &["FiltersButton"]);
+                 "EquipButton", "card_background", "TimerIcon", "StationSeal", "FiltersButton"]);
     poll(d, st);
     if st.craft.materials {
         v.set(l.find("Reagent_Toggle2"), centre("Recipes"));
@@ -283,7 +288,7 @@ fn recipes(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         v.node_art.insert(n, art.to_string());
         let list: Vec<&Recipe> = all.iter().filter(|r| i == 0 || r.tab == i).collect();
         let known = list.iter().filter(|r| known(r)).count();
-        v.tip(l.nodes[n].rect, vec![label.to_string(), format!("{known} of {} recipes known", list.len())]);
+        v.plain_tip(l.nodes[n].rect, vec![label.to_string(), format!("{known} of {} recipes known", list.len())]);
         if i == tab {
             v.checked.insert(n);
         }
@@ -360,7 +365,9 @@ fn recipes(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 let goods = 0x4000_0000 | m;
                 let have = held(d, goods);
                 let b = l.nodes[n].rect;
-                icon(v, d.items, goods, [b[0] + 2.0, b[1] + 2.0, b[2] - 2.0, b[3] - 2.0]);
+                // Wizard101's ingredient thumbnail (the box's blue square, the star hidden): the material's picture
+                // filling all of it, the blank reagent medallion behind it.
+                reagent_picture(v, d.items, goods, b, 1.0);
                 v.set(num, centre(&format!("{have}/{need}")));
                 let mut tip = d.items.tooltip(goods, have.max(1), d.names, false);
                 tip.insert(1.min(tip.len()), format!("Needed: {need}, you have {have}"));
@@ -381,7 +388,7 @@ fn recipes(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         } else {
             name.clone()
         }));
-        v.tip(l.nodes[b].rect, vec!["Create".into(), why]);
+        v.plain_tip(l.nodes[b].rect, vec![why]);
     }
     if std::mem::take(&mut st.craft.create) {
         drop(all);
@@ -430,6 +437,58 @@ fn recipe_lines(d: &Data, r: &Recipe) -> Vec<String> {
         lines.push(why);
     }
     lines
+}
+
+/// The part of an icon (UV) to draw so that its picture fills a square box: Elden Ring's item icons are drawn
+/// inside a 128 x 128 square with see-through margins of their own (some objects take a third of it), while
+/// Wizard101's reagent and ingredient pictures fill their box. The crop is the smallest square around the pixels
+/// that are drawn (alpha above 16), centred on them and kept inside the picture. Worked out once per icon from its
+/// file.
+fn crop(art: &str) -> Option<[f32; 4]> {
+    let rel = art.strip_prefix("@er/")?;
+    let mut cache = CROPS.lock().unwrap();
+    let cache = cache.get_or_insert_with(HashMap::new);
+    if let Some(c) = cache.get(art) {
+        return *c;
+    }
+    let path = ER_FOLDER.read().unwrap().as_ref()?.join(rel);
+    let c = image::open(&path).ok().and_then(|img| {
+        let img = img.into_rgba8();
+        let (w, h) = img.dimensions();
+        let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+        for (x, y, p) in img.enumerate_pixels() {
+            if p[3] > 16 {
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+            }
+        }
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let side = (x1 - x0).max(y1 - y0).min(w).min(h) as f32;
+        let (cx, cy) = ((x0 + x1) as f32 / 2.0, (y0 + y1) as f32 / 2.0);
+        let left = (cx - side / 2.0).clamp(0.0, w as f32 - side);
+        let top = (cy - side / 2.0).clamp(0.0, h as f32 - side);
+        Some([left / w as f32, top / h as f32, (left + side) / w as f32, (top + side) / h as f32])
+    });
+    cache.insert(art.to_string(), c);
+    c
+}
+
+/// Wizard101's blank reagent medallion (GUI/Reagents/Resource_Nothing): the gold ring and parchment disc every
+/// Wizard101 reagent picture (Resource_Black_Lotus, Resource_Bone, ...) is drawn on, filling its whole square.
+pub const MEDALLION: &str = "GUI/Reagents/Resource_Nothing.png";
+
+/// A material's picture as Wizard101 draws a reagent's (GUI/Reagents/Resource_*: 128 x 128, the medallion filling
+/// the square, the object filling the medallion's window): the medallion over the whole square `r`, the item's
+/// icon cropped to its drawn part (see `crop`) on it, its square `fill` of the side: 0.75 fills the window inside
+/// the ring (Resource_Nothing's ring ends 13 of its 128 pixels in), 1.0 the whole square (the medallion then only
+/// shows where the object leaves gaps).
+pub(crate) fn reagent_picture(v: &mut View, items: &crate::itemdata::ItemData, item: u32, r: [f32; 4], fill: f32) {
+    v.images.push((r, MEDALLION.into(), [0.0, 0.0, 1.0, 1.0]));
+    let Some(art) = items.icon(item) else { return };
+    let uv = crop(&art).unwrap_or([0.0, 0.0, 1.0, 1.0]);
+    let (cx, cy, half) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0, (r[2] - r[0]).min(r[3] - r[1]) * fill / 2.0);
+    v.images.push(([cx - half, cy - half, cx + half, cy + half], art, uv));
 }
 
 /// The result's name (er_item_names.tsv; er_recipes.tsv's own copy if that has none).

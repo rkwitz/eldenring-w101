@@ -247,11 +247,14 @@ fn main() {
         ("6d_map_roundtable", pages::Tab::Map, 0, [0.5, 0.5], "place:roundtable"),
         ("6b_map_open", pages::Tab::Map, 0, [0.0, 0.0], "map"),
         ("7_crafting", pages::Tab::Crafting, 0, [0.0, 0.0], ""),
+        ("7g_crafting_tab_tip", pages::Tab::Crafting, 0, [0.318, 0.198], ""),
         ("7b_crafting_materials", pages::Tab::Crafting, 0, [0.0, 0.0], "materials"),
         ("7c_crafting_pots_tip", pages::Tab::Crafting, 1, [0.62, 0.41], "recipe:3"),
         ("7d_crafting_food_tip", pages::Tab::Crafting, 4, [0.314, 0.66], "recipe:44"),
         ("7e_crafting_arrows", pages::Tab::Crafting, 3, [0.0, 0.0], "recipe:91"),
         ("7f_crafting_made", pages::Tab::Crafting, 1, [0.0, 0.0], "made:1"),
+        // Round 16: the materials tabs' plain tooltip (ToolTip.gui; 7g: the recipe tabs').
+        ("7h_crafting_materials_tab_tip", pages::Tab::Crafting, 1, [0.309, 0.203], "materials"),
         ("8_help", pages::Tab::Help, 1, [0.0, 0.0], ""),
         // Round 15 (book): badge hover, a memory slot's card, the help topics' added spreads.
         ("1d_badge_tip", pages::Tab::Character, 1, [0.63, 0.33], ""),
