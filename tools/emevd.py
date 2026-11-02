@@ -18,6 +18,8 @@ python emevd.py --interiors m60_42_36_00.emevd out.emevd
 python emevd.py --bosses m60_42_36_00.emevd out.emevd
   all door warps (rideable up to the door, load-screen flag, camera turned) and all four bosses (see all_bosses).
 python emevd.py --boss-watchdog in.emevd[.dcx] out.emevd[.dcx]
+python emevd.py --quest-window in.emevd[.dcx] out.emevd[.dcx]     (round 26 W2: tower's blue windows while its goal is current)
+python emevd.py --boss-resurface in.emevd[.dcx] out.emevd[.dcx]   (round 26 W3: Rattlebones rises again when out of battle)
   round 25: Rattlebones back onto his sigil when he leaves the room (under the floor), see boss_watchdog.
 python emevd.py --book-warps common.emevd out.emevd
   the HUD spellbook map page's warp buttons (see book_warps).
@@ -515,6 +517,70 @@ def boss_watchdog(d, event_id=WATCHDOG_EVENT, boss=RATTLEBONES, room=RATTLEBONES
     return build(e, events)
 
 
+QUEST_WINDOW_EVENT = 1042362858
+SINISTER_ASSIGNED, RATTLEBONES_DEFEATED = 1042360360, 1042360362  # w101_quests: quest 6 +0 assigned, goal 2 done
+
+
+def quest_window(d, event_id=QUEST_WINDOW_EVENT, window=WINDOW_ENTITY, assigned=SINISTER_ASSIGNED,
+                 done=RATTLEBONES_DEFEATED):
+    """Round 26 (W2): Rattlebones' tower's blue "quest inside" windows (asset aeg030_529, entity `window`) light up
+    while its goals are current, as Wizard101 shows the WC_Unicorn_T2_quest windows. Round 6's window_off (event
+    1042362994) turns them off at every load and nothing turned them on again since (Ryan, 2026-10-25: "no blue light
+    until a quest there is active, when a quest event can enable it again"), so they were never seen after round 6.
+    New event `event_id` (rest 1, started from the top of event 0, after window_off's start):
+      wait until Sinister Skeleton is assigned AND Rattlebones not yet defeated -> 2005[3] window on
+      wait until not assigned OR defeated -> window off, restart.
+    The Roundtable reset clears the flags, so the window goes dark with it. Rerunning replaces the event."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
+    events.append({"id": event_id, "rest": 1, "pars": [], "ins": [
+        _i(1001, 0, "<f", 1.0),  # after window_off (same frame at load) has turned it off
+        _i(3, 0, "<bBBxI", 1, 1, 0, assigned),  # IF assigned (group 1)
+        _i(3, 0, "<bBBxI", 1, 0, 0, done),  # AND Rattlebones not defeated
+        _i(0, 0, "<bBbx", 0, 1, 1),
+        _i(2005, 3, "<IBxxx", window, 1),  # window on
+        _i(3, 0, "<bBBxI", -1, 0, 0, assigned),  # IF not assigned (OR group -1)
+        _i(3, 0, "<bBBxI", -1, 1, 0, done),  # OR defeated
+        _i(0, 0, "<bBbx", 0, 1, -1),
+        _i(2005, 3, "<IBxxx", window, 0),  # window off
+        _i(1000, 4, "<Bxxx", 1),  # restart
+    ]})
+    return build(e, events)
+
+
+RESURFACE_EVENT = 1042362859
+RESURFACE_WAIT = 10.0  # s out of battle state, checked twice, before he is made to rise again
+RESURFACE_ANIM_TIME = 16.0  # a000_020010 is 15.87 s long (c4960.tae)
+
+
+def boss_resurface(d, event_id=RESURFACE_EVENT, boss=RATTLEBONES, arena=RATTLEBONES_ARENA, animation=20010,
+                   wait=RESURFACE_WAIT):
+    """Round 26 (W3) safety net: Rattlebones (Giant Skeleton Torso c4960) sank out of sight in Ryan's 21:44 fight and
+    his AI never brought him back; the only thing that did was boss_bar's 2003[18] 20010 (rise out of the floor,
+    fading in) when Ryan came back in at 21:51:46. Vanilla wakes these torsos from an event too (m12_05 event
+    12052250: 20010 when the c3471 next to it reaches AI state 3). New event `event_id` (rest 1, from the top of
+    event 0): while he is alive and the player is in the arena, if his AI state is not Battle (4[9] state 3,
+    comparison 1 "!=") for `wait` s (tested at both ends), play 20010 again, wait for it, restart. Packed like 4[0]
+    (EMEDF 4[9]: group s8, entity u32, state u8, comparison s8, count f32). Rerunning replaces the event."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
+    out_of_battle = [
+        _i(4, 0, "<bxxxIBBxxf", 1, boss, 0, 0, 1.0),  # IF alive
+        _i(3, 2, "<bBxxIIi", 1, 1, 10000, arena, 1),  # AND player in the arena
+        _i(4, 9, "<bxxxIBbxxf", 1, boss, 3, 1, 1.0),  # AND AI state != Battle
+        _i(0, 0, "<bBbx", 0, 1, 1),
+    ]
+    events.append({"id": event_id, "rest": 1, "pars": [], "ins": out_of_battle + [_i(1001, 0, "<f", wait)]
+                   + out_of_battle + [
+        _i(2003, 18, "<IiBBBbf", boss, animation, 0, 0, 0, 0, 1.0),  # rise again (as boss_bar)
+        _i(1001, 0, "<f", RESURFACE_ANIM_TIME),
+        _i(1000, 4, "<Bxxx", 1),  # restart
+    ]})
+    return build(e, events)
+
+
 WELCOME_EVENT = 1042362989
 WELCOME_DELAY = 10.0  # seconds into a map before the welcome message is armed again (the card shows in the first few)
 
@@ -915,6 +981,12 @@ if __name__ == "__main__":
         sys.exit()
     if sys.argv[1] == "--boss-watchdog":  # emevd.py --boss-watchdog in.emevd[.dcx] out.emevd[.dcx] (round 25 B2)
         _dcx_apply(sys.argv[2], sys.argv[3], boss_watchdog)
+        sys.exit()
+    if sys.argv[1] == "--quest-window":  # emevd.py --quest-window in.emevd[.dcx] out.emevd[.dcx] (round 26 W2)
+        _dcx_apply(sys.argv[2], sys.argv[3], quest_window)
+        sys.exit()
+    if sys.argv[1] == "--boss-resurface":  # emevd.py --boss-resurface in.emevd[.dcx] out.emevd[.dcx] (round 26 W3)
+        _dcx_apply(sys.argv[2], sys.argv[3], boss_resurface)
         sys.exit()
     if sys.argv[1] == "--no-guidance":  # emevd.py --no-guidance m60_42_36_00.emevd out.emevd
         open(sys.argv[3], "wb").write(no_guidance_wisps(open(sys.argv[2], "rb").read()))

@@ -16,6 +16,11 @@ Field_PhantomWall_Loding (the "phantom wall" fog), at m18 (-148.535, 78.020, 12.
 the gate: it exists only while m18 is loaded. It is now copied the same way (AEG092_300_9101). The AEG099_230 copy
 is left as it was (nothing to see; only matters in co-op).
 
+Round 26 (W1, Ryan: still no fog from far away): that copy's look is all its material's shader (M_PhantomWall_Loading:
+two mask textures), which we can't read, so a third copy is our own asset aeg030_530 (blender_build_fog.py: a 5 x 6
+m two-sided plane, white mist texture, the street's alpha-blended shader, drawn at any distance), AEG030_530_9102 on
+the same spot and rotation as the phantom wall. Rerunning moves all three in place.
+
 Usage: python msb_fog_gate.py map.msb.dcx out.msb.dcx   (DFLT DCX as Smithbox saves; rerunning moves it in place)
 """
 import math
@@ -37,6 +42,10 @@ WALL_MODEL = "AEG092_300"
 WALL_PART = "AEG092_300_9101"
 WALL_PART_ID = 9401
 WALL_M18_POSITION, WALL_M18_ROTATION = (-148.534912, 78.019989, 12.045101), -26.500067  # m18 AEG092_300_0500
+# Round 26 (W1): our own fog plane (blender_build_fog.py) on the phantom wall's spot
+MIST_MODEL = "AEG030_530"
+MIST_PART = "AEG030_530_9102"
+MIST_PART_ID = 9402
 
 
 def put_copy(lists, name, model, part_id, m18_position, m18_rotation):
@@ -64,6 +73,7 @@ def place_fog(raw):
     header, lists = read_msb(raw)
     put_copy(lists, FOG_PART, FOG_MODEL, FOG_PART_ID, M18_POSITION, M18_ROTATION)
     put_copy(lists, WALL_PART, WALL_MODEL, WALL_PART_ID, WALL_M18_POSITION, WALL_M18_ROTATION)
+    put_copy(lists, MIST_PART, MIST_MODEL, MIST_PART_ID, WALL_M18_POSITION, WALL_M18_ROTATION)
     return write_msb(header, lists)
 
 

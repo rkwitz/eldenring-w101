@@ -302,6 +302,11 @@ fn main() {
         ("6g_map_zoom_tip", pages::Tab::Map, 0, [0.2773, 0.8306], "place:street"),
         ("6h_map_open_zoom_tip", pages::Tab::Map, 0, [0.2773, 0.8306], "map"),
         ("6i_map_home_tip", pages::Tab::Map, 0, [0.716, 0.8306], "place:street"),
+        // Round 26 (W6, W8): the home button's tip in the Roundtable Hold says Unicorn Way; red boss pictures; with no
+        // boss quest assigned ("noboss" in the name: the game's case) no boss shows, Rattlebones hovered.
+        ("26a_map_roundtable_home_tip", pages::Tab::Map, 0, [0.6705, 0.8306], "place:roundtable"),
+        ("26b_map_noboss_rattlebones_spot", pages::Tab::Map, 0, [0.6044, 0.4967], "place:street"),
+        ("26c_map_rattlebones_red", pages::Tab::Map, 0, [0.6044, 0.4967], "place:street"),
         ("7_crafting", pages::Tab::Crafting, 0, [0.0, 0.0], ""),
         ("7g_crafting_tab_tip", pages::Tab::Crafting, 0, [0.318, 0.198], ""),
         ("7b_crafting_materials", pages::Tab::Crafting, 0, [0.0, 0.0], "materials"),
@@ -467,6 +472,7 @@ fn main() {
             continue;
         }
         book.preview_show(tab, sub);
+        book.map_bosses_all = !name.contains("noboss");
         if show == "map" {
             book.capture(&mut render, true); // the world as it was before the map opened
             book.preview_map();

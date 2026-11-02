@@ -51,6 +51,10 @@ const BOSS: &str = "w101_orbs/music/WC_HauntedWay_Combat.ogg";
 /// Round 21 M2: once the battle music plays, an alive creature this close keeps it going (W101 keeps its combat
 /// music until the fight ends; Elden Ring's enemies circle and back off between hits).
 const STAY_RANGE: f32 = 15.0;
+/// Round 26 (W4): a creature within STAY_RANGE keeps the battle music only this long after the last real fight sign
+/// (stamina use, player HP loss, a creature hit). Ryan's 21:53-21:55 log kept it with "Skeletal Pirate still 14 m
+/// away" (an idle skeleton beside the road) long after the fight.
+const STAY_MAX: Duration = Duration::from_secs(20);
 
 /// A creature this close (metres) starts the battle music by itself.
 /// Stamina use, HP loss or a hit on a creature counts as a fight with a creature this close.
@@ -179,6 +183,8 @@ pub struct Music {
     holding_logged: bool,
     last_fight: Option<Instant>,
     last_boss: Option<Instant>,
+    /// Round 26 (W4): the last fight sign other than "a creature is still near".
+    last_real_fight: Option<Instant>,
     last_sp: Option<i32>,
     last_hp: Option<i32>,
     creature_hp: Vec<(usize, i32)>,
@@ -213,6 +219,7 @@ impl Music {
             holding_logged: false,
             last_fight: None,
             last_boss: None,
+            last_real_fight: None,
             last_sp: None,
             last_hp: None,
             creature_hp: Vec::new(),
@@ -349,7 +356,9 @@ impl Music {
             .min_by(|a, b| a.0.total_cmp(&b.0));
         let mut fight = None;
         let near = nearest.filter(|n| n.0 < FIGHT_RANGE);
-        if let Some((d, model)) = nearest.filter(|n| n.0 < STAY_RANGE && matches!(self.mode, Some(Mode::Battle | Mode::Boss))) {
+        let lately = self.last_real_fight.is_some_and(|t| t.elapsed() < STAY_MAX);
+        if let Some((d, model)) = nearest.filter(|n| n.0 < STAY_RANGE && lately
+                                                 && matches!(self.mode, Some(Mode::Battle | Mode::Boss))) {
             fight = Some(format!("{} still {d:.0} m away", name(model)));
         }
         // Round 23: being near a creature no longer starts a fight by itself (Ryan: only when Elden Ring is really in
@@ -378,9 +387,17 @@ impl Music {
         }
         self.creature_hp = creatures.iter().map(|c| (c.0, c.3)).collect();
         fight = fight.or(hit);
+        if fight.as_deref().is_some_and(|f| !f.contains(" still ")) {
+            self.last_real_fight = Some(Instant::now());
+        }
         let mut boss = None;
-        if let Some((active, entity)) = g.boss_fight() {
-            if BOSS_IDS.contains(&entity) {
+        // Round 26 (W4): GameDataMan keeps the last boss bar's entity after the bar goes away, so in Ryan's 21:52-21:58
+        // log Rattlebones' bar "stayed up" (boss music) after he died at 21:52:50 and on the street until the
+        // Roundtable load cleared it. The bar now counts only with the fight active, in the rooms under the street,
+        // with a living boss creature in range.
+        let living_boss = creatures.iter().any(|c| c.3 > 0 && BOSS_MODELS.contains(&c.1) && dist(c.2) < BOSS_RANGE);
+        if let Some((active, entity)) = g.boss_fight().filter(|_| msb[1] < ROOM_HEIGHT && living_boss) {
+            if active && BOSS_IDS.contains(&entity) {
                 boss = Some(format!("boss bar up for entity {entity} (fight active {active})"));
             }
         }

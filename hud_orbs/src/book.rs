@@ -97,6 +97,8 @@ const QUIT_SETTLE: f32 = 3.0;
 const NOTE_TIME: Duration = Duration::from_secs(4);
 /// How often the quest flags are read.
 const QUEST_POLL: Duration = Duration::from_millis(250);
+/// Round 26 (W5): seconds in the world after a load or fade before quest flag changes show as popups.
+const POPUP_SETTLE: Duration = Duration::from_secs(4);
 
 const GOLD: ImColor32 = ImColor32::from_rgb(214, 170, 72);
 const PARCHMENT_DARK: ImColor32 = ImColor32::from_rgba(28, 18, 10, 236);
@@ -163,6 +165,12 @@ pub struct Book {
     quest_flags: Vec<u32>,
     flags: HashMap<u32, bool>,
     flags_time: Option<Instant>,
+    /// Round 26 (W5): since when the game has been in normal play without a break (None while not): quest flag
+    /// changes only become popups once this is POPUP_SETTLE old, so a save's flags coming in late after a load
+    /// (Ryan's 21:43 log: 0 read, then all off at the menu, then ~20 on at once) are taken as the starting point.
+    play_since: Option<Instant>,
+    /// Round 26 (W8): preview only: show every boss on the map page.
+    pub map_bosses_all: bool,
     /// Round 23 (H7): Wizard101's quest popups ("Goal Update: ...", goalpopup.rs).
     pub popups: crate::goalpopup::GoalPopups,
     /// Round 25 (H2): Wizard101's quest picker (picker.rs) while one NPC's events ask for several conversations.
@@ -394,6 +402,8 @@ impl Book {
             quest_flags: Vec::new(),
             flags: HashMap::new(),
             flags_time: None,
+            play_since: None,
+            map_bosses_all: false,
             popups: Default::default(),
             picker: None,
             picker_mouse: false,
@@ -1630,6 +1640,7 @@ impl Book {
             position: cx.position,
             achieved: &self.achieved,
             gear_sets: &gear_sets,
+            map_bosses: self.map_bosses(),
         };
         if let Some(page) = self.layouts.get(page_name) {
             pages::bind(tab, page, &data, &mut self.state, &mut view);
@@ -1923,6 +1934,18 @@ impl Book {
 
     /// Reads the quest flags. A conversation request (talk.rs) that is on opens Wizard101's dialogue box; one that
     /// went off while its box is up (the player walked away, the event withdrew it) closes the box.
+    /// Round 26 (W8): the map page's bosses (pages::MAP_BOSSES order): Lady Blackhope never (her quest was removed
+    /// in round 23), Rattlebones once Sinister Skeleton is assigned or done. The preview shows both (MAP_BOSSES_ALL).
+    fn map_bosses(&self) -> [bool; 2] {
+        if self.map_bosses_all {
+            return [true, true];
+        }
+        let on = |f: u32| self.flags.get(&f) == Some(&true);
+        let rattlebones = self.quests.quests.iter().find(|q| q.slug == "sinister_skeleton")
+            .is_some_and(|q| on(q.assigned) || on(q.complete));
+        [false, rattlebones]
+    }
+
     fn poll_quests(&mut self, cx: &Context) {
         if self.quests.quests.is_empty() || self.flags_time.is_some_and(|t| t.elapsed() < QUEST_POLL) {
             return;
@@ -1947,8 +1970,18 @@ impl Book {
                            on_now, now.len(), now.get(&markers::QUEST_RESET));
         }
         // Round 23 (H7): what changed since the last poll, as Wizard101's popups (not at load, nor before the quest
-        // reset has run on an old save).
-        if !first && now.get(&markers::QUEST_RESET) == Some(&true) {
+        // reset has run on an old save). Round 26 (W5): nor while the game is not in normal play (menu, loading,
+        // fades), nor in the first POPUP_SETTLE s of play after that: Ryan's 21:43:41 log popped ~20 Goal/Quest
+        // Complete lines for flags his save already had, which the flag manager only handed over after the load.
+        // In the world = a game, a player position and no fade (load screens, warps); menus and the HUD being hidden
+        // don't count as a break.
+        if cx.game.is_some() && cx.position.is_some() && cx.faded <= 0.3 {
+            self.play_since.get_or_insert_with(Instant::now);
+        } else {
+            self.play_since = None;
+        }
+        let settled = self.play_since.is_some_and(|t| t.elapsed() >= POPUP_SETTLE);
+        if !first && settled && now.get(&markers::QUEST_RESET) == Some(&true) {
             self.popups.changes(&self.quests, &self.flags, &now);
         }
         self.flags = now;

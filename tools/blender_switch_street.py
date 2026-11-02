@@ -31,8 +31,10 @@ import flver_textures  # noqa: E402
 import hkx_collision  # noqa: E402
 import hkx_tag  # noqa: E402
 import tpf  # noqa: E402
+import w101_window_states  # noqa: E402
 
-for module in (dds_color, flver_fix, flver_build, flver_floor, flver_textures, hkx_tag, hkx_collision, tpf):
+for module in (dds_color, flver_fix, flver_build, flver_floor, flver_textures, hkx_tag, hkx_collision, tpf,
+               w101_window_states):
     importlib.reload(module)
 
 STYLE = "classic"  # "classic" or "hd"
@@ -56,6 +58,8 @@ CLASSIC = ROOT / "reference" / "w101" / "converted_classic"
 EDITED = CLASSIC / "WC_Z06_Unicorn_Way_Classic_edited.obj"
 OBJ = EDITED if EDITED.exists() else CLASSIC / "WC_Z06_Unicorn_Way_Classic.obj"
 MTL = OBJ.with_suffix(".mtl")
+# Round 26 (W2): Wizard101's per-building window states (w101_window_states.py output, Wizard101 data).
+WINDOW_STATES = CLASSIC / "window_states.tsv"
 # Wizard101's own vertex normals of the classic zone (nif_normals.py, from ClassicMode-WC_Streets-WC_Unicorn.wad's
 # WC_Z06_Unicorn_Way.nif). Without them every triangle got its own flat normal and Elden Ring's sun lit each one as
 # a facet (round 24: trees with one triangle near white and the next much darker); with them the street shades
@@ -105,6 +109,15 @@ def build_classic():
     tunnel = [f for f in faces if cut(f)]
     faces = [f for f in faces if not backdrop(positions, f) and not cut(f)]
     print(f"Left out {len(walls)} triangles of the zone's backdrop walls and {len(tunnel)} inside the Commons archway")
+    # Round 26 (W2): one window state per building (w101_window_states.py): lit (_on) where a door leads in, dark
+    # (_off) elsewhere, no blue _quest copies (that is asset aeg030_529, switched by its event).
+    if WINDOW_STATES.exists():
+        drop, counts = w101_window_states.window_filter(positions, uvs, faces, w101_window_states.load(WINDOW_STATES))
+        faces = [f for k, f in enumerate(faces) if k not in drop]
+        print(f"Window states: {len(drop)} window triangles left out; lit: "
+              f"{sorted(w101_window_states.ENTERABLE)}; matched {sum(counts.values())}")
+    else:
+        print(f"No {WINDOW_STATES}: every window state is drawn on top of the others (run w101_window_states.py)")
     texture_of_material = flver_textures.parse_mtl(MTL)
     if OBJ == EDITED:
         # Blender may drop a texture it couldn't load or rename a material "name.001"; the original MTL fills in.

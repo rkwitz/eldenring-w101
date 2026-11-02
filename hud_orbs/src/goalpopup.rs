@@ -20,6 +20,18 @@
 //!   fading out by its own age (the old "Quest Complete" nearly gone over two fresh "New Quest" lines).
 //! They show over the dialogue box too (screenshot 2: over the quest picker), not over the book or map.
 //!
+//! Round 26 (W5, Ryan: "several at once must appear one after another with a delay, not all together"): queued
+//! lines come up one at a time, STAGGER s apart, each with its own sound. "Return to <NPC>" goals (done by walking
+//! up to the NPC, e.g. Sinister Skeleton's near_ceren) pop nothing, nor does the "Talk to" goal they lead to: Ryan got
+//! "Goal Complete: Return to Ceren Nightchant / New Goal: Talk to Ceren Nightchant" at Ceren before talking to her;
+//! the talk itself then shows "Goal Complete" and "Quest Complete" as before.
+//! Round 26 (W7, Ryan: "the quest popup text is too big"): measured again at Ryan's 2560x1440 (log: "screen
+//! 2560x1440, HUD scale 1.875") against ref/1 and ref/3 (their game picture is 694 px high, rows 25..718): the
+//! small capitals are 14 px = 2.0% of the screen height there (29 px at 1440), the capitals 16 px = 2.3%, the lines
+//! 25 px = 3.6% apart. Round 25 drew small capitals 31 px and capitals 33 px high (preview 25b at 2560x1440), so
+//! SCALE goes from 0.643 to 0.60 (small capitals 29 px) and PITCH from 29 to 27.7 (52 px); the outline was the other
+//! half of "too big": W101's edge is a thin dark rim, ours a heavy black outline plus shadow, now a shadow only.
+//!
 //! Driven by the quest flags book.rs polls (poll_quests): `messages` compares the flags before and after.
 
 use std::collections::{HashMap, VecDeque};
@@ -33,15 +45,17 @@ use crate::quests::{Counter, Quests};
 
 /// Round 25 (H1): measured on Ryan's screenshots (see the top): font scale, colour, the newest line's middle and
 /// the line pitch (pixels of the 768-high layout).
-const SCALE: f32 = 0.643;
+const SCALE: f32 = 0.60;
 const COLOUR: [u8; 3] = [238, 234, 36];
 const BOTTOM: f32 = 517.0;
-const PITCH: f32 = 29.0;
+const PITCH: f32 = 27.7;
 /// Seconds fully shown, then fading out; seconds an older line takes to slide up a row; most lines at once.
 const HOLD: f32 = 4.0;
 const FADE: f32 = 1.5;
 const SLIDE: f32 = 0.2;
 const MAX_LINES: usize = 6;
+/// Round 26 (W5): seconds between two queued lines coming up.
+const STAGGER: f32 = 0.9;
 const SOUND: &str = "ui_quest_updated";
 
 struct Line {
@@ -55,8 +69,10 @@ struct Line {
 pub struct GoalPopups {
     /// Oldest first; the last is the newest (bottom row).
     lines: Vec<Line>,
-    /// Popups that came while hidden (book or map open): shown when it closes.
+    /// Popups waiting to come up (one every STAGGER s while visible; while hidden they wait).
     queue: VecDeque<String>,
+    /// When the last queued line came up.
+    last_shown: Option<Instant>,
 }
 
 fn progress(counter: &Counter, flag: &dyn Fn(u32) -> bool) -> Option<u32> {
@@ -83,8 +99,14 @@ pub fn messages(quests: &Quests, old: &dyn Fn(u32) -> bool, new: &dyn Fn(u32) ->
             flag(q.assigned) && !flag(g.flag) && !flag(q.complete)
                 && g.after.iter().all(|a| q.goals.get(a.wrapping_sub(1)).is_some_and(|d| flag(d.flag)))
         };
+        // Round 26 (W5): goals done by walking up to an NPC, and the talk goal right after one, pop nothing.
+        let silent = |i: usize| q.goals.get(i).is_some_and(|g| g.text.starts_with("Return to "));
         for (i, g) in q.goals.iter().enumerate() {
+            let quiet_new = g.after.iter().any(|a| silent(a.wrapping_sub(1)));
             if !old(g.flag) && new(g.flag) {
+                if silent(i) {
+                    continue;
+                }
                 out.push(format!("Goal Complete: {}", g.text));
                 continue;
             }
@@ -95,7 +117,7 @@ pub fn messages(quests: &Quests, old: &dyn Fn(u32) -> bool, new: &dyn Fn(u32) ->
                     }
                 }
             }
-            if !fresh && !current(old, i) && current(new, i) {
+            if !fresh && !quiet_new && !current(old, i) && current(new, i) {
                 out.push(format!("New Goal: {}", g.text));
             }
         }
@@ -136,10 +158,12 @@ impl GoalPopups {
                 screen: [f32; 2], visible: bool, dt: f32) {
         let now = Instant::now();
         self.lines.retain(|l| (now - l.born).as_secs_f32() < HOLD + FADE);
-        if visible && !self.queue.is_empty() {
+        let due = self.last_shown.is_none_or(|t| (now - t).as_secs_f32() >= STAGGER);
+        if visible && due && !self.queue.is_empty() {
             crate::music::sfx(SOUND);
-            // The new lines come in at the bottom, the older ones keep their row and slide up from there.
-            for text in self.queue.drain(..) {
+            self.last_shown = Some(now);
+            // The new line comes in at the bottom, the older ones keep their row and slide up from there.
+            if let Some(text) = self.queue.pop_front() {
                 self.lines.push(Line { text, born: now, row: -1.0 });
             }
             let extra = self.lines.len().saturating_sub(MAX_LINES);
@@ -181,7 +205,7 @@ impl GoalPopups {
             };
             let style = TextStyle::new("WizardFancy", SCALE,
                                        ImColor32::from_rgba(COLOUR[0], COLOUR[1], COLOUR[2], (255.0 * alpha) as u8))
-                .centred().outlined().shadowed();
+                .centred().shadowed();
             canvas.text(&l.text, [0.0, 0.0, width, height], &style, false);
         }
     }

@@ -184,6 +184,9 @@ pub struct Data<'a> {
     pub position: Option<([f32; 3], i32, i32)>,
     /// Per ACHIEVEMENTS entry: earned (its event flag), or None when not tracked / not readable.
     pub achieved: &'a [Option<bool>],
+    /// Round 26 (W8): which of MAP_BOSSES the map shows (Ryan: a boss only once its quest is assigned or done;
+    /// Lady Blackhope never, her quest was removed; Rattlebones from Sinister Skeleton on).
+    pub map_bosses: [bool; 2],
     /// The character's saved equipment sets (the Backpack's Equipment Sets page).
     pub gear_sets: &'a [GearSet],
 }
@@ -2185,6 +2188,8 @@ struct MapIcon {
 /// draws their tower icon (LocationIconUnicornWayTower) in the same spots before the quests reach them.
 /// Round 25 (H9): their Elden Ring stand-ins' faces (Nox Swordstress c3300, Giant Skeleton Torso c4960;
 /// tools/w101_npc_portraits.py), not Wizard101's.
+/// Round 26 (W8): their pictures are on Wizard101's red creature disc like the enemy pictures (tools/
+/// w101_portrait_red.py recolours the art), and each shows only per Data::map_bosses.
 const MAP_BOSSES: [MapIcon; 2] = [
     MapIcon { picture: "GUI/NpcPortraits/ER/lady_blackhope.png", rect: [203.0, 216.0, 252.0, 265.0],
               plate: MAP_PLATE_ELITE, plate_size: [101.0, 52.0], text: "Lady\nBlackhope" },
@@ -2321,7 +2326,10 @@ fn map(l: &Layout, d: &Data, v: &mut View, st: &mut State) {
     // The buttons' hover texts: MapSpellbookPage.gui gives each an m_sTip (GUI_00001513 "Commons", GUI_00001514 "Zoom",
     // GUI_00001515 "Go Home"), which Wizard101 shows in ToolTip.gui's white bubble; ours say where they go.
     let zoom = if d.map_open { "Back to Wizard101's map" } else { "Elden Ring's map" };
-    for (button, text) in [("GoHomeButton", "Travel to The First Step"), ("GotoDormButton", "Travel to the Roundtable Hold"),
+    // Round 26 (W6, Ryan: it should say "Travel to Unicorn Way"): the warp goes to The First Step's grace, but on
+    // Unicorn Way that place is named "Unicorn Way" (PlaceName 610900, er_text.py add_place_name, the name the
+    // street's MapNameOverride regions show), as the page's own zone name.
+    for (button, text) in [("GoHomeButton", "Travel to Unicorn Way"), ("GotoDormButton", "Travel to the Roundtable Hold"),
                            ("PlusMinusButton", zoom)] {
         if let Some(b) = l.find(button) {
             v.plain_tip(l.nodes[b].rect, vec![text.to_string()]);
@@ -2360,8 +2368,10 @@ fn map(l: &Layout, d: &Data, v: &mut View, st: &mut State) {
     for (plate, r, text) in MAP_LABELS {
         map_plate(v, plate, r, text);
     }
-    for icon in &MAP_BOSSES {
-        map_icon(v, icon);
+    for (icon, shown) in MAP_BOSSES.iter().zip(d.map_bosses) {
+        if shown {
+            map_icon(v, icon);
+        }
     }
     // The grace: click (or A) to travel there. Round 17 A2: nothing on hover (no name plate), only the icon.
     let grace = map_grace_rect();
