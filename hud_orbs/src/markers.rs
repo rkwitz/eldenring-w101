@@ -338,7 +338,7 @@ pub fn npc_plates(camera: &Camera, spots: &[Spot], sight: &Sight, screen: [f32; 
         }
         let k = (screen[1] / 768.0) * (8.0 / z.max(1.0)).clamp(0.7, 1.15);
         out.push(crate::nameplates::Plate { at: on_screen, k, alpha, name, line: String::new(), school: "",
-                                             colour: NPC_NAME_COLOUR });
+                                             colour: NPC_NAME_COLOUR, z });
     }
     out
 }
@@ -383,7 +383,9 @@ pub fn draw(
     drawn.sort_by(|a, b| b.0.total_cmp(&a.0));
     // The spiral turns clockwise on the screen, a full turn every SPIRAL_TURN seconds.
     let angle = (time / SPIRAL_TURN).fract() * std::f32::consts::TAU;
-    for (_, at, metre, alpha, name) in drawn {
+    for (z, at, metre, alpha, name) in drawn {
+        // Round 26 (O1): hidden wherever the game's scene is in front of it (occlusion.rs).
+        crate::occlusion::begin(z, 0.0, "", at);
         let tint = ImColor32::from_rgba(255, 255, 255, alpha);
         if let Some((spiral, _)) = textures.get(SPIRAL) {
             let h = SPIRAL_SIDE * metre / 2.0;
@@ -397,6 +399,7 @@ pub fn draw(
         let h = SIGN * metre / 2.0;
         draw.add_image(texture, [at[0] - h, at[1] - h], [at[0] + h, at[1] + h]).col(tint).build();
     }
+    crate::occlusion::end();
 }
 
 /// Round 22 (H6): whether each street NPC can be seen from the player (MSB positions; questhelper::Nav::sees), eased
@@ -425,7 +428,9 @@ impl Sight {
         }
         for (i, npc) in NPCS.iter().enumerate() {
             let spot = npc.4;
+            // Round 26 (O1): with the game's own depth test on, nothing is hidden by this guess.
             let seen = match player {
+                _ if crate::occlusion::active() => true,
                 None => true,
                 Some(p) if in_room(p) => false,
                 Some(p) if in_garden(p) != in_garden(spot) => false,

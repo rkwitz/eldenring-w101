@@ -311,7 +311,9 @@ impl Wisps {
         let eye = if (eye[0] - msb[0]).hypot(eye[2] - msb[2]) < 12.0 { eye } else { [msb[0], msb[1] + 1.6, msb[2]] };
         let mut in_sight = 0;
         for (w, s) in self.wisps.iter_mut().zip(&spots) {
-            let seen = w.picked.is_some() || (!away && nav.sees_3d_near(eye, s.2, CLOUD_RADIUS));
+            // Round 26 (O1): with the game's own depth test on, the street sight test is not used (occlusion.rs).
+            let seen = w.picked.is_some() || crate::occlusion::active()
+                || (!away && nav.sees_3d_near(eye, s.2, CLOUD_RADIUS));
             in_sight += seen as usize;
             w.seen = if seen { (w.seen + dt / SHOW).min(1.0) } else { 0.0 };
         }
@@ -348,12 +350,15 @@ impl Wisps {
                 && ((s.0[0] - player[0]).powi(2) + (s.0[2] - player[2]).powi(2)).sqrt() < DRAW_RANGE)
             .filter_map(|(i, s)| camera.project(s.0, screen).map(|(_, z)| (z, i))).collect();
         order.sort_by(|a, b| b.0.total_cmp(&a.0));
-        for (_, i) in order {
+        for (z, i) in order {
             let w = &self.wisps[i];
+            // Round 26 (O1): hidden wherever the game's scene is in front of it (occlusion.rs).
+            crate::occlusion::begin(z, CLOUD_RADIUS, "", [0.0, 0.0]);
             let picked = w.picked.map(|(t, from)| ((now - t).as_secs_f32(), from));
             draw_wisp(&draw, textures, &camera, Look { kind: w.kind, seed: w.seed, age: (now - w.born).as_secs_f32(),
                       picked, seen: w.seen }, (spots[i].0, spots[i].1), time, screen);
         }
+        crate::occlusion::end();
     }
 }
 

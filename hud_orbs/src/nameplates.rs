@@ -70,20 +70,36 @@ pub struct Plate {
     pub school: &'static str,
     /// The name's (and rank line's) colour, sRGB.
     pub colour: [u8; 3],
+    /// Round 26 (O1): its depth from the camera (metres), for the scene depth test (occlusion.rs).
+    pub z: f32,
 }
 
-/// The plates for the enemies (model, physics position, hit capsule height or 0) in view, farthest first (nearer ones over them).
-pub fn plates(camera: &Camera, enemies: &[(u32, [f32; 3], f32)], screen: [f32; 2]) -> Vec<Plate> {
+/// How far the plate's bottom floats over the top of the model's posed box (round 26 O3), metres: as the seen
+/// heights + 0.35 above.
+const BOX_GAP: f32 = 0.35;
+
+/// The plates for the enemies (model, physics position, hit capsule height or 0, top of the posed model box) in view,
+/// farthest first (nearer ones over them).
+///
+/// Round 26 (O3, Ryan: Rattlebones' boss tag should stay on his head as he moves): the plate floats over the top of
+/// the box the game keeps round the model as it is posed this frame (Game::model_top), not a fixed height over
+/// the physics position (which, for the Giant Skeleton Torso, is the crawling body, not the rearing skull); the
+/// fixed heights stay for when the box can't be read.
+pub fn plates(camera: &Camera, enemies: &[(u32, [f32; 3], f32, Option<[f32; 3]>)], screen: [f32; 2]) -> Vec<Plate> {
     let mut out: Vec<(f32, Plate)> = Vec::new();
-    for &(model, p, height) in enemies {
+    for &(model, p, height, top) in enemies {
         let Some(&(_, name, rank, school, title, tall, seen, colour)) = CREATURES.iter().find(|c| c.0 == model) else { continue };
         let lift = seen.unwrap_or(if height > 0.0 { height } else { tall } + GAP);
+        let anchor = match top {
+            Some(t) => [t[0], t[1] + BOX_GAP, t[2]],
+            None => [p[0], p[1] + lift, p[2]],
+        };
         let d = ((p[0] - camera.player[0]).powi(2) + (p[1] - camera.player[1]).powi(2)
             + (p[2] - camera.player[2]).powi(2)).sqrt();
         if d > RANGE {
             continue;
         }
-        let Some((at, z)) = camera.project([p[0], p[1] + lift, p[2]], screen) else { continue };
+        let Some((at, z)) = camera.project(anchor, screen) else { continue };
         if at[0] < -200.0 || at[0] > screen[0] + 200.0 || at[1] < -100.0 || at[1] > screen[1] + 100.0 {
             continue;
         }
@@ -95,7 +111,7 @@ pub fn plates(camera: &Camera, enemies: &[(u32, [f32; 3], f32)], screen: [f32; 2
             Title::Elite => " Elite".into(),
             Title::Boss => " Boss".into(),
         };
-        out.push((z, Plate { at, k, alpha, name, line: format!("Rank {rank}{what}"), school, colour }));
+        out.push((z, Plate { at, k, alpha, name, line: format!("Rank {rank}{what}"), school, colour, z }));
     }
     out.sort_by(|a, b| b.0.total_cmp(&a.0));
     out.into_iter().map(|p| p.1).collect()

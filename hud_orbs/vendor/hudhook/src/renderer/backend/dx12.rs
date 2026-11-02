@@ -80,6 +80,22 @@ pub struct D3D12RenderEngine {
     // w101_orbs: RenderContext::copy_texture's textures and this frame's requests (resource, state, region).
     live: [Option<Capture>; LIVE_SLOTS],
     live_wanted: [Option<(usize, u32, [u32; 4])>; LIVE_SLOTS],
+    // w101_orbs (round 26, O1): the scene depth copy's view (generation, texture slot, size), what the pixel shader
+    // binds this frame (descriptor, screen-to-texel scale), and the CPU read of it (crate::depth::probe).
+    depth_srv: Option<(u32, TextureId, u64, u32)>,
+    depth_bind: Option<(D3D12_GPU_DESCRIPTOR_HANDLE, f32, f32)>,
+    depth_probe: Option<DepthProbe>,
+    depth_probe_buffer: Option<(ID3D12Resource, u64)>,
+}
+
+/// w101_orbs (round 26, O1): a CPU copy of the scene depth on its way (the fence value that finishes it).
+struct DepthProbe {
+    id: u64,
+    points: Vec<[f32; 2]>,
+    fence_value: u64,
+    footprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
+    rows: u32,
+    scale: [f32; 2],
 }
 
 /// w101_orbs: how many game-texture copies (RenderContext::copy_texture) there are.
@@ -191,6 +207,10 @@ impl D3D12RenderEngine {
             readback_done: None,
             live: [None, None, None],
             live_wanted: [None; LIVE_SLOTS],
+            depth_srv: None,
+            depth_bind: None,
+            depth_probe: None,
+            depth_probe_buffer: None,
         })
     }
 }
@@ -343,11 +363,50 @@ impl RenderEngine for D3D12RenderEngine {
                 D3D12_RESOURCE_STATE_COMMON,
             )];
 
+            // w101_orbs (round 26, O1): the scene depth copy, readable by the pixel shader while the overlay draws.
+            let bb = render_target.GetDesc();
+            crate::depth::BACK_BUFFER.store((bb.Width << 32) | bb.Height as u64, std::sync::atomic::Ordering::Relaxed);
+            crate::depth::tick();
+            self.finish_depth_probe();
+            let depth = self.prepare_depth(bb.Width, bb.Height);
+            if let Some(texture) = &depth {
+                let b = [util::create_barrier(
+                    texture,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                )];
+                self.command_list.ResourceBarrier(&b);
+                b.into_iter().for_each(util::drop_barrier);
+            }
+
             self.command_list.ResourceBarrier(&present_to_rtv_barriers);
             self.command_list.OMSetRenderTargets(1, Some(&self.rtv_heap_start), false, None);
             self.command_list.SetDescriptorHeaps(&[Some(self.texture_heap.srv_heap.clone())]);
 
             self.render_draw_data(draw_data)?;
+
+            // w101_orbs (round 26, O1): back to COPY_DEST for the game's next copy, read to the CPU on the way when
+            // the app asked for depth values (crate::depth::probe).
+            let mut probe_fence = None;
+            if let Some(texture) = &depth {
+                let probe = if self.depth_probe.is_none() { crate::depth::take_probe_request() } else { None };
+                let next = match probe {
+                    Some((id, points)) => match self.record_depth_probe(texture, id, points, bb.Width, bb.Height) {
+                        Ok(()) => {
+                            probe_fence = Some(());
+                            D3D12_RESOURCE_STATE_COPY_SOURCE
+                        },
+                        Err(e) => {
+                            error!("depth probe: {e:?}");
+                            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+                        },
+                    },
+                    None => D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                };
+                let b = [util::create_barrier(texture, next, D3D12_RESOURCE_STATE_COPY_DEST)];
+                self.command_list.ResourceBarrier(&b);
+                b.into_iter().for_each(util::drop_barrier);
+            }
 
             self.command_list.ResourceBarrier(&rtv_to_present_barriers);
             self.command_list.Close()?;
@@ -356,6 +415,11 @@ impl RenderEngine for D3D12RenderEngine {
             let new_fence_value = self.fence.incr() + 1;
             self.command_queue.Signal(self.fence.fence(), new_fence_value)?;
             self.frame_contexts[self.frame_index].fence_value = new_fence_value;
+            if probe_fence.is_some() {
+                if let Some(p) = self.depth_probe.as_mut() {
+                    p.fence_value = new_fence_value;
+                }
+            }
 
             // w101_orbs: wait for the requested copy (once) and keep its bytes.
             if let Some((resource, buffer, footprint, rows)) = readback {
@@ -487,6 +551,151 @@ impl D3D12RenderEngine {
         barrier.into_iter().for_each(util::drop_barrier);
         back.into_iter().for_each(util::drop_barrier);
         Ok((resource, buffer, footprint, rows))
+    }
+
+    /// w101_orbs (round 26, O1): the scene depth copy to sample this frame (in COPY_DEST now), with its view made
+    /// for a new copy and `depth_bind` set; None (and no binding) while there is no fresh copy.
+    unsafe fn prepare_depth(&mut self, bb_width: u64, bb_height: u32) -> Option<ID3D12Resource> {
+        self.depth_bind = None;
+        let (texture, srv_format, width, height, generation) = crate::depth::current_copy()?;
+        if !crate::depth::fresh(3) {
+            return None;
+        }
+        if self.depth_srv.as_ref().is_none_or(|d| d.0 != generation) {
+            match self.texture_heap.add_view(&texture, srv_format) {
+                Ok(id) => self.depth_srv = Some((generation, id, width, height)),
+                Err(e) => {
+                    error!("depth view: {e:?}");
+                    self.depth_srv = None;
+                    return None;
+                },
+            }
+        }
+        let (_, id, w, h) = self.depth_srv?;
+        let gpu = self.texture_heap.textures[id.id()].gpu_desc;
+        self.depth_bind = Some((gpu, w as f32 / bb_width.max(1) as f32, h as f32 / bb_height.max(1) as f32));
+        Some(texture)
+    }
+
+    /// w101_orbs (round 26, O1): records a copy of the depth plane (in PIXEL_SHADER_RESOURCE, left in COPY_SOURCE)
+    /// to a CPU-readable buffer, answered by finish_depth_probe once the GPU is past it.
+    unsafe fn record_depth_probe(
+        &mut self,
+        texture: &ID3D12Resource,
+        id: u64,
+        points: Vec<[f32; 2]>,
+        bb_width: u64,
+        bb_height: u32,
+    ) -> Result<()> {
+        let desc = texture.GetDesc();
+        let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+        let mut rows = 0u32;
+        let mut total = 0u64;
+        self.device.GetCopyableFootprints(&desc, 0, 1, 0, Some(&mut footprint), Some(&mut rows), None, Some(&mut total));
+        if self.depth_probe_buffer.as_ref().is_none_or(|b| b.1 < total) {
+            let buffer: ID3D12Resource = util::try_out_ptr(|v| {
+                self.device.CreateCommittedResource(
+                    &D3D12_HEAP_PROPERTIES {
+                        Type: D3D12_HEAP_TYPE_READBACK,
+                        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+                        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+                        CreationNodeMask: self.node_mask,
+                        VisibleNodeMask: self.node_mask,
+                    },
+                    D3D12_HEAP_FLAG_NONE,
+                    &D3D12_RESOURCE_DESC {
+                        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+                        Alignment: 0,
+                        Width: total,
+                        Height: 1,
+                        DepthOrArraySize: 1,
+                        MipLevels: 1,
+                        Format: DXGI_FORMAT_UNKNOWN,
+                        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                        Flags: D3D12_RESOURCE_FLAG_NONE,
+                    },
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                    None,
+                    v,
+                )
+            })?;
+            self.depth_probe_buffer = Some((buffer, total));
+        }
+        let Some((buffer, _)) = &self.depth_probe_buffer else { return Err(Error::from_hresult(HRESULT(-1))) };
+        let b = [util::create_barrier(
+            texture,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        )];
+        self.command_list.ResourceBarrier(&b);
+        b.into_iter().for_each(util::drop_barrier);
+        let dst = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(buffer.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { PlacedFootprint: footprint },
+        };
+        let src = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(texture.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+        };
+        self.command_list.CopyTextureRegion(&dst, 0, 0, 0, &src, None);
+        let _ = ManuallyDrop::into_inner(dst.pResource);
+        let _ = ManuallyDrop::into_inner(src.pResource);
+        let scale = [desc.Width as f32 / bb_width.max(1) as f32, desc.Height as f32 / bb_height.max(1) as f32];
+        self.depth_probe = Some(DepthProbe { id, points, fence_value: u64::MAX, footprint, rows, scale });
+        Ok(())
+    }
+
+    /// w101_orbs (round 26, O1): a finished depth probe's values at its points (crate::depth::put_probe).
+    unsafe fn finish_depth_probe(&mut self) {
+        let Some(p) = &self.depth_probe else { return };
+        if p.fence_value == u64::MAX {
+            // Its frame never reached the queue.
+            self.depth_probe = None;
+            return;
+        }
+        if self.fence.fence().GetCompletedValue() < p.fence_value {
+            return;
+        }
+        let Some(p) = self.depth_probe.take() else { return };
+        let Some((buffer, _)) = &self.depth_probe_buffer else { return };
+        let mut mapped = ptr::null_mut();
+        if buffer.Map(0, None, Some(&mut mapped)).is_err() || mapped.is_null() {
+            return;
+        }
+        let f = p.footprint.Footprint;
+        let base = mapped as *const u8;
+        let format = f.Format;
+        let size = match format {
+            DXGI_FORMAT_R16_TYPELESS | DXGI_FORMAT_R16_UNORM | DXGI_FORMAT_D16_UNORM => 2usize,
+            _ => 4usize,
+        };
+        let depth = p
+            .points
+            .iter()
+            .map(|q| {
+                let (x, y) = ((q[0] * p.scale[0]).floor(), (q[1] * p.scale[1]).floor());
+                if !(x >= 0.0 && y >= 0.0 && (x as u32) < f.Width && (y as u32) < p.rows) {
+                    return f32::NAN;
+                }
+                let at = base.add(p.footprint.Offset as usize + y as usize * f.RowPitch as usize + x as usize * size);
+                match format {
+                    DXGI_FORMAT_R16_TYPELESS | DXGI_FORMAT_R16_UNORM | DXGI_FORMAT_D16_UNORM => {
+                        (at as *const u16).read_unaligned() as f32 / 65535.0
+                    },
+                    DXGI_FORMAT_R24G8_TYPELESS
+                    | DXGI_FORMAT_D24_UNORM_S8_UINT
+                    | DXGI_FORMAT_R24_UNORM_X8_TYPELESS => {
+                        ((at as *const u32).read_unaligned() & 0x00ff_ffff) as f32 / 16_777_215.0
+                    },
+                    _ => (at as *const f32).read_unaligned(),
+                }
+            })
+            .collect();
+        buffer.Unmap(0, None);
+        crate::depth::put_probe(crate::depth::Probe { id: p.id, points: p.points, depth });
     }
 
     /// w101_orbs: records this frame's RenderContext::copy_texture requests on the command list: each source
@@ -693,6 +902,11 @@ impl D3D12RenderEngine {
                             crate::BLEND_ADDITIVE => self.command_list.SetPipelineState(&self.additive_state),
                             crate::BLEND_KEY => self.command_list.SetPipelineState(&self.key_state),
                             crate::BLEND_NORMAL => self.command_list.SetPipelineState(&self.pipeline_state),
+                            // w101_orbs (round 26, O1): the scene depth test on (reference depth in the low bits) / off.
+                            x if x >> 32 == crate::depth::DEPTH_TAG_HI => {
+                                self.set_depth_test(Some(f32::from_bits(x as u32)))
+                            },
+                            crate::depth::DEPTH_OFF => self.set_depth_test(None),
                             _ => callback(cl.raw(), raw_cmd),
                         }
                     },
@@ -745,6 +959,26 @@ impl D3D12RenderEngine {
             0,
         );
         self.command_list.OMSetBlendFactor(Some(&[0f32; 4]));
+        // w101_orbs (round 26, O1): the depth test's texture (the font's while there is no depth copy: never read
+        // then) and off.
+        let table = self.depth_bind.map(|d| d.0).or_else(|| self.texture_heap.textures.first().map(|t| t.gpu_desc));
+        if let Some(table) = table {
+            self.command_list.SetGraphicsRootDescriptorTable(3, table);
+        }
+        self.set_depth_test(None);
+    }
+
+    /// w101_orbs (round 26, O1): the pixel shader's depth test: hide pixels where the scene is nearer than `z`
+    /// metres (None: off, or no depth copy this frame).
+    unsafe fn set_depth_test(&self, z: Option<f32>) {
+        let (near, far, reversed) = crate::depth::projection();
+        let (on, sx, sy) = match (z, self.depth_bind) {
+            (Some(_), Some((_, sx, sy))) if near > 0.0 => (1.0, sx, sy),
+            _ => (0.0, 1.0, 1.0),
+        };
+        let constants: [f32; 8] =
+            [z.unwrap_or(0.0), on, near, far, if reversed { 1.0 } else { 0.0 }, sx, sy, 0.0];
+        self.command_list.SetGraphicsRoot32BitConstants(2, 8, constants.as_ptr() as *const c_void, 0);
     }
 }
 
@@ -806,10 +1040,34 @@ unsafe fn create_shader_program(
             },
             ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
         },
+        // w101_orbs (round 26, O1): the depth test's constants (b1) and the scene depth copy (t1).
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Constants: D3D12_ROOT_CONSTANTS { ShaderRegister: 1, RegisterSpace: 0, Num32BitValues: 8 },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                    NumDescriptorRanges: 1,
+                    pDescriptorRanges: &D3D12_DESCRIPTOR_RANGE {
+                        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+                        NumDescriptors: 1,
+                        BaseShaderRegister: 1,
+                        RegisterSpace: 0,
+                        OffsetInDescriptorsFromTableStart: 0,
+                    },
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
     ];
 
     let root_signature_desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: 2,
+        NumParameters: 4,
         pParameters: parameters.as_ptr(),
         NumStaticSamplers: 1,
         pStaticSamplers: &D3D12_STATIC_SAMPLER_DESC {
@@ -884,7 +1142,26 @@ unsafe fn create_shader_program(
     SamplerState sampler0: register(s0);
     Texture2D texture0: register(t0);
 
+    // w101_orbs (round 26, O1): pixels where the game's scene is nearer than ref_z metres are hidden.
+    cbuffer depthTest : register(b1) {
+      float ref_z; float enabled; float near_z; float far_z; float reversed; float scale_x; float scale_y; float pad0;
+    };
+    Texture2D<float> depth1: register(t1);
+
+    float linear_z(float d) {
+      if (reversed > 0.5) {
+        if (far_z <= near_z) return near_z / max(d, 1e-9);
+        return near_z * far_z / (d * (far_z - near_z) + near_z);
+      }
+      if (far_z <= near_z) return near_z / max(1.0 - d, 1e-9);
+      return near_z * far_z / max(far_z - d * (far_z - near_z), 1e-9);
+    }
+
     float4 main(PS_INPUT input): SV_Target {
+      if (enabled > 0.5) {
+        float d = depth1.Load(int3(int(input.pos.x * scale_x), int(input.pos.y * scale_y), 0));
+        if (linear_z(d) < ref_z) discard;
+      }
       float4 out_col = input.col * texture0.Sample(sampler0, input.uv);
       return out_col;
     }"#;
@@ -1320,6 +1597,50 @@ impl TextureHeap {
         // D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(0, 1, 2, FORCE_VALUE_1)
         let opaque = 0 | (1 << 3) | (2 << 6) | (5 << 9) | (1 << 12);
         self.create_texture_with(width, height, format, view_format, opaque, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)
+    }
+
+    /// w101_orbs (round 26, O1): a view of an existing texture (the scene depth copy, plane 0 as `view_format`)
+    /// in a new slot.
+    unsafe fn add_view(&mut self, resource: &ID3D12Resource, view_format: DXGI_FORMAT) -> Result<TextureId> {
+        self.resize_heap()?;
+        let heap_inc_size =
+            self.device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        let index = self.textures.len();
+        let offset = index * heap_inc_size as usize;
+        let cpu_desc_stg = D3D12_CPU_DESCRIPTOR_HANDLE {
+            ptr: self.srv_staging_heap.GetCPUDescriptorHandleForHeapStart().ptr + offset,
+        };
+        let cpu_desc =
+            D3D12_CPU_DESCRIPTOR_HANDLE { ptr: self.srv_heap.GetCPUDescriptorHandleForHeapStart().ptr + offset };
+        let gpu_desc = D3D12_GPU_DESCRIPTOR_HANDLE {
+            ptr: self.srv_heap.GetGPUDescriptorHandleForHeapStart().ptr + offset as u64,
+        };
+        self.device.CreateShaderResourceView(
+            resource,
+            Some(&D3D12_SHADER_RESOURCE_VIEW_DESC {
+                Format: view_format,
+                ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
+                Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+                Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                    Texture2D: D3D12_TEX2D_SRV {
+                        MostDetailedMip: 0,
+                        MipLevels: 1,
+                        PlaneSlice: 0,
+                        ResourceMinLODClamp: 0.0,
+                    },
+                },
+            }),
+            cpu_desc_stg,
+        );
+        self.device.CopyDescriptorsSimple(1, cpu_desc, cpu_desc_stg, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        let desc = resource.GetDesc();
+        self.textures.push(Texture {
+            resource: resource.clone(),
+            gpu_desc,
+            width: desc.Width as u32,
+            height: desc.Height,
+        });
+        Ok(TextureId::from(index))
     }
 
     unsafe fn create_texture_with(

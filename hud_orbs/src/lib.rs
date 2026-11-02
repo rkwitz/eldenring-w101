@@ -22,6 +22,7 @@ mod music;
 mod wisps;
 mod goalpopup;
 mod nameplates;
+mod occlusion;
 mod steam;
 mod teleport;
 mod model;
@@ -371,6 +372,9 @@ impl ImguiRenderLoop for Orbs {
             settings_path: &settings_path,
         };
         self.book.frame(ui, &mut cx);
+        // Round 26 (O1): the game's scene depth for the tags, markers and wisps (occlusion.rs).
+        occlusion::frame(game, game.and_then(|g| g.camera()), ui.io().display_size,
+                         cx.gameplay && !self.book.blocking() && !self.loadscreen.holding(), cx.settings.depth_occlusion);
         if !self.loadscreen.holding() {
             self.book.draw_markers(ui, &cx);
             self.book.draw_quest_helper(ui, &cx);

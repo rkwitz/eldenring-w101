@@ -967,6 +967,8 @@ impl Book {
             let name_h = fancy.line_height * name_scale;
             let h = name_h + line_h;
             let origin = [plate.at[0] - w / 2.0 * plate.k, plate.at[1] - h * plate.k];
+            // Round 26 (O1): hidden wherever the game's scene is in front of it (occlusion.rs).
+            crate::occlusion::begin(plate.z, 0.0, plate.name, [plate.at[0], plate.at[1] - 8.0 * plate.k]);
             let canvas = Canvas {
                 draw: &draw,
                 textures: &self.textures,
@@ -992,6 +994,7 @@ impl Book {
             let tx = x0 + if icon.is_some() { icon_side + 3.0 } else { 0.0 };
             canvas.text(&line, [tx, name_h, w, h], &TextStyle::new("WizardFancy", line_scale, yellow).outlined(), false);
         }
+        crate::occlusion::end();
         self.textures.want(icons);
     }
 

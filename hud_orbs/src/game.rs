@@ -134,11 +134,27 @@ impl Game {
     /// plates and wisps 35 m off, then all snapping back). Now a jump that the other loaded characters made too (same
     /// vector within 2 m, `rebase`) is taken at once, and the frames queued for `delay` are moved by it, so the camera
     /// of a frame ago matches this frame's characters. Logged ("camera: world shifted ...").
+    ///
+    /// Round 26 (O2, Ryan: "single frames where every name tag/character marker jumps to a wrong screen spot then
+    /// back", 3rd report). His 21:58 log: 27 shifts of 32-40 m (vectors on an 8 m grid: (232,-32,-8), (0,-88,80), ...)
+    /// were all "refused" and then "jump kept for 0.35 s, taken"; not one was recognised as a shift, because
+    /// `rebase` compared against the first 8 of 99-270 loaded characters (most of them elsewhere in the map, which do
+    /// not move with the street) and the shift never got a majority. The NPC positions read in the same frame did
+    /// move with the player (markers: "refused a position ... moved 40.2 m against the player": against the held old
+    /// camera), so for 0.35 s everything was drawn from the frozen camera, and on the frame the jump was taken the
+    /// one-frame-old camera (marker_frames=1) was still the unshifted one while the characters were shifted: the
+    /// markers line at 21:48:20.549 has Connelly 50 m / player MSB [-49, 96, -16] between 14 m / [-24, 96, -48] the
+    /// frame before and 17 m / [-28, 96, -45] the frame after. Now: player and camera jumping by the same vector
+    /// (within 1.5 m) in one frame IS the shift (a bad read doesn't move both identically), taken at once with the
+    /// queued cameras moved by it; a jump that is still taken after the hold empties the queue (no stale camera);
+    /// a camera far from the player with no jump (the load screen's 240 m) no longer logs "world shifted (0, 0, 0)"
+    /// every frame (391 lines in that log).
     pub fn tick_camera(&self, delay: usize) {
         const GUARD_HOLD: f32 = 0.35;
         let mut now = self.camera_now();
         let refs = self.reference_positions();
         let mut shift: Option<[f32; 3]> = None;
+        let mut restart = false;
         {
             let mut guard = self.camera_guard.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(c) = now {
@@ -151,14 +167,24 @@ impl Game {
                     (player_jump > 2.5 + 30.0 * dt || camera_jump > 3.0 + 40.0 * dt || apart > 30.0)
                         .then(|| format!("player moved {player_jump:.1} m, camera {camera_jump:.1} m in {:.0} ms, camera {apart:.1} m from the player", dt * 1000.0))
                 });
-                // A jump every other character made too is the world moving, not a bad read.
+                // A jump the camera made with the player (or every other character made too) is the world moving, not
+                // a bad read.
                 if bad.is_some() {
                     if let Some((last, _)) = guard.0.as_ref() {
                         let jump = [c.player[0] - last.player[0], c.player[1] - last.player[1], c.player[2] - last.player[2]];
+                        let cam_jump = [c.matrix[3][0] - last.matrix[3][0], c.matrix[3][1] - last.matrix[3][1],
+                                        c.matrix[3][2] - last.matrix[3][2]];
+                        let len = |v: [f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                        let together = len([jump[0] - cam_jump[0], jump[1] - cam_jump[1], jump[2] - cam_jump[2]]) < 1.5;
+                        let apart = len([c.matrix[3][0] - c.player[0], c.matrix[3][1] - c.player[1], c.matrix[3][2] - c.player[2]]);
                         let old = self.rebase_refs.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                        if rebase(jump, &old, &refs) {
-                            tracing::info!("camera: world shifted by ({:.1}, {:.1}, {:.1}) m with every character; taken",
-                                           jump[0], jump[1], jump[2]);
+                        let moved = len(jump) > 1.0 && apart <= 30.0;
+                        if moved && (together || rebase(jump, &old, &refs)) {
+                            let grid = jump.iter().all(|v| (v / 8.0 - (v / 8.0).round()).abs() * 8.0 < 1.0);
+                            tracing::info!("camera: world shifted by ({:.1}, {:.1}, {:.1}) m ({}{}); taken",
+                                           jump[0], jump[1], jump[2],
+                                           if together { "player and camera together" } else { "with the other characters" },
+                                           if grid { ", on the 8 m grid" } else { "" });
                             shift = Some(jump);
                             bad = None;
                             guard.1 = None;
@@ -176,6 +202,7 @@ impl Game {
                     _ => {
                         if guard.1.take().is_some() && bad.is_some() {
                             tracing::info!("camera: jump kept for {GUARD_HOLD} s, taken (warp or respawn)");
+                            restart = true;
                         }
                         guard.0 = Some((c, at));
                         *self.rebase_refs.lock().unwrap_or_else(|e| e.into_inner()) = refs;
@@ -186,6 +213,9 @@ impl Game {
             }
         }
         let mut cameras = self.cameras.lock().unwrap_or_else(|e| e.into_inner());
+        if restart {
+            cameras.clear();
+        }
         if let Some(d) = shift {
             for c in cameras.iter_mut() {
                 for k in 0..3 {
@@ -220,6 +250,42 @@ impl Game {
         }).take(8).collect()
     }
 
+    /// Round 26 (O1): CSCam's near and far planes (metres), for reading the scene depth buffer (occlusion.rs).
+    pub fn clip_planes(&self) -> Option<(f32, f32)> {
+        use eldenring::cs::{CSCam, CSCamera};
+        use std::mem::offset_of;
+        let camera = from_singleton::static_of::<CSCamera>()?;
+        let camera = read::<usize>(camera.as_ptr() as usize)?;
+        let cam = read::<usize>(camera + offset_of!(CSCamera, pers_cam_1))?;
+        let near = read::<f32>(cam + offset_of!(CSCam, near_plane))?;
+        let far = read::<f32>(cam + offset_of!(CSCam, far_plane))?;
+        (near.is_finite() && far.is_finite() && (0.001..10.0).contains(&near)).then_some((near, far))
+    }
+
+    /// Round 26 (O3): the box the game keeps round character `chr`'s model as it is posed this frame
+    /// (CSChrModelIns -> CSFD4ModelItem -> CSFD4LocationGxModelMatricesAndAabbExporter.aabb), as (centre x, z, top y)
+    /// in the physics position's space. The box is world space when it holds the character's physics position `at`
+    /// (else, near the origin, model space: then the top is over `at`). None when it can't be read or is neither.
+    pub fn model_top(&self, chr: usize, at: [f32; 3]) -> Option<([f32; 3], bool)> {
+        use eldenring::cs::{CSChrModelIns, CSFD4LocationGxModelMatricesAndAabbExporter, CSFD4ModelItem, CSModelIns, ChrIns};
+        use std::mem::offset_of;
+        let model = read::<usize>(chr + offset_of!(ChrIns, chr_model_ins)).filter(|p| *p >= 0x10000)?;
+        let item = read::<usize>(model + offset_of!(CSChrModelIns, model_ins) + offset_of!(CSModelIns, model_item))
+            .filter(|p| *p >= 0x10000)?;
+        let exporter = read::<usize>(item + offset_of!(CSFD4ModelItem, location_aabb_exporter)).filter(|p| *p >= 0x10000)?;
+        let [min, max] = read::<[[f32; 4]; 2]>(exporter + offset_of!(CSFD4LocationGxModelMatricesAndAabbExporter, aabb))?;
+        if !min.iter().chain(&max).take(3).all(|v| v.is_finite()) || (0..3).any(|k| max[k] < min[k] || max[k] - min[k] > 60.0) {
+            return None;
+        }
+        let c = [(min[0] + max[0]) / 2.0, (min[2] + max[2]) / 2.0];
+        let holds = (0..3).all(|k| at[k] >= min[k] - 1.5 && at[k] <= max[k] + 1.5);
+        if holds && max[1] > at[1] + 0.3 {
+            return Some(([c[0], max[1], c[1]], true));
+        }
+        let local = c[0].abs() < 12.0 && c[1].abs() < 12.0 && min[1] > -3.0 && max[1] > 0.3 && max[1] < 40.0;
+        local.then_some(([at[0], at[1] + max[1], at[2]], false))
+    }
+
     /// The camera as CSCam holds it right now (see `camera`).
     fn camera_now(&self) -> Option<crate::markers::Camera> {
         use eldenring::cs::{CSCam, CSCamera, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
@@ -241,7 +307,10 @@ impl Game {
     /// physics position in the camera's space, hit capsule height in metres). Every character the game has loaded is
     /// looked at: the map's characters (WorldChrMan's open-field set and its per-map sets) and the by-distance list
     /// (which only holds some of them: round 8 found only the Lost Souls in it).
-    pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3], f32)> {
+    ///
+    /// Round 26 (O3): and the top of the model's posed box (Game::model_top: (x, top y, z) over which the plate
+    /// floats, following the character's pose), when it can be read.
+    pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3], f32, Option<[f32; 3]>)> {
         use eldenring::cs::{CSChrDataModule, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
         use std::mem::offset_of;
         let mut out = Vec::new();
@@ -270,7 +339,10 @@ impl Game {
             let Some([x, y, z, _]) = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position)) else { continue };
             let height = read::<f32>(physics + offset_of!(CSChrPhysicsModule, hit_height)).unwrap_or(0.0);
             if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6) {
-                out.push((model, [x, y, z], if height.is_finite() && (0.2..30.0).contains(&height) { height } else { 0.0 }));
+                let top = self.model_top(chr, [x, y, z]);
+                log_model_top(model, [x, y, z], top);
+                out.push((model, [x, y, z], if height.is_finite() && (0.2..30.0).contains(&height) { height } else { 0.0 },
+                          top.map(|t| t.0)));
             }
         }
         out
@@ -1117,6 +1189,25 @@ const _: () = {
         assert!(offset_of!(GameSettings, camera_auto_rotation) == opt::AUTO_ROTATION);
     }
 };
+
+/// Round 26 (O3): logs a model's box against its physics position, once per model and then every 20 s (proof the
+/// plate follows the pose: "tags: c4960 box top ...").
+fn log_model_top(model: u32, at: [f32; 3], top: Option<([f32; 3], bool)>) {
+    static LOGGED: std::sync::Mutex<Vec<(u32, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
+    let mut logged = LOGGED.lock().unwrap_or_else(|e| e.into_inner());
+    let now = std::time::Instant::now();
+    if logged.iter().any(|(m, t)| *m == model && now.duration_since(*t).as_secs() < 20) {
+        return;
+    }
+    logged.retain(|(m, _)| *m != model);
+    logged.push((model, now));
+    match top {
+        Some((t, world)) => tracing::info!(
+            "tags: c{model} model box top {:.2} m over its physics position, centre {:.2} m from it ({} space)",
+            t[1] - at[1], (t[0] - at[0]).hypot(t[2] - at[2]), if world { "world" } else { "model" }),
+        None => tracing::info!("tags: c{model} model box not readable; plate from the capsule / fixed height"),
+    }
+}
 
 /// Round 23 (H2): whether the player's `jump` is a world rebase: more than half of the characters seen both at the
 /// last sample (`old`) and now (`new`) moved by the same vector (within 2 m), and at least one was seen.

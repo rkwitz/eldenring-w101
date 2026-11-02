@@ -41,6 +41,8 @@ mod model;
 mod markers;
 #[path = "../../src/nameplates.rs"]
 mod nameplates;
+#[path = "../../src/occlusion.rs"]
+mod occlusion;
 #[path = "../../src/loadscreen.rs"]
 mod loadscreen;
 #[path = "../../src/teleport.rs"]

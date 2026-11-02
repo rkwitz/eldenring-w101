@@ -26,10 +26,15 @@ static SPELLS: std::sync::Mutex<[i32; 14]> = std::sync::Mutex::new([4010, 4200, 
 
 impl Game {
     /// A Lost Soul and Rattlebones up the street, a Dark Sprite nearer.
-    pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3], f32)> {
+    pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3], f32, Option<[f32; 3]>)> {
         [(4180, [-23.0, 93.5, -100.0], 1.6), (4960, [-5.0, 93.5, -86.0], 0.0), (3450, [-17.5, 94.0, -106.0], 1.4),
          (3500, [-21.0, 93.5, -104.0], 1.7)]
-            .into_iter().filter(|e| models.contains(&e.0)).collect()
+            .into_iter().filter(|e| models.contains(&e.0)).map(|(m, p, h)| (m, p, h, None)).collect()
+    }
+
+    /// Round 26 (O1): no camera planes in the preview.
+    pub fn clip_planes(&self) -> Option<(f32, f32)> {
+        None
     }
 
     /// The street NPCs the game "has loaded": all but Lady Oriel (who then takes the MSB-spot fallback), at their MSB

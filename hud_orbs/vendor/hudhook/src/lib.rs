@@ -134,6 +134,8 @@ use windows::Win32::System::LibraryLoader::FreeLibraryAndExitThread;
 use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_Uninitialize, MhHook, MH_STATUS};
 use crate::util::HookEjectionBarrier;
 
+/// w101_orbs (round 26, O1): the game's scene depth (see the module).
+pub mod depth;
 pub mod hooks;
 #[cfg(feature = "inject")]
 pub mod inject;

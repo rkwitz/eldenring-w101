@@ -27,6 +27,9 @@ pub struct Settings {
     /// Round 21 (quests Q2): how many frames old the camera is that the markers, name plates and Quest Helper use
     /// (game.rs tick_camera): 1 matches the picture Elden Ring shows at Present; 0 = as CSCam holds it now.
     pub marker_frames: usize,
+    /// Round 26 (O1): hide tags, markers and wisps behind what the game drew, from its own depth buffer
+    /// (occlusion.rs); 0 = the old CPU sight tests only.
+    pub depth_occlusion: bool,
 }
 
 /// `key = value` lines: left and bottom (extra gap from the screen's bottom-left corner, in Wizard101 pixels; 0 is
@@ -35,7 +38,8 @@ pub struct Settings {
 pub fn load_settings(path: &Path) -> Settings {
     let mut settings = Settings { left: 0.0, bottom: 0.0, scale: 1.0, debug: false, level: true, loadscreen: true,
                                   loadscreen_image: LOADSCREEN_IMAGE.into(), bookmap: true, nameplates: true,
-                                  scene_probe: false, scene_probe_nudge: false, live_preview: false, marker_frames: 1 };
+                                  scene_probe: false, scene_probe_nudge: false, live_preview: false, marker_frames: 1,
+                                  depth_occlusion: true };
     for line in std::fs::read_to_string(path).unwrap_or_default().lines() {
         let Some((key, value)) = line.split_once('=') else { continue };
         let value = value.trim();
@@ -53,6 +57,7 @@ pub fn load_settings(path: &Path) -> Settings {
             "scene_probe_nudge" => settings.scene_probe_nudge = value == "1",
             "live_preview" => settings.live_preview = value == "1",
             "marker_frames" => settings.marker_frames = value.parse::<usize>().map_or(settings.marker_frames, |v| v.min(4)),
+            "depth_occlusion" => settings.depth_occlusion = value != "0",
             _ => {}
         }
     }
