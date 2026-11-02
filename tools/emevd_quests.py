@@ -81,6 +81,12 @@ def if_button(group, button, entity):
     return _i(3, 24, "<bxxxiI", group, button, entity)
 
 
+def buttons(on_foot, riding, entity):
+    """Round 25 (M5): wait for either Action Button on `entity`: the usual one (greyed out on Torrent) or its twin
+    that also works on Torrent (w101_quests.TALK_NPC_BUTTON_RIDING / CAGE_BUTTON_RIDING)."""
+    return [if_button(-1, on_foot, entity), if_button(-1, riding, entity), if_group(0, 1, -1)]
+
+
 def if_dead(group, entity, dead):
     return _i(4, 0, "<bxxxIBBxxf", group, entity, dead, 0, 1.0)
 
@@ -195,7 +201,7 @@ def after_yes(npc, quest, entity):
 
 
 def npc_event(slug, entity):
-    body = [if_button(0, Q.TALK_NPC_BUTTON, entity)]
+    body = buttons(Q.TALK_NPC_BUTTON, Q.TALK_NPC_BUTTON_RIDING, entity)
     for q in Q.QUESTS:  # 0. (round 20) a quest this NPC starts by being talked to ("greet"): assigned, then block 1
         if q["assign"] and q["assign"][0] == "greet" and q["assign"][1] == slug:
             # Round 23 (Q2): never for a quest already assigned or complete.
@@ -297,7 +303,7 @@ def quest_events():
                        skip_if_flag(3, flag, 0),  # not opened yet: on to the wait
                        asset_enabled(entity, 0), asset_enabled(opened, 1), END,
                        wait_flag(Q.assigned("finding_out_why")),  # the Examine prompt only while the quest is on
-                       if_button(0, Q.CAGE_BUTTON, entity), set_flag(flag),
+                       *buttons(Q.CAGE_BUTTON, Q.CAGE_BUTTON_RIDING, entity), set_flag(flag),
                        oneshot_sfx(opened, Q.CAGE_OPEN_SFX), asset_enabled(entity, 0), asset_enabled(opened, 1), END])
     for slug, *_rest, entity in Q.CHARACTERS:  # npcs
         events.append(npc_event(slug, entity))

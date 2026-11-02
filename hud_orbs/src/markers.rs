@@ -54,12 +54,21 @@ const TILE: [i32; 2] = [42, 36];
 ///   head 1.91) -> plate 2.4, marker 3.0.
 /// - Trina: a small girl asleep on her side inside tall flowers: head bone 1.22, but the flowers reach 1.97 (mesh top
 ///   and highest bone Flower_B103) -> plate 2.18 over the flowers, marker 2.66 (plate + 0.48).
+/// Round 25 (M3, Ryan: "look at each one in its real pose: Enia's tag too low; Corhyn kneels so his tag goes lower").
+/// The c0000 NPCs don't stand: EMEVD plays 90100, which their NpcParam SpEffects (9845 / 9861 / 9828, animIdOffset
+/// 345 / 361 / 328 million) turn into a345_090100 (Bernahl sits, head bone 1.23 m), a361_090100 (Corhyn kneels, head
+/// 0.87) and a328_090100 (Edgar sits, head 1.04) (c0000_a9x.anibnd, first = last frame; round 24 measured the book's
+/// standing pose). Tops = head bone + the standing hair / blindfold gap (0.14 / 0.14 / 0.17). Enia (a000_000020, sat
+/// in her chair) holds her staff with cloth ribbons up to 3.10 m ([cloth]c2170_wand_07; head 1.96), so the round 24
+/// plate (2.4) sat inside it. Trina now rises from her flowers (emevd idle a000_030000: head 1.22, flowers 1.96):
+/// unchanged. Same rule: plate = top + 0.21, marker = max(1.53 x head bone, plate + 0.48).
+/// Round 25 (M7): Connelly and O'Ryan moved to their Wizard101 places (tools/w101_quests.CHARACTERS).
 pub const NPCS: [(&str, &str, u32, u32, [f32; 3], f32, f32); 5] = [
-    ("private_connelly", "Private Connelly", 1042360820, 0, [5.0029, 94.1828, -44.0778], 1.9, 2.38),
-    ("ceren_nightchant", "Ceren Nightchant", 1042360821, 0, [-84.8379, 94.4878, -18.4484], 1.9, 2.38),
-    ("olivia_dawnwillow", "Olivia Dawnwillow", 1042360822, 2170, [-65.8655, 92.8248, -7.9762], 2.4, 3.0),
+    ("private_connelly", "Private Connelly", 1042360820, 0, [-29.7745, 94.5018, -61.8978], 1.58, 2.06),
+    ("ceren_nightchant", "Ceren Nightchant", 1042360821, 0, [-84.8379, 94.4878, -18.4484], 1.22, 1.70),
+    ("olivia_dawnwillow", "Olivia Dawnwillow", 1042360822, 2170, [-65.8655, 92.8248, -7.9762], 3.31, 3.79),
     ("lady_oriel", "Lady Oriel", 1042360823, 5330, [-336.1025, 93.4988, 105.5051], 2.18, 2.66),
-    ("private_oryan", "Private O'Ryan", 1042360824, 0, [-160.8270, 93.4878, -54.0237], 1.93, 2.41),
+    ("private_oryan", "Private O'Ryan", 1042360824, 0, [-4.7818, 94.1998, -63.9439], 1.42, 1.90),
 ];
 /// Their models and entity IDs, for Game::entities.
 pub const MODELS: [u32; 3] = [0, 2170, 5330];

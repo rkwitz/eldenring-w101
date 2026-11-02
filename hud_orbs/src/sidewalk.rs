@@ -35,6 +35,8 @@ pub struct Sidewalk {
     off_road_since: Option<Instant>,
     /// What we last wanted the flag to be (logged on change).
     wanted: Option<bool>,
+    /// Round 25 M1: the quest reset at the Roundtable Hold.
+    reset: QuestReset,
 }
 
 impl Sidewalk {
@@ -76,7 +78,9 @@ impl Sidewalk {
     }
 
     /// Once a frame in play: `street` = the player's MSB position, `playing` = in the game with a player.
-    pub fn frame(&mut self, playing: bool, street: Option<[f32; 3]>) {
+    /// `position` = Game::position (chunk position, block, block origin), for the Roundtable Hold's quest reset.
+    pub fn frame(&mut self, playing: bool, street: Option<[f32; 3]>, position: Option<([f32; 3], i32, i32)>) {
+        self.reset.frame(playing, position.map(|p| p.1));
         if !playing || self.bounds.is_none() {
             return;
         }
@@ -106,4 +110,64 @@ fn inside(p: [f32; 2], t: &[[f32; 2]; 3]) -> bool {
     let d = [side(t[0], t[1]), side(t[1], t[2]), side(t[2], t[0])];
     let (lo, hi) = (d.iter().cloned().fold(f32::MAX, f32::min), d.iter().cloned().fold(f32::MIN, f32::max));
     !(lo < 0.0 && hi > 0.0)
+}
+
+/// Round 25 M1 (Ryan: "going to the Roundtable Hold resets ALL quest state so I can replay"). While the player is in
+/// m11_10 (the Roundtable Hold), every quest flag goes off once per visit: the quests' assigned / goal / ready /
+/// reward / complete flags, kill counters, Bone Cages, dialogue requests and answers, the intro (the same ranges as
+/// tools/w101_quests.QUEST_FLAG_RANGES) and QUEST_RESET, so m60_42_36_00's reset event (emevd_quests.reset_event)
+/// also runs again on the next Unicorn Way load. If the flag manager doesn't hold the quests' saved group in the
+/// Roundtable, the reset waits and runs as soon as it does (log `quest reset:`).
+#[derive(Default)]
+struct QuestReset {
+    /// The reset is owed (entered the Roundtable, not done yet).
+    pending: bool,
+    /// Done during this Roundtable visit.
+    done: bool,
+}
+
+/// m11_10_00_00 as Game::position's block id (area << 24 | block << 16 | region << 8 | index).
+const ROUNDTABLE: u32 = 0x0B0A_0000;
+/// (first, last) inclusive: w101_quests.QUEST_FLAG_RANGES plus QUEST_RESET (1042360691).
+const QUEST_FLAG_RANGES: [(u32, u32); 6] = [(1042360300, 1042360459), (1042362400, 1042362499),
+    (1042360500, 1042360543), (1042362600, 1042362621), (1042360689, 1042360689), (1042360691, 1042360691)];
+
+impl QuestReset {
+    fn frame(&mut self, playing: bool, block: Option<i32>) {
+        if !playing {
+            return;
+        }
+        let in_roundtable = block.is_some_and(|b| (b as u32) & 0xFFFF_0000 == ROUNDTABLE);
+        if in_roundtable && !self.done && !self.pending {
+            self.pending = true;
+            tracing::info!("quest reset: in the Roundtable Hold (block {:#010x}); clearing every quest flag",
+                           block.unwrap_or(0));
+        }
+        if !in_roundtable {
+            self.done = false;
+        }
+        if !self.pending {
+            return;
+        }
+        let group = QUEST_FLAG_RANGES[0].0 / 1000;
+        let held = crate::game::flag_group_exists(group);
+        if held != Some(true) {
+            return; // retried every frame until the manager holds the saved quest group
+        }
+        let mut cleared = 0;
+        for (first, last) in QUEST_FLAG_RANGES {
+            for f in first..=last {
+                if crate::game::event_flag(f) == Some(true) {
+                    crate::game::set_event_flag(f, false);
+                    cleared += 1;
+                }
+            }
+        }
+        let left = QUEST_FLAG_RANGES.iter().flat_map(|&(a, b)| a..=b)
+            .filter(|f| crate::game::event_flag(*f) == Some(true)).count();
+        tracing::info!("quest reset: {cleared} quest flags cleared ({left} still on; {})",
+                       if in_roundtable { "in the Roundtable Hold" } else { "after leaving the Roundtable Hold" });
+        self.pending = false;
+        self.done = in_roundtable;
+    }
 }

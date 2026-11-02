@@ -111,7 +111,11 @@ EDGAR = (523110000, 523110000, 23110)
 ENIA = (21700000, 21700000, -1)
 TRINA = (53300000, 53300000, -1)
 CHARACTERS = [
-    ("private_connelly", "Private Connelly", "street", (26.543, 0.184, 22.200), 55.86, "c0000",
+    # Round 25 (M7, Ryan: "Connelly stands where Diego the Duel Master is in W101"): the zone's NPC04 instance
+    # (26.543, 22.200, yaw 55.86; rounds 15-24) stands by the Arena exit (24.6, 16.5), the Duelmaster's place; the
+    # NPC06 instance (-12.534, 22.119, yaw -55.16; WC_Unicorn gamedata.bin, W101 z 30.3) is the mirror spot on the
+    # other side of the Commons gate. The two templates' places are swapped to match the game Ryan plays.
+    ("private_connelly", "Private Connelly", "street", (-12.534, 0.503, 22.119), -55.16, "c0000",
      *BERNAHL, 1042360820),
     ("ceren_nightchant", "Ceren Nightchant", "street", (-41.857, 0.489, 85.837), -24.23, "c0000",
      *CORHYN, 1042360821),
@@ -122,7 +126,10 @@ CHARACTERS = [
     # atan2(-dx, -dy) = -0.15. Rounds 15-21 used the Lady Oriel cinematic camera's spot and yaw (2.2 m short, backwards).
     ("lady_oriel", "Lady Oriel", "garden", (5.975, -0.500, 3.137), -0.15, "c5330",
      *TRINA, 1042360823),
-    ("private_oryan", "Private O'Ryan", "street", (-125.714, -0.511, 88.655), -26.27, "c0000",
+    # Round 25 (M7): Wizard101 has O'Ryan on the street only as WC-ST01-NPC05-B (8.803, 8.945, yaw 31.09, by the
+    # Commons gate; NPC05 is inside his house H1 until Saving Private O'Ryan, which is not in this quest line).
+    # Rounds 15-24 stood him at H1's door (-125.714, 88.655) for that removed quest.
+    ("private_oryan", "Private O'Ryan", "street", (8.803, 0.201, 8.945), 31.09, "c0000",
      *EDGAR, 1042360824),
 ]
 # Round 15 characters taken out in round 16 (F1): (slug, part name, model). msb_add_npcs.py deletes these parts.
@@ -138,11 +145,18 @@ REMOVED = [
 #   c2180 Melina: 0, her standing idle (her row has no animation offset), looped.
 # (animation, loop) by model
 #   c2170 Enia, c5330 Trina (round 24): 0, their own default idle, looped, as Melina.
-IDLE = {"c0000": (90100, 0), "c2180": (0, 1), "c2170": (0, 1), "c5330": (0, 1)}
+#   c5330 Trina (round 25 M4, Ryan: "a purple glob on the ground; use her risen state"): c5330 has no a000_000000;
+#     her lying idle a000_030001 keeps her head 0.06 m up, inside the flower mound, while a000_030000 (6 s, first and
+#     last frame alike, so it loops) has her risen out of the flowers, head bone 1.22 m (as her bind pose). Looped.
+IDLE = {"c0000": (90100, 0), "c2180": (0, 1), "c2170": (0, 1), "c5330": (30000, 1)}
 # Round 21 (Q7): characters whose AI is switched off so they stay on their MSB spot (Lady Oriel ran around the maze).
 STAND_STILL = {"lady_oriel"}
 CHARACTER_PART_ID = 9100  # part header 0x08 / name suffix of the first character (<model>_9100..)
 TALK_NPC_BUTTON = 6000  # ActionButtonParam "Talk" (category 4, radius 2.5 m), as vanilla m60_51_36 1051360734 on a character
+# Round 25 (M5, Ryan: talk to NPCs while on Torrent): 6000 is greyed out on Torrent (isGrayoutForRide 1); every
+# category-4 Talk row is. Vanilla row 6001 is the only "Talk" (text 7000) usable while riding (category 11,
+# isGrayoutForRide 0, radius 1.2 m, height -0.25..+0.75 m, front 90 deg). The NPC events take either button.
+TALK_NPC_BUTTON_RIDING = 6001
 # Round 17: the HUD's answer to a dialogue request (DIALOGUE_FLAG + k): OK = the last page was read / the quest was
 # accepted; CANCEL = closed early / the quest was declined (rounds 15-16: ER's 2007[10] OK / back buttons).
 DIALOG_OK, DIALOG_CANCEL = 1042362620, 1042362621
@@ -275,6 +289,10 @@ CAGE_OPEN_ENTITY = 4  # the open cage of cage c has entity CAGES[c] + 4 (1042361
 # ~0.7 m from cage 0 (log 02:50:55, MSB rounded to whole metres) and got nothing. Vanilla row 9260 is the same
 # button (category 5 "Examine", text 1000, height -0.5..+1.0 m, any angle) with radius 1.8 m.
 CAGE_BUTTON = 9260
+# Round 25 (M5, Ryan: open Bone Cages while on Torrent): 9260 (and 9000) are greyed out on Torrent
+# (isGrayoutForRide 1). Vanilla row 9300 is the same Examine (category 5, text 1000) usable while riding
+# (isGrayoutForRide 0), radius 1.5 m, height -0.25..+1.25 m. The cage events take either button.
+CAGE_BUTTON_RIDING = 9300
 CAGE_OPEN_SFX = 1060  # oneshot SFX on the open cage (vanilla common 9005810 plays it as it enables an asset)
 
 # Goal regions (spheres): (slug, frame, position, radius, entity id, region id). Frames as msb_add_interiors.py.

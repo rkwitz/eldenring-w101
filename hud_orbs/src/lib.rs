@@ -356,7 +356,7 @@ impl ImguiRenderLoop for Orbs {
         // grace warp in Ryan's 00:30 log), then the block origin.
         let street = game.and_then(questhelper::player_msb_now).or_else(|| position.and_then(questhelper::player_msb));
         self.music.frame(game, stats, position, street, self.focused);
-        self.sidewalk.frame(game.is_some() && stats.is_some(), street);
+        self.sidewalk.frame(game.is_some() && stats.is_some(), street, position);
         let settings_path = self.folder.join("w101_orbs.ini");
         let mut cx = book::Context {
             game,
