@@ -29,7 +29,7 @@ Events, in id order (all flags in w101_quests' docstring):
             2. a side quest this NPC hands out whose prerequisite is on and which is not assigned: the offer
                conversation; the quest is assigned only when it is accepted (round 17)
             3. a quest of this NPC's that is assigned and not complete and has "underway" lines: that conversation
-            4. the NPC's idle conversation
+            4. the NPC's idle conversation (round 23: its "<quest>|done" line once that quest is complete)
   idle    (round 16) one per street character: one frame after every load, ForceAnimation its idle
           (w101_quests.IDLE), then END.
 Conversations (round 17, F2/F3) are shown by the HUD DLL in Wizard101's own dialogue box, not ER's 2007[10]: a
@@ -182,7 +182,8 @@ def prereq_flag(spec):
 
 def current(q, i):
     """(flag, state) conditions of goal i of quest q being current."""
-    return ([(Q.assigned(q["slug"]), 1), (Q.goal_flag(q["slug"], i), 0)]
+    # Round 23: never once the quest is complete (as markers.rs's "?").
+    return ([(Q.assigned(q["slug"]), 1), (Q.complete(q["slug"]), 0), (Q.goal_flag(q["slug"], i), 0)]
             + [(Q.goal_flag(q["slug"], j), 1) for j in Q.after_of(q, i)])
 
 
@@ -197,7 +198,9 @@ def npc_event(slug, entity):
     body = [if_button(0, Q.TALK_NPC_BUTTON, entity)]
     for q in Q.QUESTS:  # 0. (round 20) a quest this NPC starts by being talked to ("greet"): assigned, then block 1
         if q["assign"] and q["assign"][0] == "greet" and q["assign"][1] == slug:
-            body += block([(Q.assigned(q["slug"]), 0)], assign(q["slug"]))  # no RESTART: falls into its talk goal
+            # Round 23 (Q2): never for a quest already assigned or complete.
+            body += block([(Q.assigned(q["slug"]), 0), (Q.complete(q["slug"]), 0)],
+                          assign(q["slug"]))  # no RESTART: falls into its talk goal
     for q in Q.QUESTS:  # 1. talk goals
         for i, g in enumerate(q["goals"], 1):
             if g["type"] == "talk" and g["target"] == slug:
@@ -209,7 +212,8 @@ def npc_event(slug, entity):
                 body += block(current(q, i), goal_done(q, i) + talk(key, entity) + accepted + [RESTART])
     for q in Q.QUESTS:  # 2. side quests offered by talking
         if q["assign"] and q["assign"][0] == "talk" and q["assign"][1] == slug:
-            conditions = [(Q.assigned(q["slug"]), 0)]
+            # Round 23 (Q2): an offer never comes for a quest the player has (assigned) or finished (complete).
+            conditions = [(Q.assigned(q["slug"]), 0), (Q.complete(q["slug"]), 0)]
             if q["assign"][2]:
                 conditions.append((prereq_flag(q["assign"][2]), 1))
             # Round 17 (F3): assigned only once the offer is accepted (talk() restarts on decline / walking off).
@@ -218,8 +222,20 @@ def npc_event(slug, entity):
     for q in Q.QUESTS:  # 3. underway
         key = f"{slug}|{q['slug']}|underway"
         if DIALOGUE.get(key):
-            body += block([(Q.assigned(q["slug"]), 1), (Q.complete(q["slug"]), 0)], talk(key, entity) + [RESTART])
-    return body + talk(f"{slug}|idle", entity) + [RESTART]  # 4. idle
+            conditions = [(Q.assigned(q["slug"]), 1), (Q.complete(q["slug"]), 0)]
+            # Round 23 (Q1): only until this NPC's last talk goal of the quest is done (Connelly's "drive away some of
+            # these Lost Souls" no longer comes after he was told they're beaten and sends the player to Ceren).
+            mine = [i for i, g in enumerate(q["goals"], 1) if g["type"] == "talk" and g["target"] == slug]
+            if mine:
+                conditions.append((Q.goal_flag(q["slug"], mine[-1]), 0))
+            body += block(conditions, talk(key, entity) + [RESTART])
+    # 4. idle. Round 23 (Q1): once one of its IDLE_DONE quests is complete, the latest one's "done" line (so Ceren
+    # no longer opens with her Skeleton Crew pitch after that quest); before, "<npc>|idle".
+    for quest in reversed(Q.IDLE_DONE.get(slug, [])):
+        key = f"{slug}|{quest}|done"
+        if DIALOGUE.get(key):
+            body += block([(Q.complete(quest), 1)], talk(key, entity) + [RESTART])
+    return body + talk(f"{slug}|idle", entity) + [RESTART]
 
 
 def quest_events():

@@ -168,7 +168,7 @@ pub enum Marker {
 
 /// Every flag the markers read.
 pub fn flags() -> Vec<u32> {
-    let mut out: Vec<u32> = OFFERS.iter().flat_map(|o| [o.1, o.2]).collect();
+    let mut out: Vec<u32> = OFFERS.iter().flat_map(|o| [o.1, o.1 + 9, o.2]).collect();
     for (_, assigned, complete, goal, after) in TALKS.iter().copied() {
         out.extend([assigned, complete, goal]);
         out.extend(after.iter().copied());
@@ -179,14 +179,22 @@ pub fn flags() -> Vec<u32> {
 
 /// The marker over `npc`, from the quest flags: "!" when one of its quests is available and not yet assigned, else
 /// "?" when a goal to talk to it is current (its quest in progress, the goal not done, the goals before it done).
+/// Round 23 (Q1/Q2): in the order the NPC's talk event checks them (emevd_quests.npc_event): Unicorn Way's greet,
+/// then a current talk goal ("?"), then an offer, which needs the quest neither assigned nor complete (+9).
 pub fn marker(npc: &str, flag: &dyn Fn(u32) -> bool) -> Option<Marker> {
-    if OFFERS.iter().any(|(giver, assigned, after)| *giver == npc && flag(*after) && !flag(*assigned)) {
-        return Some(Marker::Offer);
+    let offer = |(giver, assigned, after): &(&str, u32, u32)| {
+        *giver == npc && flag(*after) && !flag(*assigned) && !flag(*assigned + 9)
+    };
+    if OFFERS.first().is_some_and(offer) {
+        return Some(Marker::Offer); // greet: Connelly takes Unicorn Way
     }
     let talk = TALKS.iter().any(|(who, assigned, complete, goal, after)| {
         *who == npc && flag(*assigned) && !flag(*complete) && !flag(*goal) && after.iter().all(|a| flag(*a))
     });
-    talk.then_some(Marker::Talk)
+    if talk {
+        return Some(Marker::Talk);
+    }
+    OFFERS.iter().any(offer).then_some(Marker::Offer)
 }
 
 /// A map block's tile (x, z) in 256 m units and its scale, or None outside the open world (area 60).

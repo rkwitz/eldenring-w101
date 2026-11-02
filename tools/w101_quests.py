@@ -204,6 +204,18 @@ def dialogue_card(key):
     return None
 
 
+# Round 23 (Q1, Ryan): Ceren's idle line was her Skeleton Crew pitch ("Skeletal Pirates? ... NO THANK YOU"), so after
+# finishing Skeleton Crew her talk sounded like the quest being offered again without a "!". Each character's idle now
+# follows the line: once one of these quests is complete (the last listed first) it says that quest's "done" line
+# (w101_npc_dialogue.py: client lines from after the quest) instead of "<npc>|idle", which is only for before.
+IDLE_DONE = {
+    "ceren_nightchant": ["skeleton_crew", "sinister_skeleton"],
+    "olivia_dawnwillow": ["pesky_pirates"],
+    "lady_oriel": ["finding_out_why"],
+    "private_oryan": ["saving_private_oryan"],
+}
+
+
 def dialogue_keys():
     """{dialogue key: request flag}, in a fixed order that doesn't depend on the dialogue text: the intros of quests
     handed out on arrival (the giver's offer, then what follows it: Gamma's pointer), then per character its talk
@@ -225,6 +237,9 @@ def dialogue_keys():
         keys += [f"{slug}|{q['slug']}|underway" for q in QUESTS
                  if q["giver"] == slug or any(t[0] is q for t in talks)]
         keys.append(f"{slug}|idle")
+    # Round 23 (Q1): what a character says when it has nothing for the player once one of its quests is complete
+    # (IDLE_DONE), appended so every older request flag keeps its number.
+    keys += [f"{slug}|{quest}|done" for slug, quests in IDLE_DONE.items() for quest in quests]
     assert len(keys) <= 100 and len(set(keys)) == len(keys)
     return {key: DIALOGUE_FLAG + k for k, key in enumerate(keys)}
 

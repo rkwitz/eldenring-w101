@@ -61,7 +61,11 @@ CONVERSATIONS = {
     "ceren_nightchant|sinister_skeleton|accepted": lines(SS, 10),
     "ceren_nightchant|sinister_skeleton|underway": lines(SS, 0),
     "ceren_nightchant|sinister_skeleton|goal4": lines(SS, 7) + lines(GT, 1, 2, 3),
-    "ceren_nightchant|idle": lines(SC, 15, 16),
+    # Round 23 (Q1): her idle was SC 15-16, the first pages of the Skeleton Crew offer, so after Skeleton Crew it read
+    # as that offer again; before the quest she greets the player (GH 7), after it her lines from after each quest.
+    "ceren_nightchant|idle": lines(GH, 7),
+    "ceren_nightchant|skeleton_crew|done": lines(SC, 12, 13),
+    "ceren_nightchant|sinister_skeleton|done": lines(GT, 1, 2),
     # Olivia Dawnwillow (her Then-Faire stands in for The Power is Ours)
     "olivia_dawnwillow|pesky_pirates|offer": lines(PP, 4, 6),
     "olivia_dawnwillow|pesky_pirates|accepted": lines(PP, 1, 3, **GAMMA),
@@ -70,6 +74,7 @@ CONVERSATIONS = {
     "olivia_dawnwillow|fear_of_fire|offer": lines(FTW, 1, 2),
     "olivia_dawnwillow|fear_of_fire|goal3": lines(FOF, 31, 32, 33),
     "olivia_dawnwillow|idle": lines(PP, 0),
+    "olivia_dawnwillow|pesky_pirates|done": lines(PP, 14),
     # Lady Oriel in the Hedge Maze
     "lady_oriel|monsters_and_mazes|goal2": lines(MM, 5, 7) + lines(FOW, 1) + lines(MM, 3) + lines(FOW, 3, 4),
     "lady_oriel|finding_out_why|offer": lines(FOW, 1, 3, 4),
@@ -80,11 +85,13 @@ CONVERSATIONS = {
     "lady_oriel|who_could_it_be_now|accepted": lines(WC, 10),
     "lady_oriel|who_could_it_be_now|underway": lines(WC, 0),
     "lady_oriel|idle": lines(MM, 5),
+    "lady_oriel|finding_out_why|done": lines(FOW, 10),
     # Private O'Ryan, hiding in house 1
     "private_oryan|saving_private_oryan|goal2": lines(SPO, 15, 16, 17, 18),
     "private_oryan|saving_private_oryan|underway": lines(SPO, 18),
     "private_oryan|saving_private_oryan|goal5": lines(SPO, 4, 5),
     "private_oryan|idle": lines(SPO, 17),
+    "private_oryan|saving_private_oryan|done": lines(SPO, 5),
 }
 
 
