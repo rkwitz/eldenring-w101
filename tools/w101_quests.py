@@ -70,7 +70,7 @@ NPCS = [  # (slug, frame, position, facing degrees, asset model, entity id)
     ("private_connelly", "street", (26.543, -0.016, 22.2), 180.0, GIVER_MODEL, 1042361870),  # W101 NPC04
     ("ceren_nightchant", "street", (-41.857, 0.289, 85.837), 180.0, GIVER_MODEL, 1042361871),  # NPC01
     ("olivia_dawnwillow", "street", (-20.198, -1.374, 86.55), 180.0, GIVER_MODEL, 1042361872),  # NPC03
-    ("lady_oriel", "garden", (5.974, -0.7, 0.94), 180.0, GIVER_MODEL, 1042361873),  # NPC02, on the sunken centre floor
+    ("lady_oriel", "garden", (5.975, -0.7, 3.137), 180.0, GIVER_MODEL, 1042361873),  # NPC02, on the sunken centre floor
     ("private_oryan", "street", (-125.714, -0.711, 88.655), 90.0, GIVER_MODEL, 1042361874),  # at house H1's door
 ]
 OLD_GIVER_MODELS = ["AEG217_220", "AEG110_324", "AEG024_169", "AEG099_010", "AEG217_220"]  # same order as NPCS
@@ -105,7 +105,10 @@ CHARACTERS = [
      HUMAN_THINK, HUMAN_NPC, 6164, 1042360821),
     ("olivia_dawnwillow", "Olivia Dawnwillow", "street", (-20.198, -1.174, 86.550), -177.30, "c0000",
      HUMAN_THINK, HUMAN_NPC, 23201, 1042360822),
-    ("lady_oriel", "Lady Oriel", "garden", (5.974, -0.500, 0.940), 179.62, "c2180",
+    # Round 22 (P1): on the centre of the battle circle (FX_MinigameSigilGlow (597.5, 313.7, -70.0); the sunken floor's
+    # bounding centre in the classic maze OBJ is (5.98, 3.09)), facing the garden's exit door (6.074, -35.75): yaw
+    # atan2(-dx, -dy) = -0.15. Rounds 15-21 used the Lady Oriel cinematic camera's spot and yaw (2.2 m short, backwards).
+    ("lady_oriel", "Lady Oriel", "garden", (5.975, -0.500, 3.137), -0.15, "c2180",
      21800000, 21800000, -1, 1042360823),
     ("private_oryan", "Private O'Ryan", "street", (-125.714, -0.511, 88.655), -26.27, "c0000",
      HUMAN_THINK, HUMAN_NPC, 6194, 1042360824),
@@ -225,20 +228,28 @@ def dialogue_keys():
     assert len(keys) <= 100 and len(set(keys)) == len(keys)
     return {key: DIALOGUE_FLAG + k for k, key in enumerate(keys)}
 
-# The four quest Bone Cages (W101 WC-FairyCage02..05), placeholder cage asset, entity ids. The cage events keep them
-# disabled (not drawn, no collision) except while Finding Out Why's cage goal is current.
-CAGE_MODEL = "AEG270_120"  # "Round metal prison cage"
+# The four quest Bone Cages (W101 WC-FairyCage03, 04, 05, 02: street FLVER = W101 (x, z, y) * 0.01, yaw = the object's
+# z rotation in degrees), entity ids. Round 22 (P2): Wizard101's own cage (tools/w101_bone_cage.py: a street lamp with
+# the bone cage hanging off its arm) built by blender_build_cage.py as CAGE_MODEL (closed) and CAGE_OPEN_MODEL (door
+# open), both placed at every spot; the cage events show the closed one until the cage is opened during Finding Out
+# Why, then the open one. Rounds 13-21 used vanilla AEG270_120 (OLD_CAGE_MODEL), hidden unless the quest was active,
+# and had the 4th cage at (-22.8, 82.6) by Olivia instead of WC-FairyCage02.
+OLD_CAGE_MODEL = "AEG270_120"  # "Round metal prison cage"
+CAGE_MODEL, CAGE_OPEN_MODEL = "AEG030_558", "AEG030_559"
 CAGES = [
-    ((-237.463, -0.999, 141.741), 1042361880),
-    ((-219.187, -0.999, 142.762), 1042361881),
-    ((-259.552, 0.0, 187.903), 1042361882),
-    ((-22.839, -0.828, 82.569), 1042361883),
+    ((-237.463, -0.999, 141.741), 1042361880),  # WC-FairyCage03
+    ((-219.187, -0.999, 142.762), 1042361881),  # WC-FairyCage04
+    ((-259.552, 0.0, 187.903), 1042361882),  # WC-FairyCage05
+    ((-259.663, 0.0, 202.845), 1042361883),  # WC-FairyCage02
 ]
+CAGE_YAWS = [-80.21, 68.58, -121.18, -62.40]  # W101 z rotation -1.400, 1.197, -2.115, -1.089 rad
+CAGE_OPEN_ENTITY = 4  # the open cage of cage c has entity CAGES[c] + 4 (1042361884-887)
+CAGE_OPEN_SFX = 1060  # oneshot SFX on the open cage (vanilla common 9005810 plays it as it enables an asset)
 
 # Goal regions (spheres): (slug, frame, position, radius, entity id, region id). Frames as msb_add_interiors.py.
 REGIONS = [
     ("street_start", "street", (26.543, 1.0, 22.2), 12.0, 1042362830, 9220),  # around Connelly at the entrance
-    ("hedge_maze", "garden", (5.974, 0.3, 0.94), 14.0, 1042362831, 9221),  # around Lady Oriel
+    ("hedge_maze", "garden", (5.975, 0.3, 3.137), 14.0, 1042362831, 9221),  # around Lady Oriel (round 22: circle centre)
     ("T1", "AEG030_519_9001", (-0.085, 1.0, -8.86), 4.0, 1042362832, 9222),  # Blackhope room arrival
     ("H4", "AEG030_557_9000", (0.202, 1.0, 8.405), 4.0, 1042362833, 9223),  # Thief's House arrival
     ("near_ceren", "street", (-41.857, 1.0, 85.837), 15.0, 1042362834, 9224),
@@ -252,8 +263,11 @@ def quest_assets():
     footprint_clear.py keeps these part names (it would otherwise sink them 1000 m with the vanilla clutter)."""
     out = [(f"{model}_{9000 + k}", frame, local, facing, model, entity)
            for k, (_slug, frame, local, facing, model, entity) in enumerate(NPCS)]
-    out += [(f"{CAGE_MODEL}_{9100 + c}", "street", local, 0.0, CAGE_MODEL, entity)
-            for c, (local, entity) in enumerate(CAGES)]
+    # facing f turns an asset to (frame rotation + f); the model's FLVER is Wizard101's model frame (x, z_up, y), so
+    # f = the W101 yaw turns it as Wizard101 does (the same r = yaw + a as msb_add_npcs.py's characters)
+    for model, extra in ((CAGE_MODEL, 0), (CAGE_OPEN_MODEL, CAGE_OPEN_ENTITY)):
+        out += [(f"{model}_{9100 + c}", "street", local, yaw, model, entity + extra)
+                for c, ((local, entity), yaw) in enumerate(zip(CAGES, CAGE_YAWS, strict=True))]
     return out
 REGION_ENTITY["T2"] = 1042362808  # msb_add_boss.py: W101_Rattlebones_arena, sphere over the whole room
 

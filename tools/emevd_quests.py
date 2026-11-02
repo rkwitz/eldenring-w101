@@ -16,8 +16,9 @@ Events, in id order (all flags in w101_quests' docstring):
           kind (2000[0] slot k, as vanilla's per-enemy events): END if the goal is done; wait for the goal to be
           current and the enemy alive, then for it to die; count it (2003[31], 4 bits) unless the goal finished
           meanwhile; END (the rest restart watches the respawned enemy again).
-  cage    one per Bone Cage: disabled (not drawn, no collision) at load; if already opened, END; else wait for
-          Finding Out Why, enable it, wait for the "Examine" press, set the cage flag, disable it again.
+  cage    one per Bone Cage (round 22): closed cage shown, open twin hidden; if already opened, swap them and END;
+          else wait for Finding Out Why, wait for the "Examine" press on the closed cage, set the cage flag, SFX on
+          the open twin, swap them.
   npc     (round 15) one per street character (w101_quests.CHARACTERS, placed by msb_add_npcs.py): wait for ER's
           own "Talk" press (ActionButtonParam 6000) on the character, then the first block whose flags match, each
           ending in RESTART so the next press is handled the same way:
@@ -110,6 +111,11 @@ def increment(base, bits=4, maximum=15):
 
 def asset_enabled(entity, state):
     return _i(2005, 3, "<IBxxx", entity, state)
+
+
+def oneshot_sfx(asset, sfx, dummy_poly=-1):
+    """2006[03] SpawnOneshotSFX on an asset (target type 0), as vanilla common 9005810."""
+    return _i(2006, 3, "<iIii", 0, asset, dummy_poly, sfx)
 
 
 def force_animation(entity, animation, loop=0):
@@ -268,10 +274,15 @@ def quest_events():
             events.append(body + goal_done(q, i) + [END])
     events += kills
     for c, (_local, entity) in enumerate(Q.CAGES):  # cages
-        flag = Q.CAGE_FLAG + c
-        events.append([asset_enabled(entity, 0), end_if_flag(flag), wait_flag(Q.assigned("finding_out_why")),
-                       asset_enabled(entity, 1), if_button(0, Q.TALK_BUTTON, entity), set_flag(flag),
-                       asset_enabled(entity, 0), END])
+        # Round 22 (P2): the cage stands on the street from the start (Ryan saw none: rounds 13-21 hid it until Finding
+        # Out Why); opened = its open twin (door swung, entity + CAGE_OPEN_ENTITY) instead, with a burst of SFX.
+        flag, opened = Q.CAGE_FLAG + c, entity + Q.CAGE_OPEN_ENTITY
+        events.append([asset_enabled(entity, 1), asset_enabled(opened, 0),
+                       skip_if_flag(3, flag, 0),  # not opened yet: on to the wait
+                       asset_enabled(entity, 0), asset_enabled(opened, 1), END,
+                       wait_flag(Q.assigned("finding_out_why")),  # the Examine prompt only while the quest is on
+                       if_button(0, Q.TALK_BUTTON, entity), set_flag(flag),
+                       oneshot_sfx(opened, Q.CAGE_OPEN_SFX), asset_enabled(entity, 0), asset_enabled(opened, 1), END])
     for slug, *_rest, entity in Q.CHARACTERS:  # npcs
         events.append(npc_event(slug, entity))
     for _slug, _title, _frame, _local, _yaw, model, *_rows, entity in Q.CHARACTERS:  # idles (round 16 F3)

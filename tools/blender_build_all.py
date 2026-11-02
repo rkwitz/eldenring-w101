@@ -9,6 +9,7 @@ from its file on disk, so an old copy open in Blender's text editor can't be run
   room       blender_build_room.py        Rattlebones' and Lady Blackhope's tower room (aeg030_519)
   garden     blender_build_garden.py      hedge-maze garden (aeg030_555) and the glowing quest window (aeg030_529)
   interiors  blender_build_interiors.py   Fear of Fire's house (aeg030_557)
+  cage       blender_build_cage.py        Wizard101's Bone Cage, closed and open (aeg030_558 / 559)
 
 SKIP leaves steps out (e.g. SKIP = {"street", "footprint"} when only a room changed). A failing step is reported and
 the rest still run. Map placement, events and the navmesh are not rebuilt here; they are already in the project.
@@ -30,6 +31,7 @@ STEPS = [
     ("room", "blender_build_room.py"),
     ("garden", "blender_build_garden.py"),
     ("interiors", "blender_build_interiors.py"),
+    ("cage", "blender_build_cage.py"),
 ]
 
 results = []

@@ -47,7 +47,7 @@ pub const NPCS: [(&str, &str, u32, u32, [f32; 3], f32, f32); 5] = [
     ("private_connelly", "Private Connelly", 1042360820, 0, [5.0029, 94.1828, -44.0778], 1.9, 2.38),
     ("ceren_nightchant", "Ceren Nightchant", 1042360821, 0, [-84.8379, 94.4878, -18.4484], 1.9, 2.38),
     ("olivia_dawnwillow", "Olivia Dawnwillow", 1042360822, 0, [-65.8655, 92.8248, -7.9762], 1.85, 2.3),
-    ("lady_oriel", "Lady Oriel", 1042360823, 2180, [-335.1056, 93.4988, 103.5473], 1.9, 2.3),
+    ("lady_oriel", "Lady Oriel", 1042360823, 2180, [-336.1025, 93.4988, 105.5051], 1.9, 2.3),
     ("private_oryan", "Private O'Ryan", 1042360824, 0, [-160.8270, 93.4878, -54.0237], 1.9, 2.38),
 ];
 /// Their models and entity IDs, for Game::entities.
