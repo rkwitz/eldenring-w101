@@ -410,6 +410,11 @@ fn main() {
         ("25g_prompt_talk_pad", pages::Tab::Character, 0, [0.0, 0.0], "prompt:lady_oriel|1"),
         ("25h_prompt_examine_cage", pages::Tab::Character, 0, [0.0, 0.0], "prompt:cage|0"),
         ("25i_prompt_connelly", pages::Tab::Character, 0, [0.0, 0.0], "prompt:private_connelly|0"),
+        // Round 26 (N5/N6): own glyphs: the key cap without the black outline, Xbox face buttons, a shoulder button.
+        ("26a_prompt_key_e", pages::Tab::Character, 0, [0.0, 0.0], "prompt:ceren_nightchant|0"),
+        ("26b_prompt_pad_y", pages::Tab::Character, 0, [0.0, 0.0], "prompt:private_connelly|Y"),
+        ("26c_prompt_pad_a", pages::Tab::Character, 0, [0.0, 0.0], "prompt:diego|A"),
+        ("26d_prompt_pad_rb", pages::Tab::Character, 0, [0.0, 0.0], "prompt:ugo_kalahad|RB"),
         ("23l_popup_goal_update", pages::Tab::Character, 0, [0.0, 0.0], "popup:0.5|Goal Update: Defeat Lost Souls 1 of 2"),
         ("23m_popup_goal_complete", pages::Tab::Character, 0, [0.0, 0.0], "popup:1.0|Goal Complete: Defeat Lost Souls"),
         ("23n_popup_quest_complete_fading", pages::Tab::Character, 0, [0.0, 0.0], "popup:3.5|Quest Complete: Ghost Hunters"),
@@ -482,7 +487,11 @@ fn main() {
                 Some(n) => prompt::Target { name: n.1.into(), portrait: format!("{}/{}.png", markers::ER_PORTRAITS, n.0), examine: false },
                 None => prompt::Target { name: "Bone Cage".into(), portrait: "GUI/QuestButtons/Art_HD_WC_BoneCage.png".into(), examine: true },
             };
-            book.preview_prompt(Some(target), pad == "1");
+            // Round 26 (N5/N6): "<pad 0/1>" or the pad button's label (Y, A, LB ...).
+            if pad != "0" && pad != "1" {
+                book.prompt.set_pad_button(pad);
+            }
+            book.preview_prompt(Some(target), pad != "0");
         } else {
             book.preview_prompt(None, false);
         }

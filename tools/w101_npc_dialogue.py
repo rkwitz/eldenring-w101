@@ -23,7 +23,8 @@ has one), and the intro keys (unused since round 20) none. VOICE maps the classi
 their lines; the optional third argument writes book\voice.tsv (key, 0-based page, file) for every voiced page.
 
 Usage: python -I w101_npc_dialogue.py [--updated] wizqst.json npc_dialogue.json [voice.tsv]
-  wizqst.json: {table: [[key, comment, value], ...]} with the tables used (w101_lang.py dump <Root.wad> out 'WizQst')
+  wizqst.json: {table: [[key, comment, value], ...]} with the tables used (w101_lang.py dump <Root.wad> out
+  'WizQst|WizardShops')
 """
 import json
 import re
@@ -99,6 +100,7 @@ UPDATED_CONVERSATIONS = {
 # O'Ryan.
 C_GH, C_FWB, C_TNB, C_FOW, C_FREE = "94F2", "94EC", "94ED", "9AE8", "9AEA"
 C_SS, C_STM, C_RR, C_PP, C_SPO = "9AEB", "298E2", "94F6", "94E5", "94F3"
+C_DIEGO = "162711"
 CONVERSATIONS = {
     # Private Connelly: classic Ghost Hunters (his greeting is its offer).
     "private_connelly|unicorn_way|goal1": lines(C_GH, 18, 19),
@@ -136,6 +138,11 @@ CONVERSATIONS = {
     "lady_oriel|finding_out_why|done": lines(C_FREE, 11),
     # Private O'Ryan in house 1: Saving Private O'Ryan's greeting and his remark (no request).
     "private_oryan|idle": lines(C_SPO, 30, 31),
+    # Round 26 (N2): the non-quest street NPCs. Diego: his own introduction (classic table 162711 "Diego the
+    # Duelmaster", lines 3-5; 6 sends you into the Arena, which isn't built). Ugo Kalahad is a shopkeeper with no
+    # spoken line in the client (W101 opens his shop): the shop's own title, WizardShops 2 "Kalahad's Adventure Wear".
+    "diego|idle": lines(C_DIEGO, 3, 4, 5),
+    "ugo_kalahad|idle": lines("WizardShops", 2),
 }
 
 # Classic voice files (W101 *_QST_<n>, in w101_orbs\voice) -> (table, line). Matched in round 23 (S1, pocketsphinx +
@@ -199,7 +206,8 @@ def main(argv):
         own = key.split("|")[0]
         out = []
         for speaker, table, n in conversations[key]:
-            rows = tables.setdefault(table, {int(k): v for k, _c, v in lang[f"WizQst{table}"]})
+            name = table if table in lang else f"WizQst{table}"  # round 26: other tables by their own name
+            rows = tables.setdefault(table, {int(k): v for k, _c, v in lang[name]})
             if (table, n) in by_line and not speaker:
                 voiced.append((key, len(out), by_line[table, n]))
             out.append([speaker or (Q.BY_SLUG[key.split("|")[1]]["giver"] if own == "intro" else own), tidy(rows[n])])

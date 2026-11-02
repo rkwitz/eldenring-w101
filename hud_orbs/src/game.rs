@@ -391,6 +391,7 @@ impl Game {
     /// w101 npcvis (round 18 G1): the loaded characters of model `models` whose map entity ID (ChrIns
     /// event_entity_id, the MSB part's EntityID) is in `ids`: (entity, physics position in the camera's space).
     pub fn entities(&self, models: &[u32], ids: &[u32]) -> Vec<(u32, [f32; 3])> {
+        let mut dead = Vec::new();
         use eldenring::cs::{CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
         use std::mem::offset_of;
         let list = {
@@ -407,12 +408,21 @@ impl Game {
             }
             let Some(id) = read::<u32>(chr + offset_of!(ChrIns, event_entity_id)).filter(|i| ids.contains(i)) else { continue };
             let Some(modules) = read::<usize>(chr + offset_of!(ChrIns, modules)) else { continue };
+            // Round 26 (npcs N7): a dead street NPC is left out and reported to markers.rs, which then shows no
+            // marker, name or talk prompt for it (it is immortal by EMEVD, so this only catches the unexpected).
+            let hp = read::<usize>(modules + offset_of!(ChrInsModuleContainer, data))
+                .and_then(|data| read::<i32>(data + offset_of!(eldenring::cs::CSChrDataModule, hp)));
+            if hp.is_some_and(|hp| hp <= 0) {
+                dead.push(id);
+                continue;
+            }
             let Some(physics) = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics)) else { continue };
             let Some([x, y, z, _]) = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position)) else { continue };
             if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6) {
                 out.push((id, [x, y, z]));
             }
         }
+        crate::markers::set_dead(&dead);
         out
     }
 

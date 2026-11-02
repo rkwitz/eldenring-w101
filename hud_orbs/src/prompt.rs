@@ -21,8 +21,19 @@
 //! height, base offset and facing angle), FALLBACK until it can be read. Elden Ring's own prompt text of all four rows
 //! is blanked (textId -1; ini hide_er_prompt=0 keeps it); the button press itself is Elden Ring's.
 //!
-//! The key: the controller's A when a controller was used last (or is the only input seen), else the keyboard's
-//! interact key (ini interact_key, default E: Elden Ring's default "Event action / Interact").
+//! The key: the controller's button when a controller was used last (or is the only input seen), else the keyboard's
+//! interact key.
+//!
+//! Round 26 (N4, Ryan: talking showed Elden Ring's "Switch actions": two action buttons were up at once): the talk and
+//! cage events now wait for ONE row, picked by EMEVD 4[32] IF Character Riding Mount (6000 / 9260 on foot, 6001 /
+//! 9300 on Torrent), and set RIDING_FLAG; the prompt measures only that row's shape.
+//! Round 26 (N5, Ryan: "it says Press A but A is my jump"): the key and button are Elden Ring's real binding, learned
+//! at runtime: when a talk / examine fires (a dialogue request flag 1042362400-499 or a Bone Cage flag goes on) while
+//! this prompt is up, the pad button or keyboard key pressed last (within LEARN_WINDOW) is the binding; it is logged
+//! ("prompt: learned ...") and kept in w101_orbs\interact_binding.txt for the next start. Before that: ini
+//! interact_pad / interact_key, else Elden Ring's default layout (Event Action = Y on an Xbox pad, E on the keyboard).
+//! Round 26 (N6): own glyph art (tools/w101_prompt_glyphs.py): Xbox-style A / B / X / Y face buttons, a dark blank
+//! button with the label for any other pad input, and a key cap without Wizard101's thin black outline.
 
 use std::collections::HashMap;
 
@@ -33,6 +44,14 @@ use crate::layout::Textures;
 
 pub const TALK_ROWS: [u32; 2] = [6000, 6001];
 pub const EXAMINE_ROWS: [u32; 2] = [9260, 9300];
+/// Round 26 (N4): set by the talk / cage events while the player rides Torrent (tools/w101_quests.py RIDING_FLAG).
+pub const RIDING_FLAG: u32 = 1042362570;
+/// Dialogue request flags (tools/w101_quests.py DIALOGUE_FLAG + key) and the Bone Cage flags (CAGE_FLAG + i).
+const REQUESTS: std::ops::Range<u32> = 1042362400..1042362500;
+/// A press this long before the talk / examine fired is taken as the interact binding.
+const LEARN_WINDOW: f32 = 1.0; // the flags are polled every 0.25 s (book.rs QUEST_POLL)
+/// The file the learned binding is kept in (next to w101_orbs.ini): "pad=Y" / "key=E" lines.
+const BINDING_FILE: &str = "interact_binding.txt";
 /// Finding Out Why (quest 4): assigned, and complete (the cages' Examine button is on only in between).
 const FOW_ASSIGNED: u32 = 1042360340;
 const FOW_COMPLETE: u32 = 1042360349;
@@ -57,8 +76,14 @@ const ICON: f32 = 31.0;
 const GAP: f32 = 31.0;
 
 const BACKGROUND: &str = "GUI/Dialog/Background_Dialog.png";
-const KEY_CAP: &str = "GUI/Art/Art_Keyboard_Blank.png";
-const PAD_A: &str = "GUI/Art/Art_XController_A.png";
+const KEY_CAP: &str = "GUI/Art/Art_Key_Blank.png";
+/// Pad glyphs: GUI/Art/Art_XButton_<A|B|X|Y>.png, others on the blank button with their label.
+const PAD_BLANK: &str = "GUI/Art/Art_XButton_Blank.png";
+const PAD_FACES: [&str; 4] = ["A", "B", "X", "Y"];
+/// XInput button bits (input.rs) and their labels, for learning and drawing the pad binding.
+const PAD_NAMES: [(u16, &str); 12] = [(0x1000, "A"), (0x2000, "B"), (0x4000, "X"), (0x8000, "Y"), (0x0100, "LB"),
+    (0x0200, "RB"), (0x0400, "LT"), (0x0800, "RT"), (0x0001, "\u{2191}"), (0x0002, "\u{2193}"), (0x0004, "\u{2190}"),
+    (0x0008, "\u{2192}")];
 const CAGE_PICTURE: &str = "GUI/QuestButtons/Art_HD_WC_BoneCage.png";
 
 /// What the prompt is for: who (name, portrait) and whether it is the cage's Examine.
@@ -71,6 +96,17 @@ pub struct Target {
 
 pub struct Prompt {
     key: String,
+    /// The pad button's label (PAD_NAMES), Elden Ring's default Event Action Y until learned or set in the ini.
+    pad_button: String,
+    /// Where the learned binding is kept (w101_orbs folder), once known.
+    folder: Option<std::path::PathBuf>,
+    /// The last pad / keyboard press: (label, seconds ago), aged every update.
+    last_pad: Option<(String, f32)>,
+    last_key: Option<(String, f32)>,
+    held_before: u16,
+    keys_before: Vec<bool>,
+    requests_before: Vec<u32>,
+    clock: Option<std::time::Instant>,
     hide_er: bool,
     /// Elden Ring's prompt shapes (row, shape, examine) once read, and whether its texts were blanked.
     shapes: Vec<(u32, crate::game::ActionButton, bool)>,
@@ -84,7 +120,9 @@ pub struct Prompt {
 
 impl Default for Prompt {
     fn default() -> Prompt {
-        Prompt { key: "E".into(), hide_er: true, shapes: Vec::new(), blanked: false, pad: false, current: None, preview: false }
+        Prompt { key: "E".into(), pad_button: "Y".into(), folder: None, last_pad: None, last_key: None,
+                 held_before: 0, keys_before: Vec::new(), requests_before: Vec::new(), clock: None, hide_er: true,
+                 shapes: Vec::new(), blanked: false, pad: false, current: None, preview: false }
     }
 }
 
@@ -94,21 +132,94 @@ pub fn words(examine: bool) -> (&'static str, &'static str) {
 }
 
 impl Prompt {
-    /// Reads w101_orbs.ini's interact_key and hide_er_prompt.
+    /// Reads w101_orbs.ini's interact_key, interact_pad and hide_er_prompt, then the learned binding
+    /// (BINDING_FILE next to it), which wins.
     pub fn load(&mut self, ini: &std::path::Path) {
-        for line in std::fs::read_to_string(ini).unwrap_or_default().lines() {
-            let Some((k, v)) = line.split_once('=') else { continue };
-            match k.trim() {
-                "interact_key" if !v.trim().is_empty() => self.key = v.trim().chars().take(5).collect(),
-                "hide_er_prompt" => self.hide_er = v.trim() != "0",
-                _ => {}
+        self.folder = ini.parent().map(|p| p.to_path_buf());
+        let learned = ini.with_file_name(BINDING_FILE);
+        for (file, learned) in [(ini.to_path_buf(), false), (learned, true)] {
+            for line in std::fs::read_to_string(&file).unwrap_or_default().lines() {
+                let Some((k, v)) = line.split_once('=') else { continue };
+                let v = v.trim();
+                match k.trim() {
+                    "interact_key" | "key" if !v.is_empty() => self.key = v.chars().take(5).collect(),
+                    "interact_pad" | "pad" if PAD_NAMES.iter().any(|p| p.1 == v) => self.pad_button = v.into(),
+                    "hide_er_prompt" if !learned => self.hide_er = v != "0",
+                    _ => {}
+                }
+            }
+        }
+        tracing::info!("prompt: interact key {} / pad {}", self.key, self.pad_button);
+    }
+
+    /// Round 26 (N5): watches the inputs (`pad_held`: XInput bits, input::held) and the talk / examine flags, and
+    /// learns which pad button and key Elden Ring talks with. Call every frame in normal play.
+    pub fn observe(&mut self, pad_held: u16, flag: &dyn Fn(u32) -> bool, cages: u32) {
+        let now = std::time::Instant::now();
+        let dt = self.clock.map_or(0.0, |c| now.duration_since(c).as_secs_f32());
+        self.clock = Some(now);
+        for last in [&mut self.last_pad, &mut self.last_key] {
+            if let Some((_, age)) = last {
+                *age += dt;
+            }
+        }
+        let pressed = pad_held & !self.held_before;
+        self.held_before = pad_held;
+        if let Some((_, name)) = PAD_NAMES.iter().find(|(bit, _)| pressed & bit != 0) {
+            self.last_pad = Some((name.to_string(), 0.0));
+        }
+        let keys = keys_down();
+        if let Some(k) = keys.iter().enumerate().find(|(i, d)| **d && !self.keys_before.get(*i).copied().unwrap_or(false))
+            .and_then(|(i, _)| key_name(i as u8)) {
+            self.last_key = Some((k, 0.0));
+        }
+        self.keys_before = keys;
+        let on: Vec<u32> = REQUESTS.chain(crate::questhelper::CAGE_FLAG..crate::questhelper::CAGE_FLAG + cages)
+            .filter(|f| flag(*f)).collect();
+        let fired = on.iter().any(|f| !self.requests_before.contains(f));
+        self.requests_before = on;
+        if !fired || self.current.is_none() {
+            return;
+        }
+        let fresh = |l: &Option<(String, f32)>| l.as_ref().filter(|(_, age)| *age <= LEARN_WINDOW).map(|l| l.clone());
+        let (pad, key) = (fresh(&self.last_pad), fresh(&self.last_key));
+        // The newer of the two presses did it.
+        let changed = match (pad, key) {
+            (Some(p), k) if k.as_ref().is_none_or(|k| p.1 <= k.1) => {
+                let changed = p.0 != self.pad_button;
+                self.pad_button = p.0;
+                changed
+            }
+            (_, Some(k)) => {
+                let changed = k.0 != self.key;
+                self.key = k.0;
+                changed
+            }
+            _ => return,
+        };
+        if changed {
+            tracing::info!("prompt: learned Elden Ring's interact binding: pad {} / key {}", self.pad_button, self.key);
+            if let Some(folder) = &self.folder {
+                let text = format!("# learned by hud_orbs prompt.rs (round 26 N5)\npad={}\nkey={}\n", self.pad_button,
+                                   self.key);
+                if let Err(e) = std::fs::write(folder.join(BINDING_FILE), text) {
+                    tracing::warn!("prompt: could not save {BINDING_FILE}: {e}");
+                }
             }
         }
     }
 
+    /// Sets the pad button's label (the preview).
+    #[allow(dead_code)]
+    pub fn set_pad_button(&mut self, label: &str) {
+        self.pad_button = label.into();
+    }
+
     /// The art the prompt draws.
     pub fn art(&self) -> Vec<String> {
-        [BACKGROUND, KEY_CAP, PAD_A, CAGE_PICTURE].map(String::from).to_vec()
+        let mut art: Vec<String> = [BACKGROUND, KEY_CAP, PAD_BLANK, CAGE_PICTURE].map(String::from).to_vec();
+        art.extend(PAD_FACES.iter().map(|f| format!("GUI/Art/Art_XButton_{f}.png")));
+        art
     }
 
     /// Reads Elden Ring's prompt shapes once and blanks its prompt texts (hide_er_prompt).
@@ -134,8 +245,10 @@ impl Prompt {
 
     /// Whether the player at `player` (feet, physics space) facing `yaw` is inside one of the talk (or `examine`)
     /// rows' prompt shapes round a target whose feet are at `at` (on foot or on Torrent: whichever row fits).
-    fn inside(&self, examine: bool, player: [f32; 3], yaw: Option<f32>, at: [f32; 3]) -> bool {
-        let shapes: Vec<(f32, f32, f32, i32)> = self.shapes.iter().filter(|s| s.2 == examine).map(|(_, b, _)| {
+    fn inside(&self, examine: bool, riding: bool, player: [f32; 3], yaw: Option<f32>, at: [f32; 3]) -> bool {
+        // Round 26 (N4): only the row the events wait for now: the second of each pair on Torrent.
+        let row = |r: &u32| (if examine { EXAMINE_ROWS } else { TALK_ROWS })[riding as usize] == *r;
+        let shapes: Vec<(f32, f32, f32, i32)> = self.shapes.iter().filter(|s| s.2 == examine && row(&s.0)).map(|(_, b, _)| {
             (if b.radius > 0.1 { b.radius } else { FALLBACK.0 }, if b.height > 0.1 { b.height } else { FALLBACK.1 },
              b.base, b.angle)
         }).collect();
@@ -168,9 +281,10 @@ impl Prompt {
     pub fn update(&mut self, player: [f32; 3], yaw: Option<f32>, spots: &[crate::markers::Spot],
                   player_msb: Option<[f32; 3]>, flag: &dyn Fn(u32) -> bool) -> Option<Target> {
         let d = |p: [f32; 3]| (p[0] - player[0]).hypot(p[2] - player[2]);
+        let riding = flag(RIDING_FLAG);
         let mut best: Option<(f32, Target)> = None;
         for (i, at, loaded) in spots {
-            if !loaded || !self.inside(false, player, yaw, *at) {
+            if !loaded || !self.inside(false, riding, player, yaw, *at) {
                 continue;
             }
             let npc = &crate::markers::NPCS[*i];
@@ -186,7 +300,7 @@ impl Prompt {
                     continue;
                 }
                 let at = [c[0] - msb[0] + player[0], c[1] - msb[1] + player[1], c[2] - msb[2] + player[2]];
-                if self.inside(true, player, yaw, at) && best.as_ref().is_none_or(|b| d(at) < b.0) {
+                if self.inside(true, riding, player, yaw, at) && best.as_ref().is_none_or(|b| d(at) < b.0) {
                     best = Some((d(at), Target { name: "Bone Cage".into(), portrait: CAGE_PICTURE.into(),
                                                  examine: true }));
                 }
@@ -196,7 +310,7 @@ impl Prompt {
         if now != self.current {
             match &now {
                 Some(t) => tracing::info!("prompt: {} \"Press {} {}\"", t.name,
-                                          if self.pad { "A" } else { &self.key }, words(t.examine).1),
+                                          if self.pad { &self.pad_button } else { &self.key }, words(t.examine).1),
                 None => tracing::info!("prompt: none"),
             }
             self.current = now.clone();
@@ -237,20 +351,57 @@ impl Prompt {
         let text_top = middle - normal.line_height * k / 2.0;
         normal.draw_at(draw, before, [x, text_top], k, black);
         x += normal.width(before) * k + space;
-        let (picture, letter) = if self.pad { (PAD_A, None) } else { (KEY_CAP, Some(self.key.as_str())) };
+        // Round 26 (N6): a face button's own picture carries its letter; any other pad input and the keyboard key
+        // get their label written on the blank button / key cap.
+        let face = format!("GUI/Art/Art_XButton_{}.png", self.pad_button);
+        let (picture, letter, white) = if self.pad {
+            if PAD_FACES.contains(&self.pad_button.as_str()) { (face.as_str(), None, true) }
+            else { (PAD_BLANK, Some(self.pad_button.as_str()), true) }
+        } else {
+            (KEY_CAP, Some(self.key.as_str()), false)
+        };
         if let Some((t, _)) = textures.get(picture) {
             draw.add_image(t, [x, middle - icon / 2.0], [x + icon, middle + icon / 2.0]).build();
         }
         if let Some(letter) = letter {
-            // The key's letter on the blank key cap, as Wizard101's Art_Keyboard_X shows its X (a little above the
-            // cap's middle: the cap's front edge is at its bottom).
-            let lk = k * 0.55 * if letter.chars().count() > 1 { 0.6 } else { 1.0 };
+            // The label a little above the middle on the key cap (its front lip is at the bottom), centred on a pad
+            // button; larger than round 25's (Ryan's screenshot: the E was hard to read).
+            let n = letter.chars().count();
+            let lk = k * 0.72 * if n > 2 { 0.5 } else if n > 1 { 0.66 } else { 1.0 };
             let lw = normal.width(letter) * lk;
-            normal.draw_at(draw, letter, [x + (icon - lw) / 2.0, middle - icon * 0.08 - normal.line_height * lk / 2.0],
-                           lk, black);
+            let lift = if white { 0.0 } else { icon * 0.07 };
+            let colour = if white { ImColor32::from_rgba(255, 255, 255, 255) } else { ImColor32::from_rgba(40, 36, 32, 255) };
+            normal.draw_at(draw, letter, [x + (icon - lw) / 2.0, middle - lift - normal.line_height * lk / 2.0], lk,
+                           colour);
         }
         x += icon + space;
         normal.draw_at(draw, after, [x, text_top], k, black);
         top
+    }
+}
+
+/// Round 26 (N5): which virtual keys are down now (index = VK code), read in the game only.
+#[cfg(windows)]
+fn keys_down() -> Vec<bool> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+    (0..256).map(|vk| unsafe { GetAsyncKeyState(vk) } < 0).collect()
+}
+
+#[cfg(not(windows))]
+fn keys_down() -> Vec<bool> {
+    Vec::new()
+}
+
+/// The label of virtual key `vk` as a key cap shows it, or None for mouse buttons, modifiers and movement keys
+/// (W A S D and the arrows are held while walking up, so they are never the talk key).
+fn key_name(vk: u8) -> Option<String> {
+    match vk {
+        b'W' | b'A' | b'S' | b'D' => None,
+        b'0'..=b'9' | b'B'..=b'Z' => Some((vk as char).to_string()),
+        0x0D => Some("Enter".into()),
+        0x20 => Some("Space".into()),
+        0x09 => Some("Tab".into()),
+        0x70..=0x7B => Some(format!("F{}", vk - 0x6F)),
+        _ => None,
     }
 }

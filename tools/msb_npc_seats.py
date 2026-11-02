@@ -15,6 +15,16 @@ ground, so the seats go that much lower.
 Seats are copies of the street part (msb_add_garden.put_asset: PartsDrawParam row 36, no entity id), at the NPC's
 place from w101_quests.CHARACTERS (as msb_add_npcs.py), so rerun this after msb_add_npcs.py. Idempotent.
 
+Round 26 (N3, Ryan: "Enia floats above her chair; the chair floats too and isn't level"): rounds 25 stood Enia on
+Connelly's real spot (the round 15-25 position bug, w101_quests.CHARACTERS), where the street slopes about 6 degrees
+(W101 HD mesh: -1.25 .. -1.50 m across 1.5 m), so the level 2.6 m chair hung off the slope on one side; and Enia was
+spawned 0.2 m up with gravity on, so the engine stood her on the chair's collision instead of in it. Vanilla m11_10:
+the floor props round her are at y -20.104 / -20.109, the chair AEG221_605_4500 at -20.097 (its FLVER box starts at
+y 0: on the floor) and Enia's root at -20.181, 0.084 m UNDER the chair's root. Now: her real spot (-41.857, 85.837)
+is flat (HD mesh 0.300 within 1.5 m all round), the chair's root is on that ground (offset y +0.084 from her root),
+and she is a SEATED character: root at ground - 0.084 and gravity off (emevd_quests idle event), as in vanilla.
+Each seat's own ground height is GROUND (W101 HD street mesh under the seat, metres), when given.
+
 Usage: python msb_npc_seats.py map.msb.dcx out.msb.dcx
 """
 import math
@@ -35,6 +45,8 @@ SEATS = {
     "olivia_dawnwillow": ("AEG221_605_9500", "AEG221_605", 9500, (-0.135, 0.084, 0.106), -0.7),
     "private_connelly": ("AEG201_043_9501", "AEG201_043", 9501, (0.990, 0.046, 0.440), 17.3),
 }
+# Round 26: the W101 street (HD mesh) height under each seat (frame-local y, metres), where it differs from the NPC's.
+GROUND = {"private_connelly": -1.300}  # HD mesh -1.247 .. -1.305 under the 0.45 m stool: its low corner
 
 
 def place_seats(raw):
@@ -45,7 +57,10 @@ def place_seats(raw):
         frame_position, frame_rotation = transform(parts.entries[find(parts, FRAMES[frame])])
         npc = to_world(frame_position, frame_rotation[1], local)
         ry = rotation_of(yaw, frame_rotation[1])
-        world = to_world(npc, ry, (offset[0], offset[1] - SPAWN_LIFT, offset[2]))
+        lift = 0.0 if slug in Q.SEATED else SPAWN_LIFT
+        world = to_world(npc, ry, (offset[0], offset[1] - lift, offset[2]))
+        if slug in GROUND:  # the seat on the street under it (a slope): its own ground
+            world = (world[0], frame_position[1] + GROUND[slug], world[2])
         put_asset(lists, name, model, world, ry + turn, (0.0, 0.0, 0.0), part_id=part_id)
         print(f"{slug}: seat {name} under the NPC at {tuple(round(c, 3) for c in npc)} rot {ry:.1f}")
     return write_msb(header, lists)

@@ -79,6 +79,14 @@ def place_npcs(raw, template_raw):
     for slug, name, _model in Q.REMOVED:
         if remove_part(lists, name):
             print(f"{slug}\t{name}\tremoved")
+    # Round 26 (N2): characters taken off the street (w101_quests.OFF_STREET: O'Ryan is inside his house in Wizard101),
+    # found by entity id (their part name can be a new character's).
+    for slug, _title, entity in Q.OFF_STREET:
+        gone = [entry_name(x) for x in _list(lists, "PARTS_PARAM_ST").entries
+                if u32(x, 0x0C) == ENEMY and u32(x, q(x, 0x60)) == entity]
+        for name in gone:
+            remove_part(lists, name)
+            print(f"{slug}\t{name}\tentity {entity}\tremoved (off the street)")
     parts = _list(lists, "PARTS_PARAM_ST")
     frames = {}
     for key, part in FRAMES.items():

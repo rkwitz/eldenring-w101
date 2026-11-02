@@ -2267,6 +2267,12 @@ impl Book {
         } else if ui.io().keys_down.iter().any(|k| *k) || ui.io().mouse_delta != [0.0, 0.0] {
             self.prompt.pad = false;
         }
+        // Round 26 (N5): learn Elden Ring's interact binding from the press that starts a talk (also while the
+        // conversation it opens blocks the prompt).
+        if !self.prompt.preview && cx.gameplay && !self.flags.is_empty() {
+            let flags = &self.flags;
+            self.prompt.observe(held, &|f| flags.get(&f) == Some(&true), crate::questhelper::cages().len() as u32);
+        }
         if !cx.gameplay || self.blocking() || self.map != MapState::Idle || self.flags.is_empty() {
             return;
         }

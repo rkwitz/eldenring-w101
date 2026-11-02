@@ -110,28 +110,58 @@ CORHYN = (523510000, 523510000, 23510)
 EDGAR = (523110000, 523110000, 23110)
 ENIA = (21700000, 21700000, -1)
 TRINA = (53300000, 53300000, -1)
+# Round 26 (N1, Ryan: "Connelly stands where Ugo should, Ceren where Olivia should, Olivia where Connelly should, it's
+# like you're just guessing"): rounds 15-25 read every spot with w101_lang.py `pos`, which paired each object's name
+# with the NEXT object's location (the serializer writes m_location before m_name), so each NPC stood on its
+# neighbour's spot with its neighbour's yaw, and round 25 (M7) then "fixed" Connelly by guessing the templates were
+# swapped. Proof now (tools/w101_npc_spots.py on WizardCity-WC_Streets-WC_Unicorn.wad + Root.wad): instance ->
+# m_templateID -> TemplateManifest -> ObjectData/WC/WC-ST01-NPCnn.xml -> display name key WC-NPCs_000000nn -> .lang
+# text, with each object's own position/yaw from one property record; and the zone's "Player Stand In instance -
+# <name>" cutscene markers stand 2.75 / 3.47 / 2.96 m straight in front of Connelly / Ceren / Diego (facing cos
+# 1.000 / 1.000 / 0.991). Local y = W101 z * 0.01 + SPAWN_LIFT (Enia: see SEATED).
+#   NPC04 = Private Connelly (WC-NPCs_00000024)   (-20.198, 86.550, z -1.374, yaw -177.30)
+#   NPC01 = Ceren Nightchant (WC-NPCs_00000027)   (-35.276, 88.797, z -0.499, yaw -45.69)
+#   NPC03 = Olivia Dawnwillow (WC-NPCs_00000021)  (-41.857, 85.837, z 0.289, yaw -24.23)
+#   NPC06 = Diego the Duelmaster (WC-NPCs_00000116) (26.543, 22.200, z -0.016, yaw 55.86), by the Arena exit
+#   NPC08_Shop = Ugo Kalahad (WC-NPCs_00000598)   (-12.534, 22.119, z 0.303, yaw -55.16)
+#   NPC05 = Private O'Ryan in house H1's own zone (WC_Unicorn_H1); the street's NPC05-B (-21.709, 94.374) is a second
+#     template of him (its own persona) for after Saving Private O'Ryan, so he is not on the street (OFF_STREET).
+#   NPC12 = Aegon Statz (the Gravulum event NPC, round 16 F1: not a starter NPC), not placed.
+SPAWN_LIFT = 0.2
+# Round 26 (N2): Diego the Duelmaster = D, Hunter of the Dead's look (CharaInit 23190) on White Mask Varre's rows (a
+# standing idle a320_090100, head 1.54 m; D's own NpcParam 523190000 plays a335_090100, sitting, head 1.09 m), Ugo
+# Kalahad = Merchant Kale (c3200, his vanilla m60_42_36_00 rows, idle a000_000000 standing, head 1.70 m, hat 1.79 m).
+# Both non-quest: idle lines only (w101_npc_dialogue.py).
+D_LOOK = (HUMAN_THINK, HUMAN_NPC, 23190)
+KALE = (32000000, 32000010, -1)
 CHARACTERS = [
-    # Round 25 (M7, Ryan: "Connelly stands where Diego the Duel Master is in W101"): the zone's NPC04 instance
-    # (26.543, 22.200, yaw 55.86; rounds 15-24) stands by the Arena exit (24.6, 16.5), the Duelmaster's place; the
-    # NPC06 instance (-12.534, 22.119, yaw -55.16; WC_Unicorn gamedata.bin, W101 z 30.3) is the mirror spot on the
-    # other side of the Commons gate. The two templates' places are swapped to match the game Ryan plays.
-    ("private_connelly", "Private Connelly", "street", (-12.534, 0.503, 22.119), -55.16, "c0000",
+    ("private_connelly", "Private Connelly", "street", (-20.198, -1.174, 86.550), -177.30, "c0000",
      *BERNAHL, 1042360820),
-    ("ceren_nightchant", "Ceren Nightchant", "street", (-41.857, 0.489, 85.837), -24.23, "c0000",
+    ("ceren_nightchant", "Ceren Nightchant", "street", (-35.276, -0.299, 88.797), -45.69, "c0000",
      *CORHYN, 1042360821),
-    ("olivia_dawnwillow", "Olivia Dawnwillow", "street", (-20.198, -1.174, 86.550), -177.30, "c2170",
+    # Enia sits in her chair with gravity off (SEATED): root exactly as vanilla m11_10 has it under her chair.
+    ("olivia_dawnwillow", "Olivia Dawnwillow", "street", (-41.857, 0.300 - 0.084, 85.837), -24.23, "c2170",
      *ENIA, 1042360822),
     # Round 22 (P1): on the centre of the battle circle (FX_MinigameSigilGlow (597.5, 313.7, -70.0); the sunken floor's
-    # bounding centre in the classic maze OBJ is (5.98, 3.09)), facing the garden's exit door (6.074, -35.75): yaw
-    # atan2(-dx, -dy) = -0.15. Rounds 15-21 used the Lady Oriel cinematic camera's spot and yaw (2.2 m short, backwards).
+    # bounding centre in the classic maze OBJ is (5.98, 3.09); W101's own NPC02 instance (6.010, 3.035), 0.1 m off),
+    # facing the garden's exit door (6.074, -35.75): yaw atan2(-dx, -dy) = -0.15.
     ("lady_oriel", "Lady Oriel", "garden", (5.975, -0.500, 3.137), -0.15, "c5330",
      *TRINA, 1042360823),
-    # Round 25 (M7): Wizard101 has O'Ryan on the street only as WC-ST01-NPC05-B (8.803, 8.945, yaw 31.09, by the
-    # Commons gate; NPC05 is inside his house H1 until Saving Private O'Ryan, which is not in this quest line).
-    # Rounds 15-24 stood him at H1's door (-125.714, 88.655) for that removed quest.
-    ("private_oryan", "Private O'Ryan", "street", (8.803, 0.201, 8.945), 31.09, "c0000",
-     *EDGAR, 1042360824),
+    ("diego", "Diego the Duelmaster", "street", (26.543, 0.184, 22.200), 55.86, "c0000", *D_LOOK, 1042360825),
+    ("ugo_kalahad", "Ugo Kalahad", "street", (-12.534, 0.503, 22.119), -55.16, "c3200", *KALE, 1042360826),
 ]
+# Round 26 (N1/N2): characters that keep their dialogue keys (request flag numbers) but are not placed on the street;
+# msb_add_npcs.py deletes their part (by entity id). (slug, title, entity)
+OFF_STREET = [("private_oryan", "Private O'Ryan", 1042360824)]
+# Round 26 (N2): characters added after round 23's IDLE_DONE keys; their keys go after those so that no older
+# request flag changes number.
+LATE_CHARACTERS = {"diego", "ugo_kalahad"}
+# Round 26 (N3, Ryan: "Enia floats above her chair; the chair floats and isn't level"): characters that sit in a vanilla
+# seat (msb_npc_seats.py) with gravity off (2004[10], emevd_quests idle event), so the engine doesn't stand them on
+# the seat's collision: their MSB root is placed exactly where vanilla has it relative to the seat.
+SEATED = {"olivia_dawnwillow"}
+# Round 26 (N7, Ryan: street NPCs must never die; flinching is fine): 2004[12] immortality (HP stays >= 1, hits still
+# land) on every character, in its idle event; talk events END while the character is dead.
 # Round 15 characters taken out in round 16 (F1): (slug, part name, model). msb_add_npcs.py deletes these parts.
 REMOVED = [
     ("diego", "c2010_9105", "c2010"),  # entity 1042360825
@@ -148,7 +178,7 @@ REMOVED = [
 #   c5330 Trina (round 25 M4, Ryan: "a purple glob on the ground; use her risen state"): c5330 has no a000_000000;
 #     her lying idle a000_030001 keeps her head 0.06 m up, inside the flower mound, while a000_030000 (6 s, first and
 #     last frame alike, so it loops) has her risen out of the flowers, head bone 1.22 m (as her bind pose). Looped.
-IDLE = {"c0000": (90100, 0), "c2180": (0, 1), "c2170": (0, 1), "c5330": (30000, 1)}
+IDLE = {"c0000": (90100, 0), "c2180": (0, 1), "c2170": (0, 1), "c5330": (30000, 1), "c3200": (0, 1)}
 # Round 21 (Q7): characters whose AI is switched off so they stay on their MSB spot (Lady Oriel ran around the maze).
 STAND_STILL = {"lady_oriel"}
 CHARACTER_PART_ID = 9100  # part header 0x08 / name suffix of the first character (<model>_9100..)
@@ -157,6 +187,9 @@ TALK_NPC_BUTTON = 6000  # ActionButtonParam "Talk" (category 4, radius 2.5 m), a
 # category-4 Talk row is. Vanilla row 6001 is the only "Talk" (text 7000) usable while riding (category 11,
 # isGrayoutForRide 0, radius 1.2 m, height -0.25..+0.75 m, front 90 deg). The NPC events take either button.
 TALK_NPC_BUTTON_RIDING = 6001
+# Round 26 (N4): the talk and cage events wait for ONE of the two buttons, picked by 4[32] IF Character Riding Mount,
+# and set this transient flag (1 = on Torrent) so the HUD prompt measures the same ActionButtonParam row.
+RIDING_FLAG = 1042362570
 # Round 17: the HUD's answer to a dialogue request (DIALOGUE_FLAG + k): OK = the last page was read / the quest was
 # accepted; CANCEL = closed early / the quest was declined (rounds 15-16: ER's 2007[10] OK / back buttons).
 DIALOG_OK, DIALOG_CANCEL = 1042362620, 1042362621
@@ -197,13 +230,16 @@ PORTRAITS = {
     "olivia_dawnwillow": "GUI/NpcPortraits/Human_WCShopKeepF_A_NPC.png",  # WC-ST01-NPC03
     "lady_oriel": "GUI/NpcPortraits/Portrait_Seraph_Aerial_B_NPC.png",  # WC-ST01-NPC02
     "private_oryan": "GUI/NpcPortraits/Human_WCGuard_B.png",  # WC-ST01-NPC05
+    "diego": "GUI/NpcPortraits/Art_Portrait_Diego_Duelmaster.png",  # WC-ST01-NPC06 (round 26)
+    "ugo_kalahad": "GUI/NpcPortraits/Human_WCShopKeep_D_NPC.png",  # WC-ST01-NPC08_Shop (round 26)
     "merle_ambrose": "GUI/NpcPortraits/Art_Portrait_Ambrose.png",  # ObjectData/WC/WC-Ambrose-PreAV.xml
     "gamma": "GUI/NpcPortraits/Portrait_Owl_Gamma_A_NPC.png",
 }
 PORTRAITS["intro"] = PORTRAITS["merle_ambrose"]
 # Names of the speakers who are not street characters (round 18: a page can have its own speaker, e.g. Gamma's tips
 # or Olivia cutting into Ceren's Skeleton Crew talk, as the client's lines have it).
-SPEAKERS = {"intro": "Merle Ambrose", "merle_ambrose": "Merle Ambrose", "gamma": "Gamma"}
+SPEAKERS = {"intro": "Merle Ambrose", "merle_ambrose": "Merle Ambrose", "gamma": "Gamma",
+            "private_oryan": "Private O'Ryan"}  # round 26: off the street, keys kept
 
 
 def follow_up(q, i):
@@ -250,7 +286,8 @@ def dialogue_keys():
         # Round 20: Unicorn Way's intro keys stay (unused) so every request flag keeps its number in dialogue.tsv.
         if q["assign"] and q["assign"][0] in ("intro", "greet"):
             keys +=[f"intro|{q['slug']}", f"intro|{q['slug']}|after"]
-    for slug, *_rest in CHARACTERS:
+    def character_keys(slug):
+        keys = []
         talks = [(q, i) for q in QUESTS for i, g in enumerate(q["goals"], 1)
                  if g["type"] == "talk" and g["target"] == slug]
         keys += [f"{slug}|{q['slug']}|goal{i}" for q, i in talks]
@@ -262,9 +299,16 @@ def dialogue_keys():
         keys += [f"{slug}|{q['slug']}|underway" for q in QUESTS
                  if q["giver"] == slug or any(t[0] is q for t in talks)]
         keys.append(f"{slug}|idle")
+        return keys
+    early = [c[0] for c in CHARACTERS if c[0] not in LATE_CHARACTERS]
+    early.insert(4, OFF_STREET[0][0])  # round 26: O'Ryan's keys keep their place (5th character until round 25)
+    for slug in early:
+        keys += character_keys(slug)
     # Round 23 (Q1): what a character says when it has nothing for the player once one of its quests is complete
     # (IDLE_DONE), appended so every older request flag keeps its number.
     keys += [f"{slug}|{quest}|done" for slug, quests in IDLE_DONE.items() for quest in quests]
+    for slug in (c[0] for c in CHARACTERS if c[0] in LATE_CHARACTERS):  # round 26 (N2)
+        keys += character_keys(slug)
     assert len(keys) <= 100 and len(set(keys)) == len(keys)
     return {key: DIALOGUE_FLAG + k for k, key in enumerate(keys)}
 
@@ -301,7 +345,8 @@ REGIONS = [
     ("hedge_maze", "garden", (5.975, 0.3, 3.137), 14.0, 1042362831, 9221),  # around Lady Oriel (round 22: circle centre)
     ("T1", "AEG030_519_9001", (-0.085, 1.0, -8.86), 4.0, 1042362832, 9222),  # Blackhope room arrival
     ("H4", "AEG030_557_9000", (0.202, 1.0, 8.405), 4.0, 1042362833, 9223),  # Thief's House arrival
-    ("near_ceren", "street", (-41.857, 1.0, 85.837), 15.0, 1042362834, 9224),
+    # Round 26 (N1): on Ceren's real spot (NPC01, w101_npc_spots.py); rounds 19-25 had Olivia's (-41.857, 85.837).
+    ("near_ceren", "street", (-35.276, 1.0, 88.797), 15.0, 1042362834, 9224),
     ("near_oryan", "street", (-125.714, 1.0, 88.655), 6.0, 1042362835, 9225),
 ]
 REGION_ENTITY = {r[0]: r[4] for r in REGIONS}

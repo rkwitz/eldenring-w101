@@ -81,10 +81,27 @@ def if_button(group, button, entity):
     return _i(3, 24, "<bxxxiI", group, button, entity)
 
 
-def buttons(on_foot, riding, entity):
-    """Round 25 (M5): wait for either Action Button on `entity`: the usual one (greyed out on Torrent) or its twin
-    that also works on Torrent (w101_quests.TALK_NPC_BUTTON_RIDING / CAGE_BUTTON_RIDING)."""
-    return [if_button(-1, on_foot, entity), if_button(-1, riding, entity), if_group(0, 1, -1)]
+def if_riding(group, entity, mounted):
+    """4[32] IF Character Riding Mount."""
+    return _i(4, 32, "<bxxxIBxxx", group, entity, mounted)
+
+
+def buttons(on_foot, riding, entity, alive=False):
+    """Wait for the Action Button on `entity` that fits the player's state: `on_foot` (greyed out on Torrent) while on
+    foot, `riding` (usable on Torrent) while mounted, never both at once.
+    Round 25 (M5) waited for either in one OR group, so Elden Ring had two action buttons up at the same spot and
+    showed its "Switch actions" prompt (Ryan, round 26 N4). Now 4[32] IF Character Riding Mount picks the branch; a
+    branch waits for its button OR the player (un)mounting, and on (un)mounting the event restarts into the other
+    branch. Each branch sets RIDING_FLAG (w101_quests) for the HUD prompt (prompt.rs), which then measures the same
+    row. With `alive` (round 26 N7) the button counts only while the character is alive."""
+    def branch(button, mounted):
+        press = [if_button(5, button, entity)] + ([if_dead(5, entity, 0)] if alive else [])
+        return [set_flag(Q.RIDING_FLAG, mounted), *press, if_riding(6, PLAYER, 1 - mounted),
+                if_group(-5, 1, 5), if_group(-5, 1, 6), if_group(0, 1, -5),
+                _i(1000, 8, "<BBbx", 1, 1, 6)]  # (un)mounted instead of a press: RESTART
+    foot, ride = branch(on_foot, 0), branch(riding, 1)
+    return [if_riding(7, PLAYER, 1), _i(1000, 1, "<BBbx", len(foot) + 1, 1, 7),  # on Torrent now: the riding branch
+            *foot, _i(1000, 3, "<Bxxx", len(ride)), *ride]
 
 
 def if_dead(group, entity, dead):
@@ -201,7 +218,10 @@ def after_yes(npc, quest, entity):
 
 
 def npc_event(slug, entity):
-    body = buttons(Q.TALK_NPC_BUTTON, Q.TALK_NPC_BUTTON_RIDING, entity)
+    # Round 26 (N7): a dead character (immortal, so only if something kills it anyway) takes no talk until the map
+    # loads again: END while it is dead, and the button counts only while it is alive.
+    body = [if_dead(4, entity, 1), _i(1000, 2, "<BBbx", 0, 1, 4)]  # group 4 (buttons uses 5, 6, 7)
+    body += buttons(Q.TALK_NPC_BUTTON, Q.TALK_NPC_BUTTON_RIDING, entity, alive=True)
     for q in Q.QUESTS:  # 0. (round 20) a quest this NPC starts by being talked to ("greet"): assigned, then block 1
         if q["assign"] and q["assign"][0] == "greet" and q["assign"][1] == slug:
             # Round 23 (Q2): never for a quest already assigned or complete.
@@ -310,6 +330,11 @@ def quest_events():
     for _slug, _title, _frame, _local, _yaw, model, *_rows, entity in Q.CHARACTERS:  # idles (round 16 F3)
         animation, loop = Q.IDLE[model]
         body = [WAIT_FRAME, force_animation(entity, animation, loop)]  # vanilla waits a frame too
+        # Round 26 (N7): never dies (HP stays >= 1; hits and flinches still happen). N3: a seated character keeps the
+        # MSB root under its seat (gravity off), as vanilla Enia in her chair.
+        body.insert(1, _i(2004, 12, "<IBxxx", entity, 1))
+        if _slug in Q.SEATED:
+            body.insert(1, _i(2004, 10, "<IBxxx", entity, 0))
         if _slug in Q.STAND_STILL:
             # Round 21 (Q7): Ryan: Lady Oriel ran around the hedge maze pathfinding. AI off (2004[1], as the bosses'
             # setup in emevd.py) keeps her on her MSB spot in the middle; her Talk button is the event's, not the AI's.

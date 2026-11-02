@@ -62,16 +62,36 @@ const TILE: [i32; 2] = [42, 36];
 /// in her chair) holds her staff with cloth ribbons up to 3.10 m ([cloth]c2170_wand_07; head 1.96), so the round 24
 /// plate (2.4) sat inside it. Trina now rises from her flowers (emevd idle a000_030000: head 1.22, flowers 1.96):
 /// unchanged. Same rule: plate = top + 0.21, marker = max(1.53 x head bone, plate + 0.48).
-/// Round 25 (M7): Connelly and O'Ryan moved to their Wizard101 places (tools/w101_quests.CHARACTERS).
-pub const NPCS: [(&str, &str, u32, u32, [f32; 3], f32, f32); 5] = [
-    ("private_connelly", "Private Connelly", 1042360820, 0, [-29.7745, 94.5018, -61.8978], 1.58, 2.06),
-    ("ceren_nightchant", "Ceren Nightchant", 1042360821, 0, [-84.8379, 94.4878, -18.4484], 1.22, 1.70),
-    ("olivia_dawnwillow", "Olivia Dawnwillow", 1042360822, 2170, [-65.8655, 92.8248, -7.9762], 3.31, 3.79),
+/// Round 26 (N1/N2): the spots are Wizard101's own (tools/w101_npc_spots.py: rounds 15-25 put each NPC on its
+/// neighbour's spot); O'Ryan is inside his house (off the street); Diego the Duelmaster (D, Hunter of the Dead's look
+/// on Varre's standing rows: a320_090100 head 1.54, helm top ~1.69 -> 1.9 / 2.38 as round 24's standing c0000) and Ugo
+/// Kalahad (Merchant Kale c3200, a000_000000: head 1.70, hat 1.79 -> plate 2.00, marker 1.53 x 1.70 = 2.60).
+pub const NPCS: [(&str, &str, u32, u32, [f32; 3], f32, f32); 6] = [
+    ("private_connelly", "Private Connelly", 1042360820, 0, [-65.8655, 92.8248, -7.9762], 1.58, 2.06),
+    ("ceren_nightchant", "Ceren Nightchant", 1042360821, 0, [-80.3192, 93.6998, -12.8224], 1.22, 1.70),
+    ("olivia_dawnwillow", "Olivia Dawnwillow", 1042360822, 2170, [-84.8379, 94.2148, -18.4484], 3.31, 3.79),
     ("lady_oriel", "Lady Oriel", 1042360823, 5330, [-336.1025, 93.4988, 105.5051], 2.18, 2.66),
-    ("private_oryan", "Private O'Ryan", 1042360824, 0, [-4.7818, 94.1998, -63.9439], 1.42, 1.90),
+    ("diego", "Diego the Duelmaster", 1042360825, 0, [5.0029, 94.1828, -44.0778], 1.9, 2.38),
+    ("ugo_kalahad", "Ugo Kalahad", 1042360826, 3200, [-29.7745, 94.5018, -61.8978], 2.0, 2.6),
 ];
+/// Round 26 (N7): street NPCs the game has loaded dead (Game::entities). They get no spot at all, so no marker, name
+/// plate or talk prompt; the talk events END for a dead character too (tools/emevd_quests.py npc_event).
+static DEAD: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+pub fn set_dead(ids: &[u32]) {
+    let mut dead = DEAD.lock().unwrap_or_else(|e| e.into_inner());
+    if *dead != ids {
+        tracing::info!("markers: dead street NPCs now {ids:?}");
+        *dead = ids.to_vec();
+    }
+}
+
+fn is_dead(entity: u32) -> bool {
+    DEAD.lock().unwrap_or_else(|e| e.into_inner()).contains(&entity)
+}
+
 /// Their models and entity IDs, for Game::entities.
-pub const MODELS: [u32; 3] = [0, 2170, 5330];
+pub const MODELS: [u32; 4] = [0, 2170, 5330, 3200];
 pub fn entity_ids() -> Vec<u32> {
     NPCS.iter().map(|n| n.2).collect()
 }
@@ -202,6 +222,7 @@ pub fn flags() -> Vec<u32> {
         out.extend([assigned, complete, goal]);
         out.extend(after.iter().copied());
     }
+    out.push(crate::prompt::RIDING_FLAG); // round 26 (N4): which Talk row the events wait for
     out.retain(|f| *f != 0);
     out
 }
@@ -271,6 +292,7 @@ pub fn locate(camera: &Camera, position: Option<([f32; 3], i32, i32)>, entities:
     }
     let shift = if n > 0.0 { shift.map(|v| v / n) } else { [0.0; 3] };
     (0..NPCS.len())
+        .filter(|i| !is_dead(NPCS[*i].2))
         .filter_map(|i| match found(i) {
             Some(f) => Some((i, f, true)),
             None => msb(i).map(|m| (i, [m[0] + shift[0], m[1] + shift[1], m[2] + shift[2]], false)),
