@@ -1082,12 +1082,8 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 } else {
                     r[0] + 22.0
                 };
-                let right = if *count > 1 { r[2] - 52.0 } else { r[2] - 14.0 };
-                v.add([left, r[1], right, r[3]], name.clone(), TextStyle::new("WizardFancy", 0.42, LIGHT_YELLOW).centred());
-                if *count > 1 {
-                    v.add([r[2] - 50.0, r[1], r[2] - 16.0, r[3]], format!("x{count}"),
-                          TextStyle::new("WizardFancy", 0.42, LIGHT_YELLOW).right());
-                }
+                // Round 21 (Ryan B3): only the name on the row; the count is in the hover tooltip ("Owned: n").
+                v.add([left, r[1], r[2] - 14.0, r[3]], name.clone(), TextStyle::new("WizardFancy", 0.42, LIGHT_YELLOW).centred());
                 // Wizard101's mark beside an item that is worn or held: the closed hand (the fist, the row's own
                 // "fist" window); nothing beside the rest.
                 v.show(fist, false);
@@ -1526,7 +1522,10 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
     v.images.push(([x, y, x1, y1], frame.into(), [0.0, 0.0, 1.0, CARD_H / 256.0]));
     // The school symbol in the corner circle: the reagent cards' Icon_<School> art (Ryan, round 10: use those
     // symbols everywhere); Astral has none, so its tab button's own symbol.
-    let (c0, c1) = (card(101.0, 28.0), card(125.0, 52.0));
+    // Round 21 (Ryan B2): centred on the circle's silver ring (x 100..124, y 26..51 in the frame art; measured in
+    // the 2560x1440 render too: ring centre 112.1, 38.8); the box was 101..125 x 28..52, about 1 px right and low.
+    let [sx, sy] = CARD_SCHOOL_CENTRE;
+    let (c0, c1) = (card(sx - 12.0, sy - 12.0), card(sx + 12.0, sy + 12.0));
     match deck_school_icon(DECK_TABS[tab].0) {
         Some(icon) => {
             let inset = (c1[0] - c0[0]) * 0.12;
@@ -1598,17 +1597,20 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
         // two, from the box's first line down (a one-line text sits on the first line, not in the middle), the
         // slots and needs on the third; at Wizard101's card text size, clear of the box's edges. The texts are
         // written to fit two lines (tools/er_book_data.py SHORT_CARDS); a longer one shrinks to fit.
+        // Round 21 (Ryan B1): the three rows evenly spaced, the first at the box's top and the needs line's
+        // bottom at CARD_NEEDS_BOTTOM (round 20 B3): the pitch is half the room between them, for the description's
+        // two lines too (its leading), so no gap under line 2 is bigger than the one under line 1.
         let line = font_line(CARD_TEXT_SCALE * k) / ch * CARD_H;
-        let pitch = line * CARD_LEADING;
+        let pitch = (CARD_NEEDS_BOTTOM - line - CARD_TEXT_TOP) / 2.0;
         let (b0, b1) = (card(CARD_TEXT_X[0], CARD_TEXT_TOP), card(CARD_TEXT_X[1], CARD_TEXT_TOP + 2.0 * pitch));
         let mut style = TextStyle::new("SpellDescription", CARD_TEXT_SCALE * k, BLACK).centred().wrapped();
         style.middle = false;
         style.picture = CARD_SYMBOL_SIZE;
-        style.leading = CARD_LEADING;
+        style.leading = pitch / line;
         v.add([b0[0], b0[1], b1[0], b1[1]], effect, style);
         // Round 20 (Ryan B3): the needs line sits at the bottom of the parchment box (its inside ends at 188 in
         // the frame art), no longer right under the two description lines.
-        let top = (CARD_NEEDS_BOTTOM - line).max(CARD_TEXT_TOP + 2.0 * pitch);
+        let top = CARD_TEXT_TOP + 2.0 * pitch;
         let (n0, n1) = (card(CARD_NEEDS_X[0], top), card(CARD_NEEDS_X[1], top + line));
         let mut needs_style = TextStyle::new("SpellDescription", CARD_TEXT_SCALE * k, BLACK).centred();
         needs_style.picture = CARD_SYMBOL_SIZE;
@@ -1636,6 +1638,8 @@ const CARD_ACCURACY_SCALE: f32 = 0.2;
 /// and its centre in the frame art.
 const CARD_TYPE_FILL: f32 = 0.86;
 const CARD_TYPE_CENTRE: [f32; 2] = [112.0, 112.5];
+/// The centre of the school symbol's corner circle in the frame art (Ryan round 21 B2).
+const CARD_SCHOOL_CENTRE: [f32; 2] = [112.25, 39.0];
 /// Short card names for the Elden Ring spells whose names do not fit one row at CARD_NAME_SCALE (wider than 320
 /// WizardFancy pixels, the box's 87.9 page px / 0.27): chosen by hand, every one checked against the font's glyph
 /// widths (Ryan round 19 D4: one row, never "...").
@@ -1743,10 +1747,6 @@ const CARD_NEEDS_X: [f32; 2] = [7.0, 121.0];
 const CARD_NEEDS_BOTTOM: f32 = 189.0;
 /// The memory slots symbol on the needs line (the item tooltip's "Memory Slots" icon).
 const SLOT_ICON: &str = "GUI/Icons/Type_PowerPips.png";
-/// Line pitch of the card text in line heights: three lines in the box (SpellDescription's 21 px cells have
-/// about 5 px of space over the capitals); round 19: 0.8 at the smaller one-size text, the three rows evenly
-/// spaced down the box.
-const CARD_LEADING: f32 = 0.8;
 
 /// SpellDescription's line height (its 21 px glyph cells) at `scale`, in page pixels.
 fn font_line(scale: f32) -> f32 {

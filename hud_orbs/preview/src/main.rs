@@ -259,6 +259,8 @@ fn main() {
         ("2c_backpack_armour", pages::Tab::Backpack, 1, [0.74, 0.30], ""),
         ("2d_backpack_talismans", pages::Tab::Backpack, 6, [0.74, 0.30], ""),
         ("2e_backpack_arrows", pages::Tab::Backpack, 7, [0.74, 0.30], ""),
+        // Round 21 (book B3): a stack's hover (the count is only in the tooltip, not on the row).
+        ("2h_backpack_count_tip", pages::Tab::Backpack, 0, [0.62, 0.34], ""),
         // Round 16 (book): the Equipment Sets page, a set's hover, a bookmark's hover, a stat's hover.
         ("2f_backpack_gear_sets", pages::Tab::Backpack, 0, [0.0, 0.0], "gear"),
         ("2g_backpack_gear_tip", pages::Tab::Backpack, 0, [0.70, 0.335], "gear"),
