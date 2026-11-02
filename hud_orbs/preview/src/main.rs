@@ -399,6 +399,12 @@ fn main() {
         ("23h_wisp_pickup_0.8", pages::Tab::Character, 0, [0.0, 0.0], "wisp:0.8"),
         ("23i_wisp_pickup_1.4", pages::Tab::Character, 0, [0.0, 0.0], "wisp:1.4"),
         ("23j_wisp_pickup_1.8", pages::Tab::Character, 0, [0.0, 0.0], "wisp:1.8"),
+        // Round 23b: the classic quest text (longest page, a card page, Oriel's narration page, an idle line).
+        ("23b_classic_ceren_rattlebones", pages::Tab::Character, 0, [0.0, 0.0], "talk:ceren_nightchant|sinister_skeleton|goal4:0"),
+        ("23b_classic_oriel_offer_card", pages::Tab::Character, 0, [0.0, 0.0], "talk:lady_oriel|finding_out_why|offer:3"),
+        ("23b_classic_oriel_narration", pages::Tab::Character, 0, [0.0, 0.0], "talk:lady_oriel|finding_out_why|goal4:3"),
+        ("23b_classic_oriel_idle", pages::Tab::Character, 0, [0.0, 0.0], "talk:lady_oriel|idle:0"),
+        ("23b_classic_connelly_offer", pages::Tab::Character, 0, [0.0, 0.0], "talk:private_connelly|unicorn_way|goal1:0"),
         ("14a_quest_helper_ahead", pages::Tab::Character, 0, [0.0, 0.0], "turn:0"),
         ("14b_quest_helper_turned_left", pages::Tab::Character, 0, [0.0, 0.0], "turn:-70"),
         ("14c_quest_helper_behind", pages::Tab::Character, 0, [0.0, 0.0], "turn:150"),
