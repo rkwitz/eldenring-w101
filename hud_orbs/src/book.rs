@@ -1958,6 +1958,8 @@ impl Book {
     }
 
     fn end_dialogue(&mut self) {
+        // Round 23 S1: every way a conversation ends (answer, close, withdrawn by its event) stops its voice line.
+        crate::music::voice(None);
         self.dialogue = None;
         self.holding = true;
         self.closed_at = Some(Instant::now());
@@ -2060,7 +2062,6 @@ impl Book {
         }
         let before = d.page;
         if let Some(answer) = d.press(press) {
-            crate::music::voice(None);
             Self::answer(&self.requests[d.request], answer);
             self.end_dialogue();
         } else if d.page != before {
