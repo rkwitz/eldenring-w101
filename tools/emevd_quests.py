@@ -276,7 +276,12 @@ def quest_events():
         events.append(npc_event(slug, entity))
     for _slug, _title, _frame, _local, _yaw, model, *_rows, entity in Q.CHARACTERS:  # idles (round 16 F3)
         animation, loop = Q.IDLE[model]
-        events.append([WAIT_FRAME, force_animation(entity, animation, loop), END])  # vanilla waits a frame too
+        body = [WAIT_FRAME, force_animation(entity, animation, loop)]  # vanilla waits a frame too
+        if _slug in Q.STAND_STILL:
+            # Round 21 (Q7): Ryan: Lady Oriel ran around the hedge maze pathfinding. AI off (2004[1], as the bosses'
+            # setup in emevd.py) keeps her on her MSB spot in the middle; her Talk button is the event's, not the AI's.
+            body.insert(1, _i(2004, 1, "<IBxxx", entity, 0))
+        events.append(body + [END])
     assert len(events) <= 100, f"{len(events)} events do not fit in {Q.EVENT_BASE}..+99"
     events.append(reset_event())
     out = []

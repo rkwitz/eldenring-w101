@@ -12,8 +12,8 @@ pub static CLOSE: std::sync::Mutex<Option<[f32; 3]>> = std::sync::Mutex::new(Non
 pub static TURN: std::sync::Mutex<f32> = std::sync::Mutex::new(0.0);
 
 /// Quest flags the preview pretends are on.
-const FLAGS: &[u32] = &[10000800, 14000800, 105, 110, 1042362000, 1042362001, 1042362009, 1042362010, 1042362500 + 2, 1042362040, 1042362540,
-                        1042362541, 1042362100, 1042362011, 1042362109,
+const FLAGS: &[u32] = &[10000800, 14000800, 105, 110, 1042360300, 1042360301, 1042360309, 1042360310, 1042360500 + 2, 1042360340, 1042360540,
+                        1042360541, 1042360400, 1042360311, 1042360409,
                         67000, 67010, 67210]; // and three cookbooks (crafting page)
 
 pub fn event_flag(flag: u32) -> Option<bool> {

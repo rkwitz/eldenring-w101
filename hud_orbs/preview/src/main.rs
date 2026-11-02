@@ -358,6 +358,13 @@ fn main() {
         ("20e_quests_page_tracked", pages::Tab::Quests, 0, [0.0, 0.0], ""),
         ("20f_quest_helper_steps", pages::Tab::Character, 0, [0.0, 0.0], "turn:0"),
         ("20g_quest_helper_steps_turned", pages::Tab::Character, 0, [0.0, 0.0], "turn:-70"),
+        // Round 21 (quests Q3-Q6): goal picture on Wizard101's red enemy disc, centred with its count; the rune on
+        // Wizard101's gold reward symbol; the selected quest's paper lit (no border); the Quest Helper.
+        ("21a_ghost_hunters_card", pages::Tab::Character, 0, [0.0, 0.0], "talk:private_connelly|unicorn_way|goal1:5"),
+        ("21b_skeleton_crew_card", pages::Tab::Character, 0, [0.0, 0.0], "talk:ceren_nightchant|ghost_hunters|goal3:5"),
+        ("21c_monsters_and_mazes_card", pages::Tab::Character, 0, [0.0, 0.0], "talk:ceren_nightchant|skeleton_crew|goal2:5"),
+        ("21d_quests_page_selected_paper", pages::Tab::Quests, 0, [0.0, 0.0], ""),
+        ("21e_quest_helper", pages::Tab::Character, 0, [0.0, 0.0], "turn:0"),
         ("14a_quest_helper_ahead", pages::Tab::Character, 0, [0.0, 0.0], "turn:0"),
         ("14b_quest_helper_turned_left", pages::Tab::Character, 0, [0.0, 0.0], "turn:-70"),
         ("14c_quest_helper_behind", pages::Tab::Character, 0, [0.0, 0.0], "turn:150"),

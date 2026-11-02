@@ -2011,10 +2011,12 @@ pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
     set(v, "txtGoal", q.goal.clone());
     // Round 18 (quests F3): the goal's picture in Wizard101's goal square (imgGoalObjective1, hidden in the .gui
     // until the client fills it): the creature to defeat, the NPC to talk to, the Bone Cage.
+    // Round 21 (Q3, Ryan): centred across the card (272 wide: 103..169), not in the left goal box.
     if !q.picture.is_empty() {
         if let Some(id) = card.find("imgGoalObjective1") {
             v.node_art.insert(id, q.picture.clone());
             v.show(Some(id), true);
+            v.rect.insert(id, GOAL_PICTURE);
         }
     }
     // The other goals open now, across both objective boxes.
@@ -2031,8 +2033,9 @@ pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
             // wide and centred under the picture's middle, overlapping its lower edge.
             if !q.picture.is_empty() {
                 if let (Some(scroll), Some(text)) = (card.find("imgGoalCounter"), card.find("txtGoalCounter")) {
-                    v.rect.insert(scroll, [28.0, 115.0, 118.0, 138.0]);
-                    v.rect.insert(text, [42.0, 121.0, 104.0, 138.0]);
+                    // Round 21 (Q3): centred with the picture (card middle x 136).
+                    v.rect.insert(scroll, [91.0, 115.0, 181.0, 138.0]);
+                    v.rect.insert(text, [105.0, 121.0, 167.0, 138.0]);
                 }
             }
         }
@@ -2061,18 +2064,28 @@ pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
     }
 }
 
-/// Round 20 (Q3): the card's reward symbol (Wizard101's Art_Quest_Gold_Piece ring around Elden Ring's Lord's Rune
-/// icon; made on the PC) and Wizard101's scroll under the amount.
+/// Round 20 (Q3): the card's reward symbol (round 21 Q4: Wizard101's Art_Quest_Gold, the gold reward's ring and
+/// orange inside, around Elden Ring's Lord's Rune icon; made by round21/quests/make_art.py) and Wizard101's scroll under the amount.
 pub const REWARD_RUNES: &str = "GUI/QuestPage/Art_Quest_Rune_Piece.png";
 pub const REWARD_SCROLL: &str = "GUI/QuestPage/Art_Quest_Exp_Scroll.png";
 /// Round 20 (Q7): Wizard101's quest-tracker icon (_Shared-WorldData.wad GUI/QuestPage) and its glow round the
 /// selected quest card (Art_Quest_Glow, a 256 square frame of soft yellow light).
 pub const QUEST_TRACKER: &str = "GUI/QuestPage/Button_Quest_Tracker02.png";
 pub const QUEST_GLOW: &str = "GUI/QuestPage/Art_Quest_Glow.png";
+/// Round 21 (Q5): the selected quest's lit paper (see quest_tracked).
+pub const QUEST_PAPER_LIT: &str = "GUI/QuestPage/Art_Quest_Paper_Lit.png";
+/// Round 21 (Q3): imgGoalObjective1 (66 square, 40,67 in the .gui) centred on the card.
+pub const GOAL_PICTURE: [f32; 4] = [103.0, 67.0, 169.0, 133.0];
 
 /// Round 20 (Q7): the tracked quest's card: Wizard101's tracker arrow in imgActiveQuest (32 square), moved from
 /// 36,44 (where it covered the goal text's first letters) into the card's top-left corner under the star.
 pub fn quest_tracked(card: &Layout, v: &mut View) {
+    // Round 21 (Q5, Ryan): no border; the selected quest's paper itself is lit: Wizard101's Art_Quest_Glow_01 light
+    // laid on Art_Quest_Frame's parchment only (made by round21/quests/make_art.py), drawn right over the card's
+    // paper, under everything on it.
+    if let Some(id) = card.find("wndQuestInfo") {
+        v.node_images.insert(id, QUEST_PAPER_LIT.into());
+    }
     if let Some(id) = card.find("imgActiveQuest") {
         v.node_art.insert(id, QUEST_TRACKER.into());
         v.show(Some(id), true);

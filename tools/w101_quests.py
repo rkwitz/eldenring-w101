@@ -1,7 +1,7 @@
 """The Unicorn Way quest line as game logic: quests, goals, event flags, entity ids (no Wizard101 text; the client's
 quest text is merged in by slug outside the repo, see /mnt/project-files/unicorn_way_quests).
 
-Event flags (all in the m60_42_36 tile's 1042362xxx flag group; 1042362900-999 is reserved for the door /
+Event flags (round 21: saved quest state in 1042360xxx, see QUEST_BASE; the rest in the 1042362xxx group; 1042362900-999 is reserved for the door /
 loading-screen flags). The group matters: Elden Ring keeps event flags in blocks of 1000 (flag id / 1000) and only
 the blocks its own data declares exist - CSFD4VirtualMemoryFlag looks the block up in a map and silently does
 nothing when it is missing (eldenring crate, cs/event_flag.rs). Across 51 vanilla EMEVDs the per-map flags only ever
@@ -26,9 +26,15 @@ quest is active). A goal is current when its quest is assigned, it is not done, 
 the one before it) are done.
 """
 
-QUEST_BASE = 1042362000
-COUNTER_BASE = 1042362500
-CAGE_FLAG = 1042362540
+# Round 21 (Q1): the saved quest state moved to the tile's 1042360xxx block. Ryan's round 20 log: every flag of the
+# 1042362xxx block reads off after each map load (warp, death, loading the save; the save file holds them, the map
+# load clears them), so the reset re-ran and Unicorn Way paid again. 1042360xxx is saved and kept: the First Step
+# grace (1042360000/1) and this tile's item pickups (ItemLotParam_map 1042360010-060) live there. Free in vanilla
+# (51 EMEVDs + regulation scanned): 1042360300-459, 500-543, 689-692. Dialogue requests, dialog answers, crafting
+# and door flags stay in 1042362xxx: they only live for a moment and a load clearing them is right.
+QUEST_BASE = 1042360300
+COUNTER_BASE = 1042360500
+CAGE_FLAG = 1042360540
 TALK_FLAG = 1042362600
 EVENT_BASE = 1042363800  # our EMEVD events 1042363800..1042363899 (free in this map)
 
@@ -117,6 +123,8 @@ REMOVED = [
 #   c2180 Melina: 0, her standing idle (her row has no animation offset), looped.
 # (animation, loop) by model
 IDLE = {"c0000": (90100, 0), "c2180": (0, 1)}
+# Round 21 (Q7): characters whose AI is switched off so they stay on their MSB spot (Lady Oriel ran around the maze).
+STAND_STILL = {"lady_oriel"}
 CHARACTER_PART_ID = 9100  # part header 0x08 / name suffix of the first character (<model>_9100..)
 TALK_NPC_BUTTON = 6000  # ActionButtonParam "Talk" (category 4, radius 2.5 m), as vanilla m60_51_36 1051360734 on a character
 # Round 17: the HUD's answer to a dialogue request (DIALOGUE_FLAG + k): OK = the last page was read / the quest was
@@ -130,16 +138,18 @@ QUEST_RESET_R19 = 1042362690
 # Round 20 (Q2): version 2 of the reset. Ryan's round 19 save has Unicorn Way done and Ghost Hunters assigned through
 # Ambrose's offer; round 20 starts the line at Private Connelly's "!" instead, so every quest flag is cleared once
 # more (QUEST_RESET_R19 too) and QUEST_RESET (the flag the events and the DLL wait for) is this one.
-QUEST_RESET = 1042362691
+QUEST_RESET_R20 = 1042362691
+# Round 21 (Q1): version 3, in the saved block (QUEST_RESET_R20 sat in the cleared block, so it ran on every load).
+QUEST_RESET = 1042360691
 # Round 19 (E1): on when Ambrose's intro offer has been shown once. The first offer comes anywhere on the street
 # (INTRO_ANCHOR within INTRO_RADIUS m: Ceren stands in the middle of the street, near where a load puts the player);
 # after a "no" it is offered again on reaching Private Connelly (street_start), as in round 18.
-INTRO_SEEN = 1042362689
+INTRO_SEEN = 1042360689  # round 21: saved block (was 1042362689)
 INTRO_ANCHOR, INTRO_RADIUS = 1042360821, 200.0
 # Every flag the quests use: quests (n = 0..15), dialogue requests, counters and cages, the old talk flags, the
 # dialog answers, INTRO_SEEN. (first, last) inclusive.
-QUEST_FLAG_RANGES = [(1042362000, 1042362159), (1042362400, 1042362499), (1042362500, 1042362543),
-                     (1042362600, 1042362621), (INTRO_SEEN, INTRO_SEEN), (QUEST_RESET_R19, QUEST_RESET_R19)]
+QUEST_FLAG_RANGES = [(QUEST_BASE, QUEST_BASE + 159), (1042362400, 1042362499), (COUNTER_BASE, CAGE_FLAG + 3),
+                     (1042362600, 1042362621), (INTRO_SEEN, INTRO_SEEN)]
 CHARACTER = {c[0]: c for c in CHARACTERS}
 
 # Round 17 (F2/F3): the conversations are shown by the HUD DLL in Wizard101's own dialogue box (DialogWindow.gui),

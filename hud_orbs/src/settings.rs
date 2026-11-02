@@ -24,6 +24,9 @@ pub struct Settings {
     pub scene_probe_nudge: bool,
     /// The live character preview in the book (live_preview.rs, experimental); read when the game starts.
     pub live_preview: bool,
+    /// Round 21 (quests Q2): how many frames old the camera is that the markers, name plates and Quest Helper use
+    /// (game.rs tick_camera): 1 matches the picture Elden Ring shows at Present; 0 = as CSCam holds it now.
+    pub marker_frames: usize,
 }
 
 /// `key = value` lines: left and bottom (extra gap from the screen's bottom-left corner, in Wizard101 pixels; 0 is
@@ -32,7 +35,7 @@ pub struct Settings {
 pub fn load_settings(path: &Path) -> Settings {
     let mut settings = Settings { left: 0.0, bottom: 0.0, scale: 1.0, debug: false, level: true, loadscreen: true,
                                   loadscreen_image: LOADSCREEN_IMAGE.into(), bookmap: true, nameplates: true,
-                                  scene_probe: false, scene_probe_nudge: false, live_preview: false };
+                                  scene_probe: false, scene_probe_nudge: false, live_preview: false, marker_frames: 1 };
     for line in std::fs::read_to_string(path).unwrap_or_default().lines() {
         let Some((key, value)) = line.split_once('=') else { continue };
         let value = value.trim();
@@ -49,6 +52,7 @@ pub fn load_settings(path: &Path) -> Settings {
             "scene_probe" => settings.scene_probe = value == "1",
             "scene_probe_nudge" => settings.scene_probe_nudge = value == "1",
             "live_preview" => settings.live_preview = value == "1",
+            "marker_frames" => settings.marker_frames = value.parse::<usize>().map_or(settings.marker_frames, |v| v.min(4)),
             _ => {}
         }
     }
@@ -84,6 +88,7 @@ pub fn save_settings(path: &Path, s: &Settings) -> std::io::Result<()> {
     // Keys this file doesn't know (another part of the mod's, e.g. live_preview) are kept as they were.
     const KNOWN: [&str; 12] = ["left", "bottom", "scale", "level", "loadscreen", "loadscreen_image", "bookmap",
                                "nameplates", "debug", "scene_probe", "scene_probe_nudge", "live_preview"];
+    // marker_frames is written only when changed from 1 (kept by the line below otherwise: not in KNOWN).
     let kept: String = std::fs::read_to_string(path).unwrap_or_default().lines()
         .filter(|l| l.split_once('=').is_some_and(|(k, _)| !KNOWN.contains(&k.trim())) && !l.trim_start().starts_with('#'))
         .map(|l| format!("{l}\n"))

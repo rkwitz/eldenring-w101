@@ -94,6 +94,22 @@ pub fn player_msb(position: ([f32; 3], i32, i32)) -> Option<[f32; 3]> {
     (p[0].abs() < TILE_RANGE && p[2].abs() < TILE_RANGE).then_some(p)
 }
 
+/// Round 21 (Q6): the player's MSB position from the street NPCs the game has loaded (`entities` =
+/// Game::entities): each one's MSB spot (markers::NPCS) plus the player's offset from it in the physics space,
+/// averaged. Needs no block origin (Ryan's round 20 helper never showed; the block-origin path is the fallback).
+pub fn player_msb_from_npcs(camera: &Camera, entities: &[(u32, [f32; 3])]) -> Option<[f32; 3]> {
+    let p = camera.player;
+    let (mut sum, mut n) = ([0.0f32; 3], 0.0f32);
+    for (id, at) in entities {
+        let Some(npc) = crate::markers::NPCS.iter().find(|n| n.2 == *id) else { continue };
+        for k in 0..3 {
+            sum[k] += npc.4[k] + p[k] - at[k];
+        }
+        n += 1.0;
+    }
+    (n > 0.0).then(|| sum.map(|v| v / n))
+}
+
 /// Where the arrow points for quest `active` with the player at `player` (MSB): the goal's nearest point, or the
 /// room's door while the player is out on the street.
 pub fn target(active: &Active, player: [f32; 3]) -> Option<[f32; 3]> {

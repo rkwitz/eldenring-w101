@@ -88,37 +88,37 @@ const OFFERS: &[(&str, u32, u32)] = &[
     // and again on reaching Connelly after a "no"; until it is accepted Connelly shows the "!" so the player can
     // find him. QUEST_RESET is on in every save once the round 19 reset has run.
     // Round 20 (Q2): no Ambrose offer; the "!" is how the line starts, and talking to Connelly takes Unicorn Way.
-    ("private_connelly", 1042362000, QUEST_RESET),
-    ("private_connelly", 1042362010, 1042362009), // Ghost Hunters once Unicorn Way is complete
-    ("ceren_nightchant", 1042362020, 1042362019), // Skeleton Crew once Ghost Hunters is complete
-    ("ceren_nightchant", 1042362030, 1042362029), // Monsters and Mazes once Skeleton Crew is complete
-    ("lady_oriel", 1042362040, 1042362039), // Finding Out Why once Monsters and Mazes is complete
-    ("lady_oriel", 1042362050, 1042362049), // Who Could It Be Now? once Finding Out Why is complete
-    ("ceren_nightchant", 1042362060, 1042362059), // Sinister Skeleton once Who Could It Be Now? is complete
-    ("olivia_dawnwillow", 1042362100, 1042362020), // Pesky Pirates once Skeleton Crew is assigned
-    ("private_connelly", 1042362110, 1042362019), // Saving Private Oryan once Ghost Hunters is complete
-    ("olivia_dawnwillow", 1042362150, 1042362109), // Fear of Fire once Pesky Pirates is complete
+    ("private_connelly", 1042360300, QUEST_RESET),
+    ("private_connelly", 1042360310, 1042360309), // Ghost Hunters once Unicorn Way is complete
+    ("ceren_nightchant", 1042360320, 1042360319), // Skeleton Crew once Ghost Hunters is complete
+    ("ceren_nightchant", 1042360330, 1042360329), // Monsters and Mazes once Skeleton Crew is complete
+    ("lady_oriel", 1042360340, 1042360339), // Finding Out Why once Monsters and Mazes is complete
+    ("lady_oriel", 1042360350, 1042360349), // Who Could It Be Now? once Finding Out Why is complete
+    ("ceren_nightchant", 1042360360, 1042360359), // Sinister Skeleton once Who Could It Be Now? is complete
+    ("olivia_dawnwillow", 1042360400, 1042360320), // Pesky Pirates once Skeleton Crew is assigned
+    ("private_connelly", 1042360410, 1042360319), // Saving Private Oryan once Ghost Hunters is complete
+    ("olivia_dawnwillow", 1042360450, 1042360409), // Fear of Fire once Pesky Pirates is complete
 ];
 
-/// w101_quests.QUEST_RESET: the one-shot quest reset has run (the quest events wait for it). Round 20: version 2
-/// (round 19's was 1042362690), so Ryan's round 19 save starts again at Connelly's "!".
-pub const QUEST_RESET: u32 = 1042362691;
+/// w101_quests.QUEST_RESET: the one-shot quest reset has run (the quest events wait for it). Round 21 (Q1): version 3
+/// in the saved 1042360xxx block (round 20's 1042362691 sat in a block every map load clears, so it re-ran each load).
+pub const QUEST_RESET: u32 = 1042360691;
 
 /// Talk goals: (npc, quest assigned flag, quest complete flag, goal flag, flags of the goals it comes after).
 const TALKS: &[(&str, u32, u32, u32, &[u32])] = &[
-    ("private_connelly", 1042362000, 1042362009, 1042362001, &[]),
-    ("private_connelly", 1042362010, 1042362019, 1042362012, &[1042362011]),
-    ("ceren_nightchant", 1042362010, 1042362019, 1042362013, &[1042362012]),
-    ("ceren_nightchant", 1042362020, 1042362029, 1042362022, &[1042362021]),
-    ("lady_oriel", 1042362030, 1042362039, 1042362032, &[1042362031]),
-    ("lady_oriel", 1042362040, 1042362049, 1042362044, &[1042362043]),
-    ("ceren_nightchant", 1042362050, 1042362059, 1042362051, &[]),
-    ("ceren_nightchant", 1042362060, 1042362069, 1042362064, &[1042362063]),
-    ("olivia_dawnwillow", 1042362100, 1042362109, 1042362102, &[1042362101]),
-    ("private_oryan", 1042362110, 1042362119, 1042362112, &[1042362111]),
-    ("private_oryan", 1042362110, 1042362119, 1042362115, &[1042362114]),
-    ("private_connelly", 1042362110, 1042362119, 1042362116, &[1042362115]),
-    ("olivia_dawnwillow", 1042362150, 1042362159, 1042362153, &[1042362152]),
+    ("private_connelly", 1042360300, 1042360309, 1042360301, &[]),
+    ("private_connelly", 1042360310, 1042360319, 1042360312, &[1042360311]),
+    ("ceren_nightchant", 1042360310, 1042360319, 1042360313, &[1042360312]),
+    ("ceren_nightchant", 1042360320, 1042360329, 1042360322, &[1042360321]),
+    ("lady_oriel", 1042360330, 1042360339, 1042360332, &[1042360331]),
+    ("lady_oriel", 1042360340, 1042360349, 1042360344, &[1042360343]),
+    ("ceren_nightchant", 1042360350, 1042360359, 1042360351, &[]),
+    ("ceren_nightchant", 1042360360, 1042360369, 1042360364, &[1042360363]),
+    ("olivia_dawnwillow", 1042360400, 1042360409, 1042360402, &[1042360401]),
+    ("private_oryan", 1042360410, 1042360419, 1042360412, &[1042360411]),
+    ("private_oryan", 1042360410, 1042360419, 1042360415, &[1042360414]),
+    ("private_connelly", 1042360410, 1042360419, 1042360416, &[1042360415]),
+    ("olivia_dawnwillow", 1042360450, 1042360459, 1042360453, &[1042360452]),
 ];
 
 /// Markers are drawn this far (metres) and fade out over the last part.

@@ -1,7 +1,7 @@
 //! The Unicorn Way quests for the Quests page and the quest offers of the dialogue box (talk.rs):
 //! `w101_orbs/book/quests.tsv` (made by tools/w101_book_quests.py) plus the quest event flags the map's events set.
 //!
-//! Quest n uses flags 1042362000 + 10n: +0 assigned (stays on), +1..+6 goal i done, +8 ready to turn in, +9 complete.
+//! Quest n uses flags 1042360300 + 10n (round 21; 1042362000 + 10n before, see `saved`): +0 assigned (stays on), +1..+6 goal i done, +8 ready to turn in, +9 complete.
 //! A quest is shown while assigned and not complete; its current goals are those not done whose "after" goals are.
 
 use std::collections::HashMap;
@@ -97,6 +97,17 @@ pub struct Quests {
     pub quests: Vec<Quest>,
 }
 
+/// Round 21 (Q1): the quest state's flags moved from 1042362xxx (a block every map load clears: Ryan's round 20 log
+/// read them all off after each warp/reload, so the reset ran again and Unicorn Way paid twice) to the saved
+/// 1042360xxx block (w101_quests.QUEST_BASE). A quests.tsv written before that still holds the old numbers.
+pub const fn saved(f: u32) -> u32 {
+    match f {
+        1042362000..=1042362159 => f - 1042362000 + 1042360300, // quests: QUEST_BASE + 10n
+        1042362500..=1042362543 => f - 2000,                     // kill counters and cages
+        _ => f,
+    }
+}
+
 impl Quests {
     pub fn load(path: &Path) -> Quests {
         let mut out = Quests::default();
@@ -104,7 +115,7 @@ impl Quests {
         let mut index: HashMap<String, usize> = HashMap::new();
         for line in text.lines() {
             let f: Vec<&str> = line.split('\t').collect();
-            let num = |i: usize| f.get(i).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+            let num = |i: usize| saved(f.get(i).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0));
             match f.first().copied() {
                 Some("Q") if f.len() >= 9 => {
                     index.insert(f[1].to_string(), out.quests.len());
@@ -124,16 +135,16 @@ impl Quests {
                 Some("G") if f.len() >= 9 => {
                     let Some(&q) = index.get(f[1]) else { continue };
                     let counter = if let Some(list) = f[6].strip_prefix("list:") {
-                        Counter::Flags(list.split(',').filter_map(|v| v.parse().ok()).collect())
+                        Counter::Flags(list.split(',').filter_map(|v| v.parse().ok()).map(saved).collect())
                     } else {
                         match f[6].parse::<u32>() {
                             Ok(0) | Err(_) => Counter::None,
-                            Ok(base) => Counter::Bits(base),
+                            Ok(base) => Counter::Bits(saved(base)),
                         }
                     };
                     out.quests[q].goals.push(Goal {
                         flag: num(3),
-                        after: f[4].split(',').filter_map(|v| v.parse().ok()).collect(),
+                        after: f[4].split(',').filter_map(|v| v.parse().ok()).collect(), // goal numbers, not flags
                         count: num(5).max(1),
                         counter,
                         text: f[7].into(),
@@ -156,6 +167,9 @@ impl Quests {
                 _ => {}
             }
         }
+        let n = out.flags().len();
+        tracing::info!("quests: {} quests, {n} saved flags ({}..{})", out.quests.len(),
+                       out.flags().first().unwrap_or(&0), out.flags().last().unwrap_or(&0));
         out
     }
 

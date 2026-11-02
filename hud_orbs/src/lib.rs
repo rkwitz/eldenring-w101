@@ -288,6 +288,9 @@ impl ImguiRenderLoop for Orbs {
         let game = self.game.as_ref().and_then(|g| g.as_ref());
         let plain = game.is_some() && !self.book.open && !self.loadscreen.holding() && game::hud_shown()
             && game::faded() < 0.05;
+        if let Some(g) = game {
+            g.tick_camera(self.settings.marker_frames);
+        }
         let camera = game.and_then(|g| g.camera());
         let forward = camera.as_ref().map(|c| [c.matrix[2][0], c.matrix[2][1], c.matrix[2][2]]);
         self.teleport.capture(render, &mut self.book.textures, plain, camera);

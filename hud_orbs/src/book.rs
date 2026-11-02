@@ -152,6 +152,8 @@ pub struct Book {
     tracked: Option<String>,
     /// Round 20 (Q8): Wizard101's walk graph of the street for the Quest Helper's step count (quest_nav.tsv).
     nav: crate::questhelper::Nav,
+    /// Round 21 (Q6): the Quest Helper's last state, logged when it changes ("quest helper: ...").
+    helper_state: String,
     quest_flags: Vec<u32>,
     flags: HashMap<u32, bool>,
     flags_time: Option<Instant>,
@@ -366,6 +368,7 @@ impl Book {
             quests: Quests::default(),
             tracked: None,
             nav: Default::default(),
+            helper_state: String::new(),
             quest_flags: Vec::new(),
             flags: HashMap::new(),
             flags_time: None,
@@ -742,15 +745,20 @@ impl Book {
     /// the first quest in progress, and the goal's name, on the street in normal play.
     pub fn draw_quest_helper(&mut self, ui: &Ui, cx: &Context) {
         use crate::questhelper as qh;
-        if !cx.gameplay || !cx.hud || self.blocking() || self.map != MapState::Idle || self.flags.is_empty() {
-            return;
-        }
-        let (Some(game), Some(layout)) = (cx.game, self.layouts.get(qh::LAYOUT)) else { return };
-        let (Some(camera), Some(player)) = (game.camera(), game.position().and_then(qh::player_msb)) else { return };
-        // Round 20 (Q7/Q8): the tracked quest first, else the first one in progress with a goal on the street.
-        let tracked = self.tracked_index().and_then(|i| self.active.get(i));
-        let Some((active, goal)) = tracked.into_iter().chain(self.active.iter())
-            .find_map(|a| qh::target(a, player).map(|g| (a, g))) else { return };
+        // Round 21 (Q6): Ryan saw no helper with a quest in progress and the log could not say why; every reason it
+        // isn't drawn is logged once when it changes.
+        let (active, goal, player, camera) = match self.quest_helper_target(cx) {
+            Ok(v) => v,
+            Err(why) => {
+                self.helper_log(why.to_string());
+                return;
+            }
+        };
+        let steps = qh::steps(&self.nav, player, goal);
+        self.helper_log(format!("showing {} goal {} ({:?}), about {} steps, player at MSB [{:.0}, {:.0}, {:.0}]",
+                                active.slug, active.goal_index, active.goal, steps / 10 * 10, player[0], player[1],
+                                player[2]));
+        let Some(layout) = self.layouts.get(qh::LAYOUT) else { return };
         let mut wanted = layout.images();
         wanted.push(qh::ARROW.into());
         self.textures.want(wanted);
@@ -769,8 +777,49 @@ impl Book {
             alpha: 1.0,
             hole: Cell::new(None),
         };
-        let steps = qh::steps(&self.nav, player, goal);
-        layout::draw(layout, &qh::view(layout, active, steps), &canvas, |_| true);
+        layout::draw(layout, &qh::view(layout, &active, steps), &canvas, |_| true);
+    }
+
+    /// Round 21 (Q6): what the Quest Helper shows (quest, goal point and player, both in MSB, camera), or why it is
+    /// hidden.
+    fn quest_helper_target(&self, cx: &Context) -> Result<(Active, [f32; 3], [f32; 3], markers::Camera), &'static str> {
+        use crate::questhelper as qh;
+        if !cx.gameplay || !cx.hud {
+            return Err("hidden: not in normal play");
+        }
+        if self.blocking() || self.map != MapState::Idle {
+            return Err("hidden: book, dialogue or map open");
+        }
+        if self.flags.is_empty() {
+            return Err("hidden: quest flags not read yet");
+        }
+        let Some(game) = cx.game else { return Err("hidden: no game") };
+        if self.layouts.get(qh::LAYOUT).is_none() {
+            return Err("hidden: QuestHelperHud.lay not loaded");
+        }
+        let Some(camera) = game.camera() else { return Err("hidden: no camera") };
+        if self.active.is_empty() {
+            return Err("hidden: no quest in progress");
+        }
+        // The player's MSB position: from the street NPCs the game has loaded (their MSB spot plus the player's
+        // offset from them in the physics space), else from the block origin (round 20's only way).
+        let entities = game.entities(&markers::MODELS, &markers::entity_ids());
+        let player = qh::player_msb_from_npcs(&camera, &entities).or_else(|| game.position().and_then(qh::player_msb));
+        let Some(player) = player else { return Err("hidden: player not on Unicorn Way's tile") };
+        let tracked = self.tracked_index().and_then(|i| self.active.get(i));
+        let Some((active, goal)) = tracked.into_iter().chain(self.active.iter())
+            .find_map(|a| qh::target(a, player).map(|g| (a, g)))
+        else {
+            return Err("hidden: no goal of the quests in progress has a place");
+        };
+        Ok((active.clone(), goal, player, camera))
+    }
+
+    fn helper_log(&mut self, state: String) {
+        if state != self.helper_state {
+            tracing::info!("quest helper: {state}");
+            self.helper_state = state;
+        }
     }
 
     /// Round 20 (Q7): the tracked quest's index in `active`: the one picked on the Quests page while it is in
@@ -1497,7 +1546,7 @@ impl Book {
             }
             // Round 20: the art the cards set themselves (goal pictures, reward, tracker, glow; draw_quest_cards).
             wanted.extend(self.active.iter().map(|a| a.picture.clone()).filter(|p| !p.is_empty()));
-            wanted.extend([pages::REWARD_RUNES, pages::REWARD_SCROLL, pages::QUEST_TRACKER, pages::QUEST_GLOW].map(String::from));
+            wanted.extend([pages::REWARD_RUNES, pages::REWARD_SCROLL, pages::QUEST_TRACKER, pages::QUEST_PAPER_LIT].map(String::from));
         }
         wanted.extend(view.images.iter().map(|i| i.1.clone()));
         wanted.extend(view.tinted.iter().map(|i| i.1.clone()));
@@ -1747,19 +1796,6 @@ impl Book {
             };
             layout::draw(card, &view, &inner, |_| true);
             layout::draw_extra(&view, &inner);
-            if tracked == Some(k) {
-                // Round 20 (Q7): Wizard101's Art_Quest_Glow over the selected card's edge, pulsing (its light frame
-                // sits 22/256 in from the picture's edge, here on the card's border). Its pale light (252,253,200)
-                // doesn't show on the parchment with plain alpha blending (Wizard101 adds it), so it is tinted to
-                // yellow and laid on twice.
-                let pulse = 0.65 + 0.35 * (self.opened_at.elapsed().as_secs_f32() * std::f32::consts::TAU / 1.6).sin();
-                let (w, h) = (r[2] - r[0], r[3] - r[1]);
-                let (mx, my) = (w * 26.0 / 212.0, h * 26.0 / 212.0);
-                let tint = ImColor32::from_rgba(255, 236, 70, (pulse * 255.0) as u8);
-                for _ in 0..2 {
-                    canvas.image(pages::QUEST_GLOW, [r[0] - mx, r[1] - my + 3.0, r[2] + mx, r[3] + my], [0.0, 0.0, 1.0, 1.0], tint);
-                }
-            }
         }
     }
 
@@ -1785,7 +1821,7 @@ impl Book {
         };
         let on_now = on_of(&now);
         if first || on_now != on_of(&self.flags) {
-            tracing::info!("quest flags{}: on {:?} ({} read; quest reset v2 done: {:?})", if first { " at load" } else { "" },
+            tracing::info!("quest flags{}: on {:?} ({} read; quest reset v3 done: {:?})", if first { " at load" } else { "" },
                            on_now, now.len(), now.get(&markers::QUEST_RESET));
         }
         self.flags = now;

@@ -44,6 +44,8 @@ pub struct Game {
     /// The loaded characters (ChrIns, model), re-read every half second, and the models last logged.
     characters: std::sync::Mutex<(Option<std::time::Instant>, Vec<(usize, u32)>)>,
     models_logged: std::sync::Mutex<Vec<u32>>,
+    /// Round 21 (quests Q2): the camera of the last few frames, newest last (`tick_camera`).
+    cameras: std::sync::Mutex<std::collections::VecDeque<crate::markers::Camera>>,
 }
 
 impl Game {
@@ -57,6 +59,7 @@ impl Game {
             equip_gear: scan_unique(&sections, EQUIP_GEAR).map(|at| at - EQUIP_GEAR_BACK),
             characters: Default::default(),
             models_logged: Default::default(),
+            cameras: Default::default(),
         })
     }
 
@@ -100,6 +103,30 @@ impl Game {
     /// The game camera (CSCamera's first perspective camera: rows right, up, forward, position; vertical fov in
     /// radians) and the player's physics position, in the same space as the camera; None when they can't be read.
     pub fn camera(&self) -> Option<crate::markers::Camera> {
+        let cameras = self.cameras.lock().unwrap_or_else(|e| e.into_inner());
+        cameras.front().copied().or_else(|| self.camera_now())
+    }
+
+    /// Round 21 (quests Q2): once per frame, before anything draws. Ryan: the "!" and the name plates lagged behind
+    /// the character as the camera turned. The overlay draws at Present, when the game thread is already stepping
+    /// the next frame, so CSCam holds a newer camera than the picture being shown (it can't hold an older one).
+    /// `camera()` then answers with the camera of `delay` frames ago (w101_orbs.ini marker_frames, default 1).
+    pub fn tick_camera(&self, delay: usize) {
+        let now = self.camera_now();
+        let mut cameras = self.cameras.lock().unwrap_or_else(|e| e.into_inner());
+        match now {
+            Some(c) => {
+                cameras.push_back(c);
+                while cameras.len() > delay + 1 {
+                    cameras.pop_front();
+                }
+            }
+            None => cameras.clear(),
+        }
+    }
+
+    /// The camera as CSCam holds it right now (see `camera`).
+    fn camera_now(&self) -> Option<crate::markers::Camera> {
         use eldenring::cs::{CSCam, CSCamera, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
         use std::mem::offset_of;
         let player = self.player()?;
