@@ -13,7 +13,7 @@
 //! The music plays while the player is in the street's tile (questhelper::player_msb, which also covers the rooms
 //! under the street). Combat: an alive Unicorn Way creature (nameplates::CREATURES) within FIGHT_RANGE while the
 //! player's stamina drops (Ryan: "when your stamina starts being actually used"), the player loses HP, or such a
-//! creature loses HP; or one comes within CLOSE_RANGE. Boss: Elden Ring's boss bar is up for one of our bosses
+//! creature loses HP. Boss: Elden Ring's boss bar is up for one of our bosses
 //! (GameDataMan, eldenring crate layout), or a boss creature is alive near the player in a room. After `calm`
 //! seconds (ini music_calm, default 6) with none of that, the street theme comes back.
 //!
@@ -53,7 +53,6 @@ const BOSS: &str = "w101_orbs/music/WC_HauntedWay_Combat.ogg";
 const STAY_RANGE: f32 = 15.0;
 
 /// A creature this close (metres) starts the battle music by itself.
-const CLOSE_RANGE: f32 = 7.0;
 /// Stamina use, HP loss or a hit on a creature counts as a fight with a creature this close.
 const FIGHT_RANGE: f32 = 25.0;
 /// Boss creatures this close in a room under the street mean a boss fight.
@@ -353,9 +352,8 @@ impl Music {
         if let Some((d, model)) = nearest.filter(|n| n.0 < STAY_RANGE && matches!(self.mode, Some(Mode::Battle | Mode::Boss))) {
             fight = Some(format!("{} still {d:.0} m away", name(model)));
         }
-        if let Some((d, model)) = nearest.filter(|n| n.0 < CLOSE_RANGE) {
-            fight = Some(format!("{} {d:.0} m away", name(model)));
-        }
+        // Round 23: being near a creature no longer starts a fight by itself (Ryan: only when Elden Ring is really in
+        // battle, i.e. the stamina bar is used); it only keeps a fight that started going (STAY_RANGE above).
         if let Some(s) = stats {
             if let (Some(last), Some((d, model))) = (self.last_sp, near) {
                 if s.sp < last && fight.is_none() {
