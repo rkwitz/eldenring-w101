@@ -1150,6 +1150,7 @@ impl Book {
             return;
         }
         if let Some(hit) = hit {
+            crate::music::sfx("HudSelect"); // round 22 S3: the .gui buttons' m_sSelectSound
             let double = self.last_hit.is_some_and(|(h, t)| h == hit && t.elapsed() < Duration::from_millis(450));
             self.last_hit = Some((hit, Instant::now()));
             self.page_thing(hit, double, cx);
@@ -1169,6 +1170,14 @@ impl Book {
             Some(page) => pages::click(self.tab, page, hit, &mut self.state),
             None => Action::None,
         };
+        // Round 22 S3: W101's click sounds (DeckConfiguration.gui PageUp/PageDown ui_hudgenericnext_click, other
+        // buttons HudSelect; a warp plays the teleport marker sound). Tabs and closing play their own.
+        match action {
+            Action::None | Action::Tab(_) | Action::Close => {}
+            Action::Setting(..) => crate::music::sfx("ui_hudgenericnext_click"),
+            Action::Warp(_) => crate::music::sfx("ui_teleport_marker"),
+            _ => crate::music::sfx("HudSelect"),
+        }
         match action {
             Action::None => {}
             Action::OpenMap => self.open_map(cx),
@@ -1840,6 +1849,7 @@ impl Book {
                         Some(held) => {
                             game::set_event_flag(flag, true);
                             tracing::info!("quest reward: {title} complete, {runes} runes given ({held} held now)");
+                            crate::music::sfx("ui_reward_gold");
                         }
                         None => tracing::warn!("quest reward: {title}: the rune count can't be reached"),
                     }
@@ -1868,6 +1878,8 @@ impl Book {
             Some(c) => {
                 tracing::info!("dialogue: {} ({} pages{})", self.requests[k].key, c.pages.len(),
                                if c.offer { ", offer" } else { "" });
+                crate::music::sfx("ui_chatbubble_popup");
+                crate::music::voice(Some((self.requests[k].key.as_str(), 0)));
                 self.dialogue = Some(c);
                 input::set_book_open(true);
             }
@@ -1992,9 +2004,17 @@ impl Book {
         let source = if click.is_some() { "mouse" } else if pressed != 0 { "controller" } else { "keyboard" };
         tracing::info!("dialogue: {press:?} by {source} (page {}, choosing {})", d.page + 1, d.choosing());
         let d = self.dialogue.as_mut().expect("checked");
+        // Round 22 S3/S4: Wizard101's button sound, and the new page's voice line.
+        if let Some(sound) = d.press_sound(press) {
+            crate::music::sfx(sound);
+        }
+        let before = d.page;
         if let Some(answer) = d.press(press) {
+            crate::music::voice(None);
             Self::answer(&self.requests[d.request], answer);
             self.end_dialogue();
+        } else if d.page != before {
+            crate::music::voice(Some((self.requests[d.request].key.as_str(), d.page)));
         }
     }
 
@@ -2080,6 +2100,8 @@ impl Book {
         }
         self.open = open;
         input::take_pressed();
+        // Round 22 S3: Wizard101's spellbook sounds (Root.wad / _Shared-WorldData Sound/GUI).
+        crate::music::sfx(if open { "ui_hudspellbook_open" } else { "ui_hudspellbook_close" });
         if open {
             self.opened_at = Instant::now();
             self.state.page = 0;
@@ -2102,6 +2124,9 @@ impl Book {
     fn select(&mut self, tab: Tab, _activate: bool) {
         if tab != self.tab {
             self.state.reset();
+            if tab != Tab::Close {
+                crate::music::sfx("ui_book_pageturn"); // round 22 S3: W101's book page turn
+            }
         }
         if tab != Tab::Close {
             self.tab = tab;

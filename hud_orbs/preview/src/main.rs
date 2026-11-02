@@ -48,6 +48,11 @@ mod teleport;
 mod input;
 mod game;
 mod live_preview;
+/// Round 22 S3/S4: the DLL's sounds (music.rs) are silent in the preview.
+mod music {
+    pub fn sfx(_name: &str) {}
+    pub fn voice(_page: Option<(&str, usize)>) {}
+}
 
 pub(crate) use settings::{save_settings, Settings};
 

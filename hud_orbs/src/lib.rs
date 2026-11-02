@@ -346,7 +346,10 @@ impl ImguiRenderLoop for Orbs {
         let hud = game::hud_shown();
         let faded = game::faded();
         let position = game.and_then(|g| g.position());
-        self.music.frame(game, stats, position, self.focused);
+        // Round 22 S1: the street position from the loaded street NPCs first (the block origin read garbage after a
+        // grace warp in Ryan's 00:30 log), then the block origin.
+        let street = game.and_then(questhelper::player_msb_now).or_else(|| position.and_then(questhelper::player_msb));
+        self.music.frame(game, stats, position, street, self.focused);
         let settings_path = self.folder.join("w101_orbs.ini");
         let mut cx = book::Context {
             game,
@@ -365,7 +368,6 @@ impl ImguiRenderLoop for Orbs {
             if cx.settings.nameplates {
                 self.book.draw_nameplates(ui, &cx);
             }
-            let street = position.and_then(questhelper::player_msb).is_some();
             let wisp_play = cx.gameplay && !self.book.blocking();
             self.wisps.frame(ui, &mut self.book.textures, game, wisp_play, street);
         }

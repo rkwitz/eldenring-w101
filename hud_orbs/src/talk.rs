@@ -149,6 +149,21 @@ impl Conversation {
         self.offer && self.last()
     }
 
+    /// Round 22 S3: Wizard101's sound for a press (_Shared-WorldData GUI/DialogWindow.gui m_sSelectSound: btnRight
+    /// HudSelect, btnBack CancelButtonClick, btnExit HudCancel; a quest taken or turned down plays
+    /// Sound/GUI/ui_quest_accepted / ui_quest_decline).
+    pub fn press_sound(&self, press: Press) -> Option<&'static str> {
+        match press {
+            Press::Next if self.choosing() => None,
+            Press::Next => Some("HudSelect"),
+            Press::Back => Some("CancelButtonClick"),
+            Press::Accept if self.choosing() => Some(if self.offer { "ui_quest_accepted" } else { "HudSelect" }),
+            Press::Decline if self.choosing() => Some(if self.offer { "ui_quest_decline" } else { "HudSelect" }),
+            Press::Accept | Press::Decline => None,
+            Press::Close => Some("HudCancel"),
+        }
+    }
+
     /// Applies a press; Some(answer) ends the conversation.
     pub fn press(&mut self, press: Press) -> Option<Answer> {
         match press {

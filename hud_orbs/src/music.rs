@@ -21,11 +21,21 @@
 //! options menu writes) while ours plays, and set back when the player leaves the street, quits out, or ini
 //! music = 0. The value it had is kept in w101_orbs.ini (music_er_volume) so a crash can't lose it.
 //!
+//! Round 22 S1: where the player is comes from the street NPCs the game has loaded (lib.rs passes
+//! questhelper::player_msb_from_npcs, then the block-origin read), and a missing or bad read no longer stops the
+//! music: the last good position holds for HOLD seconds (Ryan's 00:30-00:35 log: the block origin read
+//! (1009394688, -1) after a grace warp and the music, and so the battle music, stayed off for five minutes).
+//!
+//! Round 22 S3/S4: the same thread mixes Wizard101's interface sounds over the music (`sfx`, files in
+//! `w101_orbs/sfx/` from Root.wad / _Shared-WorldData.wad Sound/GUI, the .gui files' m_sSelectSound names) and
+//! one voice line at a time (`voice`), which ducks the music while it plays.
+//!
 //! Output: one background thread decoding with symphonia and writing 16-bit stereo PCM through waveOut
 //! (winmm), with crossfades between tracks and a fade when the game loses focus.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::game::{self, Game, Stats};
@@ -54,6 +64,12 @@ const ROOM_HEIGHT: f32 = 70.0;
 const BOSS_IDS: std::ops::RangeInclusive<u32> = 1042360850..=1042360853;
 /// Boss creature models (nameplates::CREATURES with Title::Boss).
 const BOSS_MODELS: [u32; 3] = [4960, 3300, 4340];
+/// Round 22 S1: how long the last good street position holds while the position can't be read.
+const HOLD: Duration = Duration::from_secs(45);
+/// Round 22 S3: interface sounds, relative to the DLL's folder.
+const SFX_DIR: &str = "w101_orbs/sfx";
+/// Music level while a voice line plays.
+const DUCK: f32 = 0.45;
 /// Output sample rate.
 const RATE: u32 = 44100;
 /// Crossfade between tracks and the focus fade, seconds.
@@ -73,6 +89,80 @@ struct Want {
     track: Option<PathBuf>,
     volume: f32,
     paused: bool,
+    /// Round 22 S3: one-shot sounds to start (taken by the audio thread).
+    shots: Vec<PathBuf>,
+    /// Round 22 S4: the voice line to play (None stops it) and a counter that changes with each new line.
+    voice: Option<PathBuf>,
+    voice_serial: u32,
+}
+
+static WANT: LazyLock<Arc<Mutex<Want>>> = LazyLock::new(Default::default);
+static THREAD: Once = Once::new();
+static FOLDER: OnceLock<PathBuf> = OnceLock::new();
+static SFX_ON: AtomicBool = AtomicBool::new(true);
+/// Interface sound gain (f32 bits), ini sfx_volume.
+static SFX_GAIN: AtomicU32 = AtomicU32::new(0x3F80_0000);
+
+fn start_thread() {
+    THREAD.call_once(|| {
+        let want = WANT.clone();
+        if let Err(e) = std::thread::Builder::new().name("w101_music".into()).spawn(move || audio_thread(want)) {
+            tracing::warn!("music: audio thread failed to start: {e}");
+        }
+    });
+}
+
+fn want() -> std::sync::MutexGuard<'static, Want> {
+    WANT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Round 22 S3: plays Wizard101's interface sound `name` (w101_orbs/sfx/<name>.wav) over the music.
+pub fn sfx(name: &str) {
+    let Some(folder) = FOLDER.get() else { return };
+    if SFX_ON.load(Ordering::Relaxed) {
+        play_file(folder.join(SFX_DIR).join(format!("{name}.wav")));
+    }
+}
+
+/// Plays a sound file once over the music (the wisps' pick-up sound, interface sounds).
+pub fn play_file(path: PathBuf) {
+    if !path.is_file() {
+        static MISSING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+        let mut missing = MISSING.lock().unwrap_or_else(|e| e.into_inner());
+        if !missing.contains(&path) {
+            tracing::warn!("sound: {} is missing", path.display());
+            missing.push(path);
+        }
+        return;
+    }
+    want().shots.push(path);
+    start_thread();
+}
+
+/// Round 22 S4: the voice line for dialogue `key` page `page` (0-based), from w101_orbs/book/voice.tsv
+/// ("key<TAB>page<TAB>file under w101_orbs/voice/"), replacing the one playing; None (or no line) stops it.
+pub fn voice(page: Option<(&str, usize)>) {
+    static LINES: OnceLock<Vec<(String, usize, PathBuf)>> = OnceLock::new();
+    let Some(folder) = FOLDER.get() else { return };
+    let lines = LINES.get_or_init(|| {
+        let text = std::fs::read_to_string(folder.join("w101_orbs/book/voice.tsv")).unwrap_or_default();
+        let lines: Vec<_> = text.lines().filter(|l| !l.starts_with('#')).filter_map(|l| {
+            let mut f = l.split('\t');
+            Some((f.next()?.to_string(), f.next()?.trim().parse().ok()?,
+                  folder.join("w101_orbs/voice").join(f.next()?.trim())))
+        }).collect();
+        tracing::info!("voice: {} dialogue voice lines in book/voice.tsv", lines.len());
+        lines
+    });
+    let path = page.and_then(|(key, n)| lines.iter().find(|l| l.0 == key && l.1 == n)).map(|l| l.2.clone())
+        .filter(|p| p.is_file());
+    let mut w = want();
+    if path.is_some() || w.voice.is_some() {
+        w.voice = path;
+        w.voice_serial = w.voice_serial.wrapping_add(1);
+        drop(w);
+        start_thread();
+    }
 }
 
 pub struct Music {
@@ -84,9 +174,10 @@ pub struct Music {
     calm: Duration,
     mute_er: bool,
     background: bool,
-    want: Arc<Mutex<Want>>,
-    thread: bool,
     mode: Option<Mode>,
+    /// Round 22 S1: the last good street position and when it was seen.
+    last_msb: Option<([f32; 3], Instant)>,
+    holding_logged: bool,
     last_fight: Option<Instant>,
     last_boss: Option<Instant>,
     last_sp: Option<i32>,
@@ -107,6 +198,7 @@ pub struct Music {
 
 impl Music {
     pub fn new(folder: &Path) -> Music {
+        let _ = FOLDER.set(folder.to_path_buf());
         let ini = folder.join("w101_orbs.ini");
         let mut m = Music {
             folder: folder.to_path_buf(),
@@ -117,9 +209,9 @@ impl Music {
             calm: Duration::from_secs(6),
             mute_er: true,
             background: false,
-            want: Default::default(),
-            thread: false,
             mode: None,
+            last_msb: None,
+            holding_logged: false,
             last_fight: None,
             last_boss: None,
             last_sp: None,
@@ -146,6 +238,10 @@ impl Music {
                 "music_mute_er" => m.mute_er = value != "0",
                 "music_background" => m.background = value == "1",
                 "music_er_volume" => m.er_saved = value.parse::<u8>().ok().filter(|v| *v <= 10),
+                "sfx" => SFX_ON.store(value != "0", Ordering::Relaxed),
+                "sfx_volume" => if let Ok(v) = value.parse::<f32>() {
+                    SFX_GAIN.store((v.clamp(0.0, 200.0) / 100.0).to_bits(), Ordering::Relaxed);
+                },
                 _ => {}
             }
         }
@@ -156,23 +252,44 @@ impl Music {
     }
 
     /// Called every frame with what the HUD read this frame.
+    /// `street` (round 22 S1): the player's MSB position on Unicorn Way's tile this frame, from the loaded street
+    /// NPCs or the block origin (lib.rs), None when neither could be read.
     pub fn frame(&mut self, game: Option<&Game>, stats: Option<Stats>, position: Option<([f32; 3], i32, i32)>,
-                 focused: bool) {
-        let msb = position.and_then(crate::questhelper::player_msb);
+                 street: Option<[f32; 3]>, focused: bool) {
+        let now = Instant::now();
         let quit = game.is_some() && game::quitting_out();
         if quit && !self.quit_byte && self.mode.is_some() {
             self.quit_latched = true;
+            self.last_msb = None;
         }
         if position.is_none() {
             self.quit_latched = false;
         }
         self.quit_byte = quit;
+        if game.is_none() {
+            self.last_msb = None;
+        }
+        if let Some(p) = street {
+            self.last_msb = Some((p, now));
+            self.holding_logged = false;
+        }
+        // A missing or bad read (loading screens, a grace warp's garbage block origin) keeps the last good spot.
+        let held = self.last_msb.filter(|(_, t)| now - *t < HOLD);
+        if street.is_none() && !self.holding_logged {
+            if let Some((_, t)) = held {
+                self.holding_logged = true;
+                tracing::info!("music: no street position (block {:?}); holding the last one from {:.1} s ago",
+                               position.map(|p| (p.1, p.2)), (now - t).as_secs_f32());
+            }
+        }
+        let msb = street.or(held.map(|h| h.0));
         let here = self.enabled && game.is_some() && msb.is_some() && !self.quit_latched;
         let why_off = if here {
             String::new()
         } else {
-            format!("enabled {}, game {}, position {:?}, on the street tile {}, quit-out byte {quit}, quit-out {}",
-                    self.enabled, game.is_some(), position.map(|p| (p.1, p.2)), msb.is_some(), self.quit_latched)
+            format!("enabled {}, game {}, position {:?}, on the street tile {}, last street position {:?} s ago, \
+                     quit-out byte {quit}, quit-out {}", self.enabled, game.is_some(), position.map(|p| (p.1, p.2)),
+                    street.is_some(), self.last_msb.map(|(_, t)| (now - t).as_secs()), self.quit_latched)
         };
         if why_off != self.why_off {
             if !why_off.is_empty() {
@@ -192,7 +309,6 @@ impl Music {
             self.set(None, focused);
             return;
         };
-        let now = Instant::now();
         let (fight, boss) = self.signals(g, stats, msb);
         if let Some(why) = &fight {
             if self.last_fight.is_none_or(|t| now - t > self.calm) {
@@ -299,14 +415,10 @@ impl Music {
     }
 
     fn set(&mut self, track: Option<PathBuf>, focused: bool) {
-        if track.is_some() && !self.thread {
-            self.thread = true;
-            let want = self.want.clone();
-            if let Err(e) = std::thread::Builder::new().name("w101_music".into()).spawn(move || audio_thread(want)) {
-                tracing::warn!("music: audio thread failed to start: {e}");
-            }
+        if track.is_some() {
+            start_thread();
         }
-        let mut w = self.want.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = want();
         w.track = track;
         w.volume = self.volume;
         w.paused = !focused && !self.background;
@@ -369,6 +481,10 @@ struct Voice {
     gain: f32,
     target: f32,
     failed: bool,
+    /// Music loops; sounds and voice lines play once.
+    looping: bool,
+    /// The file's sample rate.
+    rate: u32,
 }
 
 struct Source {
@@ -400,7 +516,12 @@ fn open(path: &Path) -> Result<Source, String> {
 
 impl Voice {
     fn new(path: PathBuf) -> Voice {
-        Voice { path, source: None, frames: Vec::new(), cursor: 0.0, gain: 0.0, target: 1.0, failed: false }
+        Voice { path, source: None, frames: Vec::new(), cursor: 0.0, gain: 0.0, target: 1.0, failed: false, looping: true,
+                rate: RATE }
+    }
+
+    fn once(path: PathBuf) -> Voice {
+        Voice { gain: 1.0, looping: false, ..Voice::new(path) }
     }
 
     /// Decodes the next packet into `frames`; at the end of the file starts it over (the tracks loop).
@@ -421,8 +542,12 @@ impl Voice {
             let packet = match s.format.next_packet() {
                 Ok(p) => p,
                 Err(_) => {
-                    // End of the file (or a broken tail): loop.
+                    // End of the file (or a broken tail): loop, or end a sound.
                     self.source = None;
+                    if !self.looping {
+                        self.failed = true;
+                        return false;
+                    }
                     continue;
                 }
             };
@@ -446,10 +571,22 @@ impl Voice {
 
     /// The next output frame (linear resampling from the file's rate to RATE).
     fn next(&mut self) -> [f32; 2] {
-        let step = self.source.as_ref().map_or(1.0, |s| s.rate as f64 / RATE as f64);
+        self.sample().unwrap_or([0.0; 2])
+    }
+
+    /// The next frame, None once a sound has ended (or can't be read).
+    fn sample(&mut self) -> Option<[f32; 2]> {
+        // A sound's source is gone at its end: keep its file's rate for the frames left.
+        if let Some(s) = &self.source {
+            self.rate = s.rate;
+        }
+        let step = self.rate as f64 / RATE as f64;
         while self.cursor as usize + 1 >= self.frames.len() {
             if self.failed || !self.decode_more() {
-                return [0.0; 2];
+                return None;
+            }
+            if let Some(s) = &self.source {
+                self.rate = s.rate;
             }
         }
         let i = self.cursor as usize;
@@ -462,7 +599,7 @@ impl Voice {
             self.frames.drain(..n);
             self.cursor -= n as f64;
         }
-        [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+        Some([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t])
     }
 }
 
@@ -470,7 +607,8 @@ impl Voice {
 fn audio_thread(want: Arc<Mutex<Want>>) {
     use windows_sys::Win32::Media::Audio::{waveOutOpen, waveOutPrepareHeader, waveOutWrite, HWAVEOUT,
                                            WAVEFORMATEX, WAVEHDR, WAVE_FORMAT_PCM, WAVE_MAPPER, WHDR_DONE};
-    const FRAMES: usize = 2048;
+    // Round 22 S3: short buffers so a click sounds with the click (4 x 512 frames, about 46 ms queued).
+    const FRAMES: usize = 512;
     const BUFFERS: usize = 4;
     let format = WAVEFORMATEX {
         wFormatTag: WAVE_FORMAT_PCM as u16,
@@ -497,16 +635,33 @@ fn audio_thread(want: Arc<Mutex<Want>>) {
         h.dwFlags |= WHDR_DONE;
     }
     let mut voices: Vec<Voice> = Vec::new();
+    let mut shots: Vec<Voice> = Vec::new();
+    let mut line: Option<Voice> = None;
+    let mut line_serial = 0u32;
+    let mut duck = 1.0f32;
     let mut master = 0.0f32;
     loop {
         let Some(free) = headers.iter().position(|h| h.dwFlags & WHDR_DONE != 0) else {
-            std::thread::sleep(Duration::from_millis(8));
+            std::thread::sleep(Duration::from_millis(2));
             continue;
         };
         let (track, volume, paused) = {
-            let w = want.lock().unwrap_or_else(|e| e.into_inner());
+            let mut w = want.lock().unwrap_or_else(|e| e.into_inner());
+            for path in w.shots.drain(..) {
+                if shots.len() < 8 {
+                    shots.push(Voice::once(path));
+                }
+            }
+            if w.voice_serial != line_serial {
+                line_serial = w.voice_serial;
+                line = w.voice.clone().map(|p| {
+                    tracing::info!("voice: playing {}", p.display());
+                    Voice::once(p)
+                });
+            }
             (w.track.clone(), w.volume, w.paused)
         };
+        let sfx_gain = f32::from_bits(SFX_GAIN.load(Ordering::Relaxed));
         // A new track fades in over the old one, which fades out.
         if voices.last().map(|v| &v.path) != track.as_ref() {
             for v in voices.iter_mut() {
@@ -537,8 +692,29 @@ fn audio_thread(want: Arc<Mutex<Want>>) {
                     mix[1] += s[1] * v.gain;
                 }
             }
-            out[f * 2] = ((mix[0] * master).clamp(-1.0, 1.0) * 32767.0) as i16;
-            out[f * 2 + 1] = ((mix[1] * master).clamp(-1.0, 1.0) * 32767.0) as i16;
+            duck += ((if line.is_some() { DUCK } else { 1.0 }) - duck).clamp(-focus_fade, focus_fade);
+            let mut top = [0.0f32; 2];
+            shots.retain_mut(|s| match s.sample() {
+                Some(x) => {
+                    top[0] += x[0] * sfx_gain;
+                    top[1] += x[1] * sfx_gain;
+                    true
+                }
+                None => false,
+            });
+            if let Some(v) = line.as_mut() {
+                match v.sample() {
+                    Some(x) => {
+                        top[0] += x[0] * sfx_gain;
+                        top[1] += x[1] * sfx_gain;
+                    }
+                    None => line = None,
+                }
+            }
+            let l = mix[0] * master * duck + top[0];
+            let r = mix[1] * master * duck + top[1];
+            out[f * 2] = (l.clamp(-1.0, 1.0) * 32767.0) as i16;
+            out[f * 2 + 1] = (r.clamp(-1.0, 1.0) * 32767.0) as i16;
         }
         voices.retain(|v| v.target > 0.0 || v.gain > 0.0);
         let h = &mut headers[free];

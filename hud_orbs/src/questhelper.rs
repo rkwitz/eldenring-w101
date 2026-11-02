@@ -110,6 +110,13 @@ pub fn player_msb_from_npcs(camera: &Camera, entities: &[(u32, [f32; 3])]) -> Op
     (n > 0.0).then(|| sum.map(|v| v / n))
 }
 
+/// Round 22 S1: the player's MSB position from the loaded street NPCs (player_msb_from_npcs), when it is on the tile.
+pub fn player_msb_now(game: &crate::game::Game) -> Option<[f32; 3]> {
+    let camera = game.camera()?;
+    let entities = game.entities(&crate::markers::MODELS, &crate::markers::entity_ids());
+    player_msb_from_npcs(&camera, &entities).filter(|p| p[0].abs() < TILE_RANGE && p[2].abs() < TILE_RANGE)
+}
+
 /// Where the arrow points for quest `active` with the player at `player` (MSB): the goal's nearest point, or the
 /// room's door while the player is out on the street.
 pub fn target(active: &Active, player: [f32; 3]) -> Option<[f32; 3]> {

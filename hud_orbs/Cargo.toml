@@ -11,7 +11,7 @@ eldenring = "0.14.0"
 from-singleton = "3.0.1"
 hudhook = "0.9.3"
 image = { version = "0.25", default-features = false, features = ["png"] }
-symphonia = { version = "0.5.4", default-features = false, features = ["mp3", "ogg", "vorbis"] }
+symphonia = { version = "0.5.4", default-features = false, features = ["mp3", "ogg", "vorbis", "wav", "pcm"] }
 texture2ddecoder = "0.1.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
