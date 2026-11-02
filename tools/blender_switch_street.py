@@ -56,6 +56,14 @@ CLASSIC = ROOT / "reference" / "w101" / "converted_classic"
 EDITED = CLASSIC / "WC_Z06_Unicorn_Way_Classic_edited.obj"
 OBJ = EDITED if EDITED.exists() else CLASSIC / "WC_Z06_Unicorn_Way_Classic.obj"
 MTL = OBJ.with_suffix(".mtl")
+# Wizard101's own vertex normals of the classic zone (nif_normals.py, from ClassicMode-WC_Streets-WC_Unicorn.wad's
+# WC_Z06_Unicorn_Way.nif). Without them every triangle got its own flat normal and Elden Ring's sun lit each one as
+# a facet (round 24: trees with one triangle near white and the next much darker); with them the street shades
+# smoothly like W101. If the file is missing, normals are averaged from the geometry instead (close, not exact).
+NORMALS = CLASSIC / "WC_Z06_Unicorn_Way_Classic.normals"
+# Blue channel of the flat normal map AET030_518_n = Elden Ring's glossiness (_n: red/green normal, blue inverted
+# roughness). It was 64 (a faint sheen); classic W101 has no specular at all (no NiSpecularProperty in the zone), so 0.
+GLOSS = 0
 OUTPUTS = [GEOMBND, COLLISION, *TEXTURES]
 
 
@@ -97,7 +105,6 @@ def build_classic():
     tunnel = [f for f in faces if cut(f)]
     faces = [f for f in faces if not backdrop(positions, f) and not cut(f)]
     print(f"Left out {len(walls)} triangles of the zone's backdrop walls and {len(tunnel)} inside the Commons archway")
-    single, materials = flver_build.build_single_mesh(template, positions, uvs, faces)
     texture_of_material = flver_textures.parse_mtl(MTL)
     if OBJ == EDITED:
         # Blender may drop a texture it couldn't load or rename a material "name.001"; the original MTL fills in.
@@ -109,6 +116,15 @@ def build_classic():
         missing = {m for m, _ in faces} - set(texture_of_material)
         if missing:
             print(f"No texture for {len(missing)} materials of your edit: {sorted(m or '' for m in missing)[:5]}")
+    reference = flver_build.read_normals(NORMALS) if NORMALS.exists() else None
+    if reference is None:
+        print(f"No {NORMALS.name}: normals are smoothed from the geometry instead of W101's own")
+    drawn = [m in texture_of_material for m, _ in faces]  # untextured faces are dropped by split_materials anyway
+    normals, used = flver_build.corner_normals(positions, [f for f, d in zip(faces, drawn) if d], reference)
+    normals = iter(normals)
+    normals = [next(normals) if d else None for d in drawn]
+    print(f"Smooth normals: {used['w101']} corners from W101, {used['smoothed']} averaged from the geometry")
+    single, materials = flver_build.build_single_mesh(template, positions, uvs, faces, normals=normals)
     stems = sorted(set(texture_of_material.values()))
     dds = [dds_color.boost((CLASSIC / "textures" / f"{stem}.dds").read_bytes(), SATURATION, BRIGHTNESS)
            for stem in stems]
@@ -122,7 +138,7 @@ def build_classic():
     print(f"Wrote {GEOMBND}: {len(faces)} triangles, {len(stems)} textures ({len(alpha)} with transparency)")
 
     textures = [(flver_textures.texture_name(i), data) for i, data in enumerate(dds)]
-    textures.append((flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, 64)))
+    textures.append((flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, GLOSS)))
     _, dcx_type = decompress(AET_TEMPLATE)
     packed = compress(tpf.build_tpf(textures), dcx_type)
     for path in TEXTURES:

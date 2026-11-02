@@ -111,10 +111,15 @@ SKY_SATURATION = 1.3  # pushes the colours away from grey (1.0 = as graded); a b
 # (20-40 deg up), so above the rooftops only pink and lavender show.
 # 2026-10-29 round 12: "could still be a little lower... a tad lower": 2 deg down, 0..35 now spans W101 4..17 (dome
 # 4..39.7 deg), blue fading out by W101 5.3 (dome 5.9), pink by dome 9.6.
+# 2026-11-02 round 24: "move the sky texture up so it shows more blue, right now it's too much purple": SKY_RAISE 1 deg
+# up, halfway back to round 11 (which was "still too much blue"): 0..35 spans W101 5..18 (dome 5..42.6 deg), blue
+# fading out by W101 6.3 (dome 8.8), pink by dome 12.5. Raise it more for more blue, 0 = round 12.
+SKY_RAISE = 1.0
 SKY_TARGET = [(-30, (150, 178, 245)), (-3, (155, 180, 245)), (4.0, (161, 183, 245)), (5.3, (185, 193, 252)),
               (6.6, (220, 204, 254)), (7.9, (238, 201, 254)), (9.2, (240, 190, 255)), (10.5, (235, 180, 253)),
               (11.8, (223, 166, 249)), (13.1, (215, 155, 242)), (14.4, (208, 151, 237)), (17.0, (206, 151, 236)),
               (90, (206, 151, 236))]
+SKY_TARGET = [(e + SKY_RAISE if -3 < e < 90 else e, c) for e, c in SKY_TARGET]
 SKY_DETAIL = 1.2  # 0.5 (2026-10-25) flattened the swirls; 1.0 = the bake's own swirls and clouds, above = stronger
 # Lighting for the whole overworld (gparam_fog.flat_lighting): True = no sun, no shadows, ambient light of intensity
 # AMBIENT from every side (raise it if everything is too dark, lower it if washed out; vanilla daylight sun is about
