@@ -254,7 +254,9 @@ impl Staged {
     }
 
     fn opt(&self, game: Option<&game::Game>, offset: usize) -> Option<u8> {
-        self.opts.iter().find(|o| o.0 == offset).map(|o| o.1).or_else(|| game?.option(offset))
+        self.opts.iter().find(|o| o.0 == offset).map(|o| o.1)
+            .or_else(|| if offset == opt::MUSIC { crate::music::music_setting() } else { None })
+            .or_else(|| game?.option(offset))
     }
 
     fn set_opt(&mut self, offset: usize, value: u8) {
@@ -420,6 +422,11 @@ pub fn apply(staged: &mut Staged, game: Option<&game::Game>, s: &mut crate::Sett
     let staged = std::mem::take(staged);
     let (mut changed, mut errors) = (0, Vec::new());
     for (offset, v) in staged.opts {
+        // Round 23: while our music plays, Music Volume is ours to take (Elden Ring's is held at 0).
+        if offset == opt::MUSIC && crate::music::take_music_setting(v) {
+            changed += 1;
+            continue;
+        }
         match game {
             Some(g) if g.option(offset) == Some(v) => {}
             Some(g) if g.set_option(offset, v) => changed += 1,

@@ -52,6 +52,8 @@ mod live_preview;
 mod music {
     pub fn sfx(_name: &str) {}
     pub fn voice(_page: Option<(&str, usize)>) {}
+    pub fn music_setting() -> Option<u8> { None }
+    pub fn take_music_setting(_value: u8) -> bool { false }
 }
 
 pub(crate) use settings::{save_settings, Settings};

@@ -418,16 +418,25 @@ impl Music {
         }
         let mut w = want();
         w.track = track;
-        w.volume = self.volume;
+        // Round 23: Elden Ring's Music Volume setting (0-10, the one we keep while its music is silenced) scales ours.
+        w.volume = self.volume * self.er_saved.filter(|_| self.er_muted).map_or(1.0, |v| v as f32 / 10.0);
         w.paused = !focused && !self.background;
     }
 
+    /// (see the statics below for the Settings page's view of it)
     /// M5: Elden Ring's Music Volume to 0 while ours plays, back to what it was otherwise.
     fn er_volume(&mut self, game: Option<&Game>, here: bool) {
         use crate::options::opt::MUSIC;
         let Some(g) = game else { return };
         let Some(now) = g.option(MUSIC) else { return };
         if here && self.mute_er {
+            // Round 23: the book's Settings page changed Music Volume while ER's music is silenced (options.rs).
+            let pending = PENDING_SETTING.swap(NONE, Ordering::Relaxed);
+            if pending != NONE && self.er_saved != Some(pending) {
+                tracing::info!("music: Music Volume set to {pending} (our music follows it)");
+                self.er_saved = Some(pending);
+                self.write_ini_volume(self.er_saved);
+            }
             // A non-zero value here is Ryan's (or the game's) setting: keep it to restore, then silence it.
             if now != 0 {
                 self.er_saved = Some(now);
@@ -437,6 +446,7 @@ impl Music {
                 }
             }
             self.er_muted = true;
+            SETTING.store(self.er_saved.unwrap_or(10), Ordering::Relaxed);
         } else if self.er_muted || self.er_saved.is_some() {
             if let Some(v) = self.er_saved.filter(|_| now == 0) {
                 if g.set_option(MUSIC, v) {
@@ -444,6 +454,7 @@ impl Music {
                 }
             }
             self.er_muted = false;
+            SETTING.store(NONE, Ordering::Relaxed);
             self.er_saved = None;
             self.write_ini_volume(None);
         }
@@ -733,3 +744,24 @@ fn size_of_header() -> u32 {
 
 #[cfg(not(windows))]
 fn audio_thread(_want: Arc<Mutex<Want>>) {}
+
+/// Round 23: while Elden Ring's Music Volume is held at 0 to silence its music, the Settings page shows and changes the
+/// value it had (SETTING), and that value scales our music. NONE = not held.
+const NONE: u8 = 255;
+static SETTING: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(NONE);
+static PENDING_SETTING: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(NONE);
+
+/// options.rs: the Music Volume to show while ours plays (None: show Elden Ring's own value).
+pub fn music_setting() -> Option<u8> {
+    Some(SETTING.load(Ordering::Relaxed)).filter(|v| *v != NONE)
+}
+
+/// options.rs: OK on the Settings page with a new Music Volume; true when it was taken here (ours plays).
+pub fn take_music_setting(value: u8) -> bool {
+    if music_setting().is_none() {
+        return false;
+    }
+    SETTING.store(value.min(10), Ordering::Relaxed);
+    PENDING_SETTING.store(value.min(10), Ordering::Relaxed);
+    true
+}
