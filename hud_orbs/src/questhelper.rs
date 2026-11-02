@@ -139,6 +139,10 @@ pub fn player_msb_now(game: &crate::game::Game) -> Option<[f32; 3]> {
     player_msb_from_npcs(&camera, &entities).filter(|p| p[0].abs() < TILE_RANGE && p[2].abs() < TILE_RANGE)
 }
 
+/// The Bone Cages goal (finding_out_why goal 0) and the first cage's flag (tools/w101_quests.py CAGE_FLAG).
+const CAGES_GOAL: usize = 0;
+const CAGE_FLAG: u32 = 1042360540;
+
 /// Where the arrow points for quest `active` with the player at `player` (MSB): the goal's nearest point, or the
 /// room's door while the player is out on the street.
 pub fn target(active: &Active, player: [f32; 3]) -> Option<[f32; 3]> {
@@ -149,7 +153,14 @@ pub fn target(active: &Active, player: [f32; 3]) -> Option<[f32; 3]> {
         }
     }
     let d2 = |p: &[f32; 3]| (p[0] - player[0]).powi(2) + (p[2] - player[2]).powi(2);
-    let goal = points.iter().min_by(|a, b| d2(a).total_cmp(&d2(b))).copied()?;
+    // Round 24 (M2): the Bone Cages goal pointed at the nearest cage even when it was already open ("about 0
+    // steps" at Ryan's opened cage, so he wasn't led on to the other two); now at the nearest cage still shut, i.e.
+    // whose flag CAGE_FLAG + i (same order as the points) is off.
+    let shut = |i: usize| !(active.slug == "finding_out_why" && active.goal_index == CAGES_GOAL
+        && crate::game::event_flag(CAGE_FLAG + i as u32) == Some(true));
+    let goal = points.iter().enumerate().filter(|(i, _)| shut(*i)).map(|(_, p)| p)
+        .min_by(|a, b| d2(a).total_cmp(&d2(b))).or_else(|| points.iter().min_by(|a, b| d2(a).total_cmp(&d2(b))))
+        .copied()?;
     // Round 22 (H3, Ryan: "it points to where the hedge maze is on the map, not where the door is"): a goal in the
     // garden from the street points at the garden's door on the street; a street goal from inside the garden at
     // the garden's own door (where its arrival point is).

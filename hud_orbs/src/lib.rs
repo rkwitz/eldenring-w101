@@ -35,6 +35,7 @@ mod talk;
 mod settings;
 mod options;
 mod sheet;
+mod sidewalk;
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -141,6 +142,8 @@ struct Orbs {
     music: music::Music,
     /// Wizard101's health and mana wisps (round 21 M3, wisps.rs).
     wisps: wisps::Wisps,
+    /// Round 24 M1: enemies don't see the player off the road (sidewalk.rs).
+    sidewalk: sidewalk::Sidewalk,
 }
 
 /// Frame timing written to w101_orbs.log every few seconds, to see what the overlay costs the game.
@@ -198,9 +201,11 @@ impl Orbs {
         let probe = settings.scene_probe.then(probe::Probe::new);
         let music = music::Music::new(&folder);
         let wisps = wisps::Wisps::new(&folder);
+        let sidewalk = sidewalk::Sidewalk::load(&folder.join("w101_orbs").join("road_mask.tsv"));
         Orbs {
             music,
             wisps,
+            sidewalk,
             settings,
             probe,
             live,
@@ -351,6 +356,7 @@ impl ImguiRenderLoop for Orbs {
         // grace warp in Ryan's 00:30 log), then the block origin.
         let street = game.and_then(questhelper::player_msb_now).or_else(|| position.and_then(questhelper::player_msb));
         self.music.frame(game, stats, position, street, self.focused);
+        self.sidewalk.frame(game.is_some() && stats.is_some(), street);
         let settings_path = self.folder.join("w101_orbs.ini");
         let mut cx = book::Context {
             game,

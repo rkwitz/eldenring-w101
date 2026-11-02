@@ -24,6 +24,7 @@ python emevd.py --crafting common.emevd er_recipes.tsv out.emevd
 python emevd.py --no-leaves common.emevd|m60.emevd out.emevd
   every falling-leaf source of those events off, in place (see no_leaves).
 python emevd.py --midday m60_42_36_00.emevd out.emevd [first_id second_id]
+python emevd.py --sidewalk m60_42_36_00.emevd[.dcx] out.emevd[.dcx]   (round 24 M1, needs the DLL's sidewalk.rs)
   always 12:00 (see midday; m60.emevd takes ids 1060002990 1060002991).
 """
 import struct
@@ -296,6 +297,48 @@ def clear_weather(d, event_id=WEATHER_EVENT, weather=CLEAR_WEATHER):
         _i(1000, 4, "<Bxxx", 1),  # restart
     ]})
     return build(e, events)
+
+
+SIDEWALK_EVENT = 1042362560
+SIDEWALK_FLAG = 1042362560  # hud_orbs/src/sidewalk.rs SIDEWALK_FLAG: on while the player is on the street off the road
+SIDEWALK_SPEFFECT = 99006  # vanilla: sightSearchEnemyRate 0, hearingSearchEnemyRate 0, no vfx/icon, not saved
+DOOR_AREA = 1042362700  # UnicornWay_title_door: the box just outside the graveyard exit door (title_on_door_exit)
+
+
+def sidewalk(d, event_id=SIDEWALK_EVENT, flag=SIDEWALK_FLAG, speffect=SIDEWALK_SPEFFECT, door_area=DOOR_AREA):
+    """Round 24 (M1, Ryan: enemies should not aggro while the player is on the sidewalk, only once he steps into the
+    road, as Wizard101's mobs keep to the road): event `event_id` (rest 0, started from the top of event 0) clears
+    SpEffect `speffect` on the player, waits for the DLL's `flag` (sidewalk.rs, off the road), sets it (enemies'
+    sight and hearing of the player x0), waits for the flag off OR the player at the graveyard door (so he never
+    takes it into the Stranded Graveyard, whose map doesn't run this event), clears it and restarts."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
+    events.append({"id": event_id, "rest": 0, "pars": [], "ins": [
+        _i(2004, 21, "<Ii", 10000, speffect),  # Clear SpEffect
+        _i(1003, 0, "<BBxxI", 1, 0, flag),  # WAIT flag on
+        _i(2004, 8, "<Ii", 10000, speffect),  # Set SpEffect
+        _i(3, 0, "<bBBxI", -1, 0, 0, flag),  # OR: flag off
+        _i(3, 2, "<bBxxIIi", -1, 1, 10000, door_area, 1),  # OR: player at the graveyard door
+        _i(0, 0, "<bBbx", 0, 1, -1),  # IF the OR group
+        _i(2004, 21, "<Ii", 10000, speffect),  # Clear SpEffect
+        _i(1000, 4, "<Bxxx", 1),  # restart
+    ]})
+    return build(e, events)
+
+
+def _dcx_apply(path_in, path_out, fn):
+    """`fn` on the EMEVD in `path_in` (plain or DFLT DCX), written to `path_out` the same way."""
+    data = open(path_in, "rb").read()
+    dcx = data[:4] == b"DCX\0"
+    assert not dcx or data[0x28:0x2C] == b"DFLT", "expected a DFLT-compressed file"
+    raw = fn(zlib.decompress(data[0x4C:]) if dcx else data)
+    if dcx:
+        packed = zlib.compress(raw, 9)
+        head = bytearray(data[:0x4C])
+        struct.pack_into(">II", head, 0x1C, len(raw), len(packed))
+        raw = bytes(head) + packed
+    open(path_out, "wb").write(raw)
 
 
 def _i(bank, iid, fmt, *args):
@@ -799,6 +842,9 @@ if __name__ == "__main__":
         sys.exit()
     if sys.argv[1] == "--garden":  # emevd.py --garden m60_42_36_00.emevd out.emevd (doors of msb_add_garden.py)
         open(sys.argv[3], "wb").write(garden_doors(open(sys.argv[2], "rb").read()))
+        sys.exit()
+    if sys.argv[1] == "--sidewalk":  # emevd.py --sidewalk in.emevd[.dcx] out.emevd[.dcx] (round 24 M1)
+        _dcx_apply(sys.argv[2], sys.argv[3], sidewalk)
         sys.exit()
     if sys.argv[1] == "--doors":  # emevd.py --doors in.emevd[.dcx] out.emevd[.dcx]: every door warp again (round 23 H3)
         data = open(sys.argv[2], "rb").read()

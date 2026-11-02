@@ -297,7 +297,7 @@ def quest_events():
                        skip_if_flag(3, flag, 0),  # not opened yet: on to the wait
                        asset_enabled(entity, 0), asset_enabled(opened, 1), END,
                        wait_flag(Q.assigned("finding_out_why")),  # the Examine prompt only while the quest is on
-                       if_button(0, Q.TALK_BUTTON, entity), set_flag(flag),
+                       if_button(0, Q.CAGE_BUTTON, entity), set_flag(flag),
                        oneshot_sfx(opened, Q.CAGE_OPEN_SFX), asset_enabled(entity, 0), asset_enabled(opened, 1), END])
     for slug, *_rest, entity in Q.CHARACTERS:  # npcs
         events.append(npc_event(slug, entity))

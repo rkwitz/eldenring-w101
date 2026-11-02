@@ -257,6 +257,11 @@ CAGES = [
 ]
 CAGE_YAWS = [-80.21, 68.58, -121.18, -62.40]  # W101 z rotation -1.400, 1.197, -2.115, -1.089 rad
 CAGE_OPEN_ENTITY = 4  # the open cage of cage c has entity CAGES[c] + 4 (1042361884-887)
+# Round 24 (M2): the cage's Examine button. ActionButtonParam 9000 (TALK_BUTTON) reaches only 1 m from the lamp's
+# base, and the post (0.36 m) plus the cage hanging off it leave a thin ring the player can stand in: Ryan stood
+# ~0.7 m from cage 0 (log 02:50:55, MSB rounded to whole metres) and got nothing. Vanilla row 9260 is the same
+# button (category 5 "Examine", text 1000, height -0.5..+1.0 m, any angle) with radius 1.8 m.
+CAGE_BUTTON = 9260
 CAGE_OPEN_SFX = 1060  # oneshot SFX on the open cage (vanilla common 9005810 plays it as it enables an asset)
 
 # Goal regions (spheres): (slug, frame, position, radius, entity id, region id). Frames as msb_add_interiors.py.
