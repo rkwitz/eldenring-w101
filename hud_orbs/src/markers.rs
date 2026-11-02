@@ -95,9 +95,8 @@ const OFFERS: &[(&str, u32, u32)] = &[
     ("lady_oriel", 1042360340, 1042360339), // Finding Out Why once Monsters and Mazes is complete
     ("lady_oriel", 1042360350, 1042360349), // Who Could It Be Now? once Finding Out Why is complete
     ("ceren_nightchant", 1042360360, 1042360359), // Sinister Skeleton once Who Could It Be Now? is complete
-    ("olivia_dawnwillow", 1042360400, 1042360320), // Pesky Pirates once Skeleton Crew is assigned
-    ("private_connelly", 1042360410, 1042360319), // Saving Private Oryan once Ghost Hunters is complete
-    ("olivia_dawnwillow", 1042360450, 1042360409), // Fear of Fire once Pesky Pirates is complete
+    // Round 23 (Q3, Ryan): only the line to Rattlebones and Ceren after him; the side quests (Pesky Pirates, Saving
+    // Private O'Ryan, The Power is Ours) are removed (w101_quests.REMOVED_QUESTS).
 ];
 
 /// w101_quests.QUEST_RESET: the one-shot quest reset has run (the quest events wait for it). Round 21 (Q1): version 3
@@ -114,11 +113,6 @@ const TALKS: &[(&str, u32, u32, u32, &[u32])] = &[
     ("lady_oriel", 1042360340, 1042360349, 1042360344, &[1042360343]),
     ("ceren_nightchant", 1042360350, 1042360359, 1042360351, &[]),
     ("ceren_nightchant", 1042360360, 1042360369, 1042360364, &[1042360363]),
-    ("olivia_dawnwillow", 1042360400, 1042360409, 1042360402, &[1042360401]),
-    ("private_oryan", 1042360410, 1042360419, 1042360412, &[1042360411]),
-    ("private_oryan", 1042360410, 1042360419, 1042360415, &[1042360414]),
-    ("private_connelly", 1042360410, 1042360419, 1042360416, &[1042360415]),
-    ("olivia_dawnwillow", 1042360450, 1042360459, 1042360453, &[1042360452]),
 ];
 
 /// Quest_Marker_*.nif: the billboard's height over the marker's origin, the sign's and the spiral's quad sides (W101

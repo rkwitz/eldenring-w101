@@ -326,7 +326,10 @@ def quest_events():
 def reset_event():
     """Round 19 (E1): once per save (QUEST_RESET, versioned), every quest flag off, then QUEST_RESET on. Ryan's save
     kept Unicorn Way's state from round 17, so the quest line could not start at Merle Ambrose's offer."""
-    body = [end_if_flag(Q.QUEST_RESET)]
+    # Round 23 (Q3): the removed side quests' saved flags go off on every map load (Ryan's save had Pesky Pirates
+    # assigned), so nothing in the book, markers or helper can show them again.
+    body = [set_flag(f, 0) for first, last in Q.REMOVED_FLAG_RANGES for f in range(first, last + 1)]
+    body += [end_if_flag(Q.QUEST_RESET)]
     for first, last in Q.QUEST_FLAG_RANGES:
         body += [set_flag(f, 0) for f in range(first, last + 1)]
     return body + [set_flag(Q.QUEST_RESET), END]

@@ -73,8 +73,7 @@ pub struct Active {
 /// rewards are server-side, so these are Wizard City-sized gold amounts given as the same number of runes.
 pub const REWARDS: &[(&str, u32)] = &[
     ("unicorn_way", 25), ("ghost_hunters", 35), ("skeleton_crew", 45), ("monsters_and_mazes", 55),
-    ("finding_out_why", 75), ("who_could_it_be_now", 60), ("sinister_skeleton", 150), ("pesky_pirates", 50),
-    ("saving_private_oryan", 120), ("fear_of_fire", 150),
+    ("finding_out_why", 75), ("who_could_it_be_now", 60), ("sinister_skeleton", 150),
 ];
 /// Quest base + 7 (w101_quests.REWARD_OFFSET): on once the reward has been given (book.rs sets it).
 pub const REWARD_OFFSET: u32 = 7;

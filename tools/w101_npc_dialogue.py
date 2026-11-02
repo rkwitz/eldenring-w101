@@ -43,9 +43,6 @@ CONVERSATIONS = {
     "private_connelly|ghost_hunters|accepted": lines(GH, 2, 12, **GAMMA),
     "private_connelly|ghost_hunters|underway": lines(GH, 14),
     "private_connelly|ghost_hunters|goal2": lines(GH, 5, 15, 6),
-    "private_connelly|saving_private_oryan|offer": lines(SPO, 1, 14),
-    "private_connelly|saving_private_oryan|underway": lines(SPO, 0),
-    "private_connelly|saving_private_oryan|goal6": lines(SPO, 2, 3),
     "private_connelly|idle": lines(UW, 13),
     # Ceren Nightchant (Olivia overhears him in Skeleton Crew)
     "ceren_nightchant|ghost_hunters|goal3": (lines(GH, 7) + lines(SC, 0, 15, 16)
@@ -66,15 +63,10 @@ CONVERSATIONS = {
     "ceren_nightchant|idle": lines(GH, 7),
     "ceren_nightchant|skeleton_crew|done": lines(SC, 12, 13),
     "ceren_nightchant|sinister_skeleton|done": lines(GT, 1, 2),
-    # Olivia Dawnwillow (her Then-Faire stands in for The Power is Ours)
-    "olivia_dawnwillow|pesky_pirates|offer": lines(PP, 4, 6),
-    "olivia_dawnwillow|pesky_pirates|accepted": lines(PP, 1, 3, **GAMMA),
-    "olivia_dawnwillow|pesky_pirates|underway": lines(PP, 0),
-    "olivia_dawnwillow|pesky_pirates|goal2": lines(PP, 9, 14) + lines(FTW, 1, 2),
-    "olivia_dawnwillow|fear_of_fire|offer": lines(FTW, 1, 2),
-    "olivia_dawnwillow|fear_of_fire|goal3": lines(FOF, 31, 32, 33),
-    "olivia_dawnwillow|idle": lines(PP, 0),
-    "olivia_dawnwillow|pesky_pirates|done": lines(PP, 14),
+    # Olivia Dawnwillow: round 23 (Q3) no quests (Pesky Pirates / The Power is Ours removed); her idle is her remark on
+    # the Skeletal Pirates (PP 4) without the request (PP 0 "Please help drive these Skeletal Pirates out" read as a
+    # quest offer).
+    "olivia_dawnwillow|idle": lines(PP, 4),
     # Lady Oriel in the Hedge Maze
     "lady_oriel|monsters_and_mazes|goal2": lines(MM, 5, 7) + lines(FOW, 1) + lines(MM, 3) + lines(FOW, 3, 4),
     "lady_oriel|finding_out_why|offer": lines(FOW, 1, 3, 4),
@@ -86,12 +78,8 @@ CONVERSATIONS = {
     "lady_oriel|who_could_it_be_now|underway": lines(WC, 0),
     "lady_oriel|idle": lines(MM, 5),
     "lady_oriel|finding_out_why|done": lines(FOW, 10),
-    # Private O'Ryan, hiding in house 1
-    "private_oryan|saving_private_oryan|goal2": lines(SPO, 15, 16, 17, 18),
-    "private_oryan|saving_private_oryan|underway": lines(SPO, 18),
-    "private_oryan|saving_private_oryan|goal5": lines(SPO, 4, 5),
+    # Private O'Ryan, hiding in house 1: round 23 (Q3) no quest (Saving Private O'Ryan removed), idle line only.
     "private_oryan|idle": lines(SPO, 17),
-    "private_oryan|saving_private_oryan|done": lines(SPO, 5),
 }
 
 

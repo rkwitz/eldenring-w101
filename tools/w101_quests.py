@@ -210,10 +210,8 @@ def dialogue_card(key):
 # (w101_npc_dialogue.py: client lines from after the quest) instead of "<npc>|idle", which is only for before.
 IDLE_DONE = {
     "ceren_nightchant": ["skeleton_crew", "sinister_skeleton"],
-    "olivia_dawnwillow": ["pesky_pirates"],
     "lady_oriel": ["finding_out_why"],
-    "private_oryan": ["saving_private_oryan"],
-}
+}  # round 23 (Q3): Olivia's and O'Ryan's quests are gone, so they only have "<npc>|idle"
 
 
 def dialogue_keys():
@@ -328,6 +326,14 @@ QUESTS = [
          assign=("talk", "ceren_nightchant", "who_could_it_be_now:complete"),
          goals=[goal("goto", "T2"), goal("boss", "rattlebones"), goal("goto", "near_ceren"),
                 goal("talk", "ceren_nightchant")], then=[]),  # Grim Tales (n=7) is off the street: not offered
+]
+# Round 23 (Q3, Ryan: "I only care about the quest line to get to and defeat Rattlebones, and then go talk to the guy
+# after. You can remove all the other quest lines"): QUESTS is only Wizard101's main chain Unicorn Way > Ghost Hunters >
+# Skeleton Crew > Monsters and Mazes > Finding Out Why > Who Could It Be Now? > Sinister Skeleton (1625CF: defeat
+# Rattlebones in tower T2, then "You did it, didn't you?!? You beat Rattlebones!" with Ceren Nightchant, which ends
+# the line: Grim Tales is not offered). The side quests below are no longer offered, tracked, marked or talked about;
+# their saved flags (REMOVED_FLAG_RANGES) are cleared on every map load (emevd_quests.reset_event). Kept for reference.
+REMOVED_QUESTS = [
     dict(n=10, slug="pesky_pirates", w101="1625C9", giver="olivia_dawnwillow",
          assign=("talk", "olivia_dawnwillow", "skeleton_crew"),
          goals=[goal("defeat", "skeletal_pirate", 2), goal("talk", "olivia_dawnwillow")], then=[]),
@@ -341,6 +347,7 @@ QUESTS = [
          assign=("talk", "olivia_dawnwillow", "pesky_pirates:complete"),
          goals=[goal("goto", "H4"), goal("boss", "fear_of_fire"), goal("talk", "olivia_dawnwillow")], then=[]),
 ]
+REMOVED_FLAG_RANGES = [(1042360400, 1042360459), (1042360512, 1042360515)]  # quests n=10..15, Pesky Pirates' counter
 BY_SLUG = {q["slug"]: q for q in QUESTS}
 
 # Round 18 (F3): the picture Wizard101's quest card shows for a goal (QuestInfoWindow's imgGoalObjective1): the
@@ -372,8 +379,7 @@ GOAL_PICTURES.update({c[0]: f"{ER_PICTURES}/{c[0]}.png" for c in CHARACTERS})
 # (quests.rs REWARDS, keep in step). Wizard101's quest rewards are server-side, not in the client's files, and its
 # wiki could not be reached, so these are Wizard City-sized gold amounts given as the same number of runes.
 REWARDS = {"unicorn_way": 25, "ghost_hunters": 35, "skeleton_crew": 45, "monsters_and_mazes": 55,
-           "finding_out_why": 75, "who_could_it_be_now": 60, "sinister_skeleton": 150, "pesky_pirates": 50,
-           "saving_private_oryan": 120, "fear_of_fire": 150}
+           "finding_out_why": 75, "who_could_it_be_now": 60, "sinister_skeleton": 150}  # round 23 (Q3): side quests removed
 REWARD_OFFSET = 7  # quest base + 7: its reward was given (set by the DLL; the reset clears it with the rest)
 
 

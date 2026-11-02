@@ -46,9 +46,10 @@ def main():
     lines = []
     for q in data["quests"]:
         flags = q.get("flags")
-        if not flags:
-            continue
         slug = q["id"]
+        # Round 23 (Q3, Ryan): only the line to Rattlebones (w101_quests.QUESTS); the removed side quests are left out.
+        if not flags or slug not in Q.BY_SLUG:
+            continue
         # Round 18: the flags the map's events use (w101_quests), not the json's, which may still hold the
         # 1042366xxx block that never worked (round 10).
         if slug in Q.BY_SLUG:
