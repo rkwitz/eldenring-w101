@@ -6,8 +6,9 @@
 //!   `Sound/WizardCity4M.mp3`); the classic copy is ClassicMode-WorldData.wad `Music/WizardCity4M.mp3`.
 //! - battle: Combat1Test ("Wizard City Combat Theme"), the classic Wizard City combat track (ClassicMode-WorldData
 //!   `Music/Combat1Test.mp3`); the updated Unicorn Way plays WC_HauntedWay_Combat.ogg instead.
-//! - boss: Wizard City's boss fights use the zone's combat track (no boss track in either version), so it defaults to
-//!   the battle track; ini music_boss can name another file.
+//! - boss (round 21): WC_HauntedWay_Combat.ogg, the combat track Unicorn Way's boss rooms (T1/T2 interiors) name
+//!   (Music-WorldData.wad `WC/`), falling back to the battle track; ini music_boss can name another file.
+//!   The battle track comes from Root.wad `Sound/Combat1Test.mp3` when the classic copy was never streamed in.
 //!
 //! The music plays while the player is in the street's tile (questhelper::player_msb, which also covers the rooms
 //! under the street). Combat: an alive Unicorn Way creature (nameplates::CREATURES) within FIGHT_RANGE while the
@@ -35,6 +36,11 @@ use crate::game::{self, Game, Stats};
 /// music alone; music_background = 1 keeps playing while the game window is in the background.
 const STREET: &str = "w101_orbs/music/WizardCity4M_classic.mp3";
 const BATTLE: &str = "w101_orbs/music/Combat1Test_classic.mp3";
+/// Round 21 M2: what Unicorn Way's boss rooms (T1/T2 interiors) name, streamed in once Ryan fought there.
+const BOSS: &str = "w101_orbs/music/WC_HauntedWay_Combat.ogg";
+/// Round 21 M2: once the battle music plays, an alive creature this close keeps it going (W101 keeps its combat
+/// music until the fight ends; Elden Ring's enemies circle and back off between hits).
+const STAY_RANGE: f32 = 15.0;
 
 /// A creature this close (metres) starts the battle music by itself.
 const CLOSE_RANGE: f32 = 7.0;
@@ -90,6 +96,13 @@ pub struct Music {
     er_saved: Option<u8>,
     er_muted: bool,
     missing_logged: Vec<PathBuf>,
+    /// Round 21 M1: Elden Ring's quit-out byte as last seen, and whether it rose while the player was here (a real
+    /// quit-out). The byte also stays set after a load from the title screen, which kept the music off on the
+    /// street until the first door warp cleared it (Ryan's log 23:45-23:50).
+    quit_byte: bool,
+    quit_latched: bool,
+    /// The reasons the music is off, as last logged.
+    why_off: String,
 }
 
 impl Music {
@@ -100,7 +113,7 @@ impl Music {
             ini: ini.clone(),
             enabled: true,
             volume: 1.0,
-            tracks: [STREET.into(), BATTLE.into(), BATTLE.into()],
+            tracks: [STREET.into(), BATTLE.into(), BOSS.into()],
             calm: Duration::from_secs(6),
             mute_er: true,
             background: false,
@@ -115,8 +128,10 @@ impl Music {
             er_saved: None,
             er_muted: false,
             missing_logged: Vec::new(),
+            quit_byte: false,
+            quit_latched: false,
+            why_off: String::new(),
         };
-        let mut boss_set = false;
         for line in std::fs::read_to_string(&ini).unwrap_or_default().lines() {
             let Some((key, value)) = line.split_once('=') else { continue };
             let value = value.trim();
@@ -125,10 +140,7 @@ impl Music {
                 "music_volume" => m.volume = value.parse::<f32>().map(|v| v.clamp(0.0, 200.0) / 100.0).unwrap_or(m.volume),
                 "music_street" if !value.is_empty() => m.tracks[0] = value.into(),
                 "music_battle" if !value.is_empty() => m.tracks[1] = value.into(),
-                "music_boss" if !value.is_empty() => {
-                    m.tracks[2] = value.into();
-                    boss_set = true;
-                }
+                "music_boss" if !value.is_empty() => m.tracks[2] = value.into(),
                 "music_calm" => m.calm = value.parse::<f32>().ok().filter(|v| (0.5..120.0).contains(v))
                     .map(Duration::from_secs_f32).unwrap_or(m.calm),
                 "music_mute_er" => m.mute_er = value != "0",
@@ -136,9 +148,6 @@ impl Music {
                 "music_er_volume" => m.er_saved = value.parse::<u8>().ok().filter(|v| *v <= 10),
                 _ => {}
             }
-        }
-        if !boss_set {
-            m.tracks[2] = m.tracks[1].clone();
         }
         tracing::info!("music: {} (volume {:.0}%, street {}, battle {}, boss {}, calm {:?}, mute Elden Ring's music {}, \
                         saved Elden Ring music volume {:?})", if m.enabled { "on" } else { "off" }, m.volume * 100.0,
@@ -150,7 +159,27 @@ impl Music {
     pub fn frame(&mut self, game: Option<&Game>, stats: Option<Stats>, position: Option<([f32; 3], i32, i32)>,
                  focused: bool) {
         let msb = position.and_then(crate::questhelper::player_msb);
-        let here = self.enabled && game.is_some() && msb.is_some() && !game::quitting_out();
+        let quit = game.is_some() && game::quitting_out();
+        if quit && !self.quit_byte && self.mode.is_some() {
+            self.quit_latched = true;
+        }
+        if position.is_none() {
+            self.quit_latched = false;
+        }
+        self.quit_byte = quit;
+        let here = self.enabled && game.is_some() && msb.is_some() && !self.quit_latched;
+        let why_off = if here {
+            String::new()
+        } else {
+            format!("enabled {}, game {}, position {:?}, on the street tile {}, quit-out byte {quit}, quit-out {}",
+                    self.enabled, game.is_some(), position.map(|p| (p.1, p.2)), msb.is_some(), self.quit_latched)
+        };
+        if why_off != self.why_off {
+            if !why_off.is_empty() {
+                tracing::info!("music: not playing ({why_off})");
+            }
+            self.why_off = why_off;
+        }
         self.er_volume(game, here);
         let (Some(g), Some(msb), true) = (game, msb, here) else {
             if self.mode.take().is_some() {
@@ -205,6 +234,9 @@ impl Music {
             .min_by(|a, b| a.0.total_cmp(&b.0));
         let mut fight = None;
         let near = nearest.filter(|n| n.0 < FIGHT_RANGE);
+        if let Some((d, model)) = nearest.filter(|n| n.0 < STAY_RANGE && matches!(self.mode, Some(Mode::Battle | Mode::Boss))) {
+            fight = Some(format!("{} still {d:.0} m away", name(model)));
+        }
         if let Some((d, model)) = nearest.filter(|n| n.0 < CLOSE_RANGE) {
             fight = Some(format!("{} {d:.0} m away", name(model)));
         }

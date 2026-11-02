@@ -19,6 +19,7 @@ mod layout;
 mod loadscreen;
 mod markers;
 mod music;
+mod wisps;
 mod nameplates;
 mod steam;
 mod teleport;
@@ -137,6 +138,8 @@ struct Orbs {
     last_stats: Option<game::Stats>,
     /// Wizard101's Unicorn Way music (round 20 M1-M5, music.rs).
     music: music::Music,
+    /// Wizard101's health and mana wisps (round 21 M3, wisps.rs).
+    wisps: wisps::Wisps,
 }
 
 /// Frame timing written to w101_orbs.log every few seconds, to see what the overlay costs the game.
@@ -193,8 +196,10 @@ impl Orbs {
         }
         let probe = settings.scene_probe.then(probe::Probe::new);
         let music = music::Music::new(&folder);
+        let wisps = wisps::Wisps::new(&folder);
         Orbs {
             music,
+            wisps,
             settings,
             probe,
             live,
@@ -357,6 +362,9 @@ impl ImguiRenderLoop for Orbs {
             if cx.settings.nameplates {
                 self.book.draw_nameplates(ui, &cx);
             }
+            let street = position.and_then(questhelper::player_msb).is_some();
+            let wisp_play = cx.gameplay && !self.book.blocking();
+            self.wisps.frame(ui, &mut self.book.textures, game, wisp_play, street);
         }
         // Polled every frame: the screen goes up on the first frame the door flag is on, or Elden Ring starts a
         // loading screen of its own. The flag is cleared when the screen starts to fade (or right away when the

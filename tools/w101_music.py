@@ -1,4 +1,4 @@
-"""Copies Wizard101's classic Unicorn Way music out of the Wizard101 install for the HUD DLL (round 20 M1-M4).
+"""Copies Wizard101's classic (and round 21: boss) Unicorn Way music out of the Wizard101 install for the HUD DLL (round 20 M1-M4).
 
 Usage: python w101_music.py path\\to\\Wizard101\\Data\\GameData path\\to\\orbs\\w101_orbs\\music
 
@@ -22,7 +22,14 @@ TRACKS = [
     ("WizardCity4M_classic.mp3", [("ClassicMode-WorldData.wad", "Music/WizardCity4M.mp3"),
                                   ("Music-WorldData.wad", "WC_Original/WizardCity4M.mp3")]),
     ("Combat1Test_classic.mp3", [("ClassicMode-WorldData.wad", "Music/Combat1Test.mp3"),
-                                 ("Music-WorldData.wad", "WC_Original/Combat1Test.mp3")]),
+                                 ("Music-WorldData.wad", "WC_Original/Combat1Test.mp3"),
+                                 # Round 21: Root.wad ships the Wizard City Combat Theme itself (never streamed;
+                                 # the copy the H4 house interior names as |Sound|WorldData|Sound/Combat1Test.mp3).
+                                 ("Root.wad", "Sound/Combat1Test.mp3"),
+                                 ("Music-WorldData.wad", "WC/Combat1Test.mp3")]),
+    # Round 21: the boss rooms (Unicorn T1/T2 interiors) and today's Unicorn Way name WC/WC_HauntedWay_Combat.ogg; it is
+    # streamed in once a fight there has been played. The hedge maze names WizardCity4M (the street's theme).
+    ("WC_HauntedWay_Combat.ogg", [("Music-WorldData.wad", "WC/WC_HauntedWay_Combat.ogg")]),
 ]
 
 

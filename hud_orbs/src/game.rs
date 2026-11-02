@@ -812,6 +812,23 @@ impl Game {
         read::<usize>(gdm + GAME_SETTINGS).filter(|p| *p != 0)
     }
 
+    /// Round 21 M3 (wisps.rs): adds `percent` of the main player's max HP (or FP) to its current value in the
+    /// player's CSChrDataModule (the stat module: hp/max hp at 0x138, fp/max fp at 0x148, the eldenring crate's
+    /// layout, checked below), capped at the max. Nothing for a dead player. Returns (before, after).
+    pub fn add_player_stat(&self, fp: bool, percent: f32) -> Option<(i32, i32)> {
+        let player = read::<usize>(self.world_chr_man).and_then(|wcm| read::<usize>(wcm + PLAYER))?;
+        let stat = read::<usize>(player + MODULES).and_then(|modules| read::<usize>(modules))?;
+        let hp = read::<i32>(stat + STAT_HP)?;
+        let at = stat + if fp { STAT_FP } else { STAT_HP };
+        let (now, max) = (read::<i32>(at)?, read::<i32>(at + 4)?);
+        if hp <= 0 || !(1..100_000).contains(&max) || !(0..=max).contains(&now) {
+            return None;
+        }
+        let new = (now + ((max as f32 * percent / 100.0).round() as i32).max(1)).min(max);
+        unsafe { (at as *mut i32).write_volatile(new) };
+        Some((now, new))
+    }
+
     /// One byte of Elden Ring's GameSettings (options.rs has the offsets).
     pub fn option(&self, offset: usize) -> Option<u8> {
         read::<u8>(self.game_settings()? + offset)
