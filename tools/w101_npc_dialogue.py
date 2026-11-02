@@ -178,6 +178,10 @@ VOICE = {
     "LadyOriel_QST_17.mp3": (C_FREE, 11), "LadyOriel_QST_18.mp3": (C_FREE, 15),
     "LadyOriel_QST_19.mp3": (C_SS, 6), "LadyOriel_QST_20.mp3": (C_SS, 7), "LadyOriel_QST_21.mp3": (C_SS, 8),
     "MerleAmbrose_QST_90.mp3": (C_RR, 25), "MerleAmbrose_QST_91.mp3": (C_RR, 22),
+    # Round 27 (A8): Diego, downloaded when Ryan talked to him (Sound_Dialogue-WorldData.wad); pocketsphinx heard
+    # "...my name is diego..." (01), "...wondrous place ... practice against others ... glory" (02), "try your hand
+    # against your classmates ... circle" (03 = line 6, not a page). Line 4 is narration (no file).
+    "DiegoTheDuelmaster_QST_01.mp3": (C_DIEGO, 3), "DiegoTheDuelmaster_QST_02.mp3": (C_DIEGO, 5),
 }
 
 

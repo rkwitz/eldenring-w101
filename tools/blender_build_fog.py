@@ -37,7 +37,11 @@ for module in (flver_fix, flver_build, flver_textures, fog_texture, tpf):
     importlib.reload(module)
 
 ASSET = "aeg030_530"
-WIDTH, HEIGHT = 5.0, 6.0  # m, as AEG092_300's FLVER box (x -2.5..2.5, y 0..6, flat in z)
+# Round 27 (A6, Ryan: "too narrow and too transparent"): the archway it stands in is 8 m wide and 5.5 m high
+# (blender_switch_street.tunnel_inside: |x| < 4, y < 5.5), so the plane is 8.4 m wide (rounds 26: 5 x 6 as AEG092_300)
+# and fog_texture.py makes it nearly opaque. Elden Ring's own fog walls (msb_fog_gate.FOG_WALLS) stand 0.5 m in
+# front of it; it stays as the view from afar.
+WIDTH, HEIGHT = 8.4, 6.0
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset"
 GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset")
 STREET_GEOMBND = PROJECT / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx.before_textures"  # single-mesh FLVER template

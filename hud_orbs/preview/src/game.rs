@@ -203,5 +203,7 @@ pub struct ActionButton {
     pub angle: i32,
     pub height: f32,
     pub base: f32,
+    pub angle_check: u8,
+    pub allow_angle: i32,
     pub text_id: i32,
 }

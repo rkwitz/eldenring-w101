@@ -34,6 +34,21 @@
 //! interact_pad / interact_key, else Elden Ring's default layout (Event Action = Y on an Xbox pad, E on the keyboard).
 //! Round 26 (N6): own glyph art (tools/w101_prompt_glyphs.py): Xbox-style A / B / X / Y face buttons, a dark blank
 //! button with the label for any other pad input, and a key cap without Wizard101's thin black outline.
+//!
+//! Round 27 (A1, Ryan: "you almost have to face AWAY from the NPC to get the prompt"). Root cause: Game::player_yaw
+//! took the physics quaternion's local +z as the character's forward, unproven. Ryan's 22:58-23:06 log: 7 of 8
+//! talks Elden Ring started came while this prompt said "none" (e.g. 23:04:27 none -> 23:04:28 Connelly's dialogue),
+//! i.e. our facing test failed where Elden Ring's passed, and passed when he turned away: the yaw was 180 degrees off.
+//! Fix, proven at runtime instead of assumed: while the player runs in a straight line (the character turns to where
+//! it runs), the heading of its movement is compared with the quaternion's +z; FACING_VOTES agreeing samples decide
+//! +z or -z (logged "prompt: facing calibrated ..."). Until then -z is used: an Elden Ring character with y rotation r
+//! faces (-sin r, -cos r), i.e. its local forward is -z (tools/msb_add_npcs.py's vanilla check: White Mask Varre,
+//! rotation -25.6, faces The First Step's grace, cos 0.99). The param's fields are now read as Elden Ring defines them (Paramdex
+//! ActionButtonParam): `angle` (0x10) is the region's sector round the target (180 = all round, max 180), the
+//! player's facing tolerance is allowAngle (0x28, either side; 6000/6001 = 90, cages 180 = any).
+//! Round 27 (A2): with no portrait (Diego / Ugo until theirs exist) the line is centred in the whole box; a glyph whose
+//! picture isn't loaded is drawn as a disc / cap with its letter, never left out; each prompt logs once whether its
+//! portrait and glyph pictures were drawn.
 
 use std::collections::HashMap;
 
@@ -56,7 +71,11 @@ const BINDING_FILE: &str = "interact_binding.txt";
 const FOW_ASSIGNED: u32 = 1042360340;
 const FOW_COMPLETE: u32 = 1042360349;
 /// (radius, height, base offset, angle) when the param can't be read: about a vanilla talk prompt.
-const FALLBACK: (f32, f32, f32, i32) = (2.0, 2.5, -0.5, 360);
+const FALLBACK: (f32, f32, f32, i32) = (2.0, 2.5, -0.5, 90);
+/// Round 27 (A1): samples needed to decide which way the player's quaternion faces, and the speed range (m/s) of a
+/// sample (running or walking straight; faster is a world shift / teleport).
+const FACING_VOTES: u32 = 40;
+const FACING_SPEED: std::ops::Range<f32> = 1.2..12.0;
 
 /// Layout pixels (768-high screen), measured on the screenshot.
 const BOX: [f32; 2] = [420.0, 103.0];
@@ -116,13 +135,23 @@ pub struct Prompt {
     current: Option<Target>,
     /// The preview renderer sets the device itself.
     pub preview: bool,
+    /// Round 27 (A1): added to Game::player_yaw (0 = +z forward, PI = -z forward, the default) and whether the
+    /// movement calibration has decided it.
+    facing: Option<f32>,
+    calibrated: bool,
+    /// Votes (quaternion +z along the movement, against it) and the last sample (position, time, yaw).
+    votes: [u32; 2],
+    last_move: Option<([f32; 3], std::time::Instant, f32)>,
+    /// Round 27 (A2): the current prompt's drawing was logged.
+    drawn_log: std::sync::atomic::AtomicBool,
 }
 
 impl Default for Prompt {
     fn default() -> Prompt {
         Prompt { key: "E".into(), pad_button: "Y".into(), folder: None, last_pad: None, last_key: None,
                  held_before: 0, keys_before: Vec::new(), requests_before: Vec::new(), clock: None, hide_er: true,
-                 shapes: Vec::new(), blanked: false, pad: false, current: None, preview: false }
+                 shapes: Vec::new(), blanked: false, pad: false, current: None, preview: false, facing: Some(std::f32::consts::PI), calibrated: false,
+                 votes: [0, 0], last_move: None, drawn_log: std::sync::atomic::AtomicBool::new(false) }
     }
 }
 
@@ -250,7 +279,7 @@ impl Prompt {
         let row = |r: &u32| (if examine { EXAMINE_ROWS } else { TALK_ROWS })[riding as usize] == *r;
         let shapes: Vec<(f32, f32, f32, i32)> = self.shapes.iter().filter(|s| s.2 == examine && row(&s.0)).map(|(_, b, _)| {
             (if b.radius > 0.1 { b.radius } else { FALLBACK.0 }, if b.height > 0.1 { b.height } else { FALLBACK.1 },
-             b.base, b.angle)
+             b.base, b.allow_angle)
         }).collect();
         if shapes.is_empty() {
             return self.inside_shape(FALLBACK, player, yaw, at);
@@ -258,21 +287,56 @@ impl Prompt {
         shapes.into_iter().any(|s| self.inside_shape(s, player, yaw, at))
     }
 
-    fn inside_shape(&self, (radius, height, base, angle): (f32, f32, f32, i32), player: [f32; 3], yaw: Option<f32>,
+    /// The angle (degrees, 0..180) between facing `yaw` (radians, atan2(x, z)) and the direction from `from` to `at`.
+    fn off_by(yaw: f32, from: [f32; 3], at: [f32; 3]) -> f32 {
+        let to = (at[0] - from[0]).atan2(at[2] - from[2]);
+        ((to - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI).abs().to_degrees()
+    }
+
+    fn inside_shape(&self, (radius, height, base, allow): (f32, f32, f32, i32), player: [f32; 3], yaw: Option<f32>,
                     at: [f32; 3]) -> bool {
         let (dx, dz) = (at[0] - player[0], at[2] - player[2]);
         let dy = player[1] - at[1];
         if dx.hypot(dz) > radius || dy < base - 0.5 || dy > base + height + 0.5 {
             return false;
         }
-        // The player facing the target within half the angle (0 or 360 and more: any way).
-        match yaw {
-            Some(y) if angle > 0 && angle < 360 && dx.hypot(dz) > 0.3 => {
-                let to = dx.atan2(dz);
-                let d = (to - y + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-                d.abs().to_degrees() <= angle as f32 / 2.0 + 5.0
-            }
+        // allowAngle: the player facing the target within that many degrees either side (180: any way), once the
+        // facing is proven (A1). The region's own `angle` is 180 (all round) on all four rows: no sector to test.
+        match (yaw, self.facing) {
+            (Some(y), Some(f)) if allow > 0 && allow < 180 && dx.hypot(dz) > 0.3 =>
+                Self::off_by(y + f, player, at) <= allow as f32 + 10.0,
             _ => true,
+        }
+    }
+
+    /// Round 27 (A1): learns which way the player's quaternion faces from its straight-line movement (see the top).
+    fn calibrate(&mut self, player: [f32; 3], yaw: Option<f32>) {
+        let Some(yaw) = yaw else { return };
+        let now = std::time::Instant::now();
+        let Some((before, then, yaw_before)) = self.last_move.replace((player, now, yaw)) else { return };
+        if self.calibrated {
+            return;
+        }
+        let dt = now.duration_since(then).as_secs_f32();
+        let step = (player[0] - before[0]).hypot(player[2] - before[2]);
+        let turned = ((yaw - yaw_before + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI).abs();
+        if !(0.005..0.2).contains(&dt) || !FACING_SPEED.contains(&(step / dt)) || turned > 0.05 {
+            return;
+        }
+        let off = Self::off_by(yaw, before, player);
+        if off < 30.0 {
+            self.votes[0] += 1;
+        } else if off > 150.0 {
+            self.votes[1] += 1;
+        }
+        let [plus, minus] = self.votes;
+        if plus.max(minus) >= FACING_VOTES && plus.min(minus) * 5 <= plus.max(minus) {
+            self.facing = Some(if plus > minus { 0.0 } else { std::f32::consts::PI });
+            self.calibrated = true;
+            tracing::info!("prompt: facing calibrated: the player runs along his quaternion's {} ({plus} samples along \
+                            +z, {minus} along -z); the talk prompt now tests his facing (allowAngle)",
+                           if plus > minus { "+z" } else { "-z" });
         }
     }
 
@@ -280,9 +344,25 @@ impl Prompt {
     /// Cage (MSB spots made physics through `player_msb`) the player stands at the prompt of. Logs changes.
     pub fn update(&mut self, player: [f32; 3], yaw: Option<f32>, spots: &[crate::markers::Spot],
                   player_msb: Option<[f32; 3]>, flag: &dyn Fn(u32) -> bool) -> Option<Target> {
+        self.calibrate(player, yaw);
         let d = |p: [f32; 3]| (p[0] - player[0]).hypot(p[2] - player[2]);
         let riding = flag(RIDING_FLAG);
         let mut best: Option<(f32, Target)> = None;
+        // Round 27 (A1): the nearest loaded NPC within 4 m, for the log (distance, facing off by, both conventions).
+        let near = spots.iter().filter(|s| s.2 && d(s.1) < 4.0).min_by(|a, b| d(a.1).total_cmp(&d(b.1)));
+        let near_text = match (near, yaw) {
+            (Some((i, at, _)), Some(y)) => format!(" ({} {:.1} m, facing off by {:.0} deg with +z / {:.0} with -z, \
+                                                    using {}, votes {:?})", crate::markers::NPCS[*i].1, d(*at),
+                                                   Self::off_by(y, player, *at),
+                                                   Self::off_by(y + std::f32::consts::PI, player, *at),
+                                                   match (self.facing, self.calibrated) {
+                                                       (Some(f), c) => format!("{} ({})", if f == 0.0 { "+z" } else { "-z" },
+                                                                               if c { "calibrated" } else { "default" }),
+                                                       (None, _) => "none".into(),
+                                                   },
+                                                   self.votes),
+            _ => String::new(),
+        };
         for (i, at, loaded) in spots {
             if !loaded || !self.inside(false, riding, player, yaw, *at) {
                 continue;
@@ -309,11 +389,12 @@ impl Prompt {
         let now = best.map(|b| b.1);
         if now != self.current {
             match &now {
-                Some(t) => tracing::info!("prompt: {} \"Press {} {}\"", t.name,
+                Some(t) => tracing::info!("prompt: {} \"Press {} {}\"{near_text}", t.name,
                                           if self.pad { &self.pad_button } else { &self.key }, words(t.examine).1),
-                None => tracing::info!("prompt: none"),
+                None => tracing::info!("prompt: none{near_text}"),
             }
             self.current = now.clone();
+            self.drawn_log.store(false, std::sync::atomic::Ordering::Relaxed);
         }
         now
     }
@@ -329,7 +410,8 @@ impl Prompt {
         if let Some((t, _)) = textures.get(BACKGROUND) {
             draw.add_image(t, [left, top], [left + w, top + h]).build();
         }
-        if let Some((t, _)) = textures.get(&target.portrait) {
+        let portrait = textures.get(&target.portrait);
+        if let Some((t, _)) = portrait {
             let y = top + PORTRAIT_TOP * s;
             draw.add_image(t, [left, y], [left + PORTRAIT * s, y + PORTRAIT * s]).build();
         }
@@ -345,7 +427,8 @@ impl Prompt {
         let space = normal.width(" ") * k;
         let icon = ICON * s;
         let total = normal.width(before) * k + space + icon + space + normal.width(after) * k;
-        let area = [left + PORTRAIT * s, left + w - TEXT_RIGHT * s];
+        // Round 27 (A2): no portrait -> centred in the whole box (inside its border, TEXT_RIGHT each side).
+        let area = [left + if portrait.is_some() { PORTRAIT } else { TEXT_RIGHT } * s, left + w - TEXT_RIGHT * s];
         let mut x = (area[0] + area[1] - total) / 2.0;
         let middle = top + TEXT_Y * s;
         let text_top = middle - normal.line_height * k / 2.0;
@@ -360,9 +443,33 @@ impl Prompt {
         } else {
             (KEY_CAP, Some(self.key.as_str()), false)
         };
-        if let Some((t, _)) = textures.get(picture) {
+        let glyph = textures.get(picture);
+        let face_letter = (self.pad && letter.is_none()).then_some(self.pad_button.as_str());
+        if let Some((t, _)) = glyph {
             draw.add_image(t, [x, middle - icon / 2.0], [x + icon, middle + icon / 2.0]).build();
+        } else {
+            // Round 27 (A2): the picture isn't loaded (yet): a pad disc in the face button's colour / a pale key cap.
+            let c = [x + icon / 2.0, middle];
+            if self.pad {
+                let fill = match self.pad_button.as_str() {
+                    "A" => [96, 176, 64], "B" => [200, 60, 50], "X" => [60, 110, 200], "Y" => [220, 180, 40],
+                    _ => [70, 70, 76],
+                };
+                draw.add_circle(c, icon * 0.47, ImColor32::from_rgba(fill[0], fill[1], fill[2], 255)).filled(true).build();
+                draw.add_circle(c, icon * 0.47, ImColor32::from_rgba(30, 30, 30, 255)).thickness(1.5 * s).build();
+            } else {
+                draw.add_rect([x + icon * 0.06, middle - icon * 0.44], [x + icon * 0.94, middle + icon * 0.44],
+                              ImColor32::from_rgba(236, 232, 224, 255)).filled(true).rounding(icon * 0.15).build();
+                draw.add_rect([x + icon * 0.06, middle - icon * 0.44], [x + icon * 0.94, middle + icon * 0.44],
+                              ImColor32::from_rgba(90, 86, 80, 255)).rounding(icon * 0.15).thickness(1.2 * s).build();
+            }
         }
+        if !self.drawn_log.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            tracing::info!("prompt: drawn for {}: portrait {} {}, glyph {} {}", target.name, target.portrait,
+                           if portrait.is_some() { "shown" } else { "NOT loaded (line centred in the box)" }, picture,
+                           if glyph.is_some() { "shown" } else { "NOT loaded (drawn disc / cap)" });
+        }
+        let letter = letter.or(if glyph.is_none() { face_letter } else { None });
         if let Some(letter) = letter {
             // The label a little above the middle on the key cap (its front lip is at the bottom), centred on a pad
             // button; larger than round 25's (Ryan's screenshot: the E was hard to read).

@@ -21,6 +21,20 @@ two mask textures), which we can't read, so a third copy is our own asset aeg030
 m two-sided plane, white mist texture, the street's alpha-blended shader, drawn at any distance), AEG030_530_9102 on
 the same spot and rotation as the phantom wall. Rerunning moves all three in place.
 
+Round 27 (A6, Ryan: "the round 26 plane shows a bit, but it is too narrow and too transparent; I want Elden Ring's
+normal fully opaque fog barrier over the whole archway, visible from any distance"). What the phantom wall is: m18's
+AEG092_300_0500 stands with AEG099_230_9001 (AssetGeometryParam 99230 isCreateMultiPlayOnly: the co-op area border)
+and its material Field_PhantomWall is the see-through co-op border wall, not a fog gate. Elden Ring's fog gate is a
+different thing, proven from vanilla data: m18's own boss fog walls AEG099_001_9010 / 9011 (entities 18001850 / 851)
+are shown by event 18000870 -> common_func 9005811, which runs 2005[3] Change Asset Enable State (asset, on) and
+2006[4] Create Asset-following SFX (asset, dummypoly 101, SFX 3 / 4); the asset itself has no mesh (AEG099_001.flver:
+10 dummies only, fog extent dummies 180-187 at x +-2.5, z +-2: a 5 m wide wall) and AssetGeometryParam 99001 is not
+co-op-only. So FOG_WALLS are two AEG099_001 copies (entities 1042361892 / 893) side by side across the 8 m archway
+(blender_switch_street.tunnel_inside: |x| < 4), 0.5 m on the street side of the round 26 plane, and emevd.py
+--fog-wall (event 1042362860) gives them the vanilla SFX 3 at every load. The plane stays as the far view, now
+8.4 m wide and nearly opaque (blender_build_fog.py / fog_texture.py), behind them.
+Not proven: the SFX's own draw distance (vanilla fog gates are seen from a corridor's length, not across a map).
+
 Usage: python msb_fog_gate.py map.msb.dcx out.msb.dcx   (DFLT DCX as Smithbox saves; rerunning moves it in place)
 """
 import math
@@ -46,6 +60,11 @@ WALL_M18_POSITION, WALL_M18_ROTATION = (-148.534912, 78.019989, 12.045101), -26.
 MIST_MODEL = "AEG030_530"
 MIST_PART = "AEG030_530_9102"
 MIST_PART_ID = 9402
+# Round 27 (A6): Elden Ring's fog gate (see above): (part, header id, entity, x across the archway) in the street's
+# own frame at depth FOG_WALL_Z (the plane is at z -15.7, the archway's mouth at -10.91), turned with the street.
+FOG_WALL_MODEL = "AEG099_001"
+FOG_WALLS = [("AEG099_001_9103", 9403, 1042361892, -2.0), ("AEG099_001_9104", 9404, 1042361893, 2.0)]
+FOG_WALL_Z, FOG_WALL_Y = -15.2, 0.02
 
 
 def put_copy(lists, name, model, part_id, m18_position, m18_rotation):
@@ -74,6 +93,13 @@ def place_fog(raw):
     put_copy(lists, FOG_PART, FOG_MODEL, FOG_PART_ID, M18_POSITION, M18_ROTATION)
     put_copy(lists, WALL_PART, WALL_MODEL, WALL_PART_ID, WALL_M18_POSITION, WALL_M18_ROTATION)
     put_copy(lists, MIST_PART, MIST_MODEL, MIST_PART_ID, WALL_M18_POSITION, WALL_M18_ROTATION)
+    parts = _list(lists, "PARTS_PARAM_ST")
+    street = parts.entries[find(parts, STREET)]
+    position, yaw = struct.unpack_from("<3f", street, 0x20), struct.unpack_from("<3f", street, 0x2C)[1]
+    for name, part_id, entity, x in FOG_WALLS:
+        assert all(struct.unpack_from("<i", e, 0x08)[0] != part_id or entry_name(e) == name for e in parts.entries)
+        put_asset(lists, name, FOG_WALL_MODEL, position, yaw, (x, FOG_WALL_Y, FOG_WALL_Z), part_id=part_id,
+                  entity_id=entity)
     return write_msb(header, lists)
 
 

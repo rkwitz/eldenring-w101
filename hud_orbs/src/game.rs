@@ -1064,7 +1064,7 @@ impl Game {
         let f = |o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
         let i = |o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
         Some(ActionButton { region: b[0], radius: f(0x0C), angle: i(0x10), height: f(0x1C), base: f(0x20),
-                            text_id: i(0x34) })
+                            angle_check: b[0x24], allow_angle: i(0x28), text_id: i(0x34) })
     }
 
     /// Round 25 (H3): writes ActionButtonParam row `row`'s textId (the text Elden Ring's own prompt shows).
@@ -1244,6 +1244,10 @@ pub struct ActionButton {
     pub angle: i32,
     pub height: f32,
     pub base: f32,
+    /// Round 27 (A1): angleCheckType (0x24) and allowAngle (0x28, the player's facing tolerance either side, degrees;
+    /// 180 = any). `angle` (0x10) is the region's own sector round the target's front (180 = all round).
+    pub angle_check: u8,
+    pub allow_angle: i32,
     pub text_id: i32,
 }
 

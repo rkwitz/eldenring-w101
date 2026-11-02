@@ -797,7 +797,7 @@ impl Book {
     /// Draws the quest markers over the quest givers (markers.rs) in normal play, from the last quest flags read.
     pub fn draw_markers(&mut self, ui: &Ui, cx: &Context) {
         self.draw_prompt(ui, cx);
-        self.textures.want([markers::OFFER, markers::TALK, markers::SPIRAL].map(String::from));
+        self.textures.want([markers::OFFER, markers::TALK, markers::SPIRAL, markers::SHOP].map(String::from));
         if !cx.gameplay || self.blocking() || self.map != MapState::Idle || self.flags.is_empty() {
             return;
         }
@@ -967,7 +967,8 @@ impl Book {
             // capitals with a dark outline in the name colour, and under it the school's icon and "RANK n" in it too.
             let icon = (!plate.school.is_empty()).then(|| format!("GUI/Icons/Icon_{}.png", plate.school));
             let name = plate.name.to_uppercase();
-            let line = plate.line.to_uppercase();
+            // Round 27 (A9): an NPC's title ("Merchant") keeps its case; creature rank lines are capitals.
+            let line = if plate.colour == markers::NPC_NAME_COLOUR { plate.line.clone() } else { plate.line.to_uppercase() };
             let (name_scale, line_scale, icon_side) = (NAME_SCALE, RANK_SCALE, RANK_SCALE * 38.0);
             let name_w = fancy.width(&name) * name_scale;
             let line_w = fancy.width(&line) * line_scale + if icon.is_some() { icon_side + 3.0 } else { 0.0 };
@@ -2119,7 +2120,11 @@ impl Book {
         let request = &self.requests[d.request];
         let screen = ui.io().display_size;
         let (s, origin) = talk::placement(window, screen, talk::xp_bar_top(screen, self.hud_scale));
-        let view = d.view(window, request);
+        let mut view = d.view(window, request);
+        // Round 27 (A3): a speaker whose portrait isn't loaded gets the name and text centred on the whole box.
+        if self.textures.get(d.speaker(request).1).is_none() {
+            talk::Conversation::without_portrait(window, &mut view);
+        }
         // Ask for the art this frame needs (the box, its buttons, the portrait, the quest card); it loads before the
         // next frame.
         let mut wanted = window.images();

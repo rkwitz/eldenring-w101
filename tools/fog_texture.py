@@ -13,7 +13,9 @@ import sys
 
 SIZE = 256
 COLOUR = (236, 238, 242)
-ALPHA_LO, ALPHA_HI = 0.30, 0.80  # mist density range before the edge fade
+# Round 27 (A6, Ryan: "too transparent"; rounds 26: 0.30 .. 0.80 with 12 % side and 25 % top fades): nearly opaque
+ALPHA_LO, ALPHA_HI = 0.88, 1.0  # mist density range before the edge fade
+SIDE_FADE, TOP_FADE = 0.04, 0.08
 
 
 def _noise(size, cells, rng):
@@ -49,8 +51,8 @@ def alpha_map(size=SIZE, seed=26):
             n = sum(o[y][x] * w for o, w in octaves)
             n = 0.75 * n + 0.25 * streak[(y // 6) % size][x]  # stretched rows: soft vertical streaks
             a = ALPHA_LO + (ALPHA_HI - ALPHA_LO) * min(1.0, max(0.0, (n - 0.3) / 0.4))
-            edge = min(1.0, u / 0.12, (1 - u) / 0.12) * min(1.0, v / 0.25)
-            row.append(a * edge * (0.85 + 0.15 * v))
+            edge = min(1.0, u / SIDE_FADE, (1 - u) / SIDE_FADE) * min(1.0, v / TOP_FADE)
+            row.append(a * edge * (0.95 + 0.05 * v))
         out.append(row)
     return out
 

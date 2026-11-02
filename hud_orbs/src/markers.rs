@@ -23,6 +23,20 @@ use crate::layout::Textures;
 pub const OFFER: &str = "Wizbang/Quest_Start.png";
 pub const TALK: &str = "Wizbang/Quest_Complete.png";
 pub const SPIRAL: &str = "Wizbang/Quest_Spiral.png";
+/// Round 27 (A9, Ryan: "Ugo gets W101's shop marker, the purse with the red swirl turning behind it"): WizBangs.xml
+/// Shopping -> Wizbang/Quest_Marker_Shopping.nif (_Shared-WorldData.wad): the same billboard and Quest_Spiral
+/// (59 units, same turn) as Quest_Marker_Start, with the sign Quest_Shopping__e71b1435.nif (the coin purse, 256x256)
+/// on a 58.16-unit quad (Start's is 76.2). PNG made by tools/w101_quest_art.py (MARKERS).
+pub const SHOP: &str = "Wizbang/Quest_Shopping.png";
+const SIGN_SHOP: f32 = 0.5816;
+/// Round 27 (A9): the merchant, his plate's title, and the request flag his talk event raises. Ugo has no
+/// dialogue: emevd_quests' "ugo_kalahad|idle" talk raises SHOP_REQUEST (DIALOGUE_FLAG + its key, dialogue.tsv) and
+/// waits, like any talk, for the HUD's answer (1042362620 OK / 1042362621 Cancel) or the player walking 6 m off.
+/// The shop window (portraits worker, round 27 B2) opens on SHOP_REQUEST instead of the dialogue box and answers
+/// OK when it closes.
+pub const SHOP_NPC: &str = "ugo_kalahad";
+pub const SHOP_TITLE: &str = "Merchant";
+pub const SHOP_REQUEST: u32 = 1042362441;
 
 /// The tile the givers are in (m60_42_36_00).
 const TILE: [i32; 2] = [42, 36];
@@ -66,10 +80,14 @@ const TILE: [i32; 2] = [42, 36];
 /// neighbour's spot); O'Ryan is inside his house (off the street); Diego the Duelmaster (D, Hunter of the Dead's look
 /// on Varre's standing rows: a320_090100 head 1.54, helm top ~1.69 -> 1.9 / 2.38 as round 24's standing c0000) and Ugo
 /// Kalahad (Merchant Kale c3200, a000_000000: head 1.70, hat 1.79 -> plate 2.00, marker 1.53 x 1.70 = 2.60).
+/// Round 27 (A5/A7, Ryan: "everyone stands where the model can"): Connelly (Bernahl a345_090101) and Ceren (Corhyn
+/// a361_090101, his Roundtable Hold stance) stand: head bone 1.54 m as Varre's a320_090100 -> round 24's standing
+/// 1.9 / 2.38. Olivia is Rya the Scout (c0000, CharaInit 23130) standing in a329_090100: head bone 1.40, hair top
+/// ~1.55 (the c0000 gap 0.15) -> plate 1.76, marker max(1.53 x 1.40, 1.76 + 0.48) = 2.24. Unverified in game.
 pub const NPCS: [(&str, &str, u32, u32, [f32; 3], f32, f32); 6] = [
-    ("private_connelly", "Private Connelly", 1042360820, 0, [-65.8655, 92.8248, -7.9762], 1.58, 2.06),
-    ("ceren_nightchant", "Ceren Nightchant", 1042360821, 0, [-80.3192, 93.6998, -12.8224], 1.22, 1.70),
-    ("olivia_dawnwillow", "Olivia Dawnwillow", 1042360822, 2170, [-84.8379, 94.2148, -18.4484], 3.31, 3.79),
+    ("private_connelly", "Private Connelly", 1042360820, 0, [-65.8655, 92.8248, -7.9762], 1.9, 2.38),
+    ("ceren_nightchant", "Ceren Nightchant", 1042360821, 0, [-80.3192, 93.6998, -12.8224], 1.9, 2.38),
+    ("olivia_dawnwillow", "Olivia Dawnwillow", 1042360822, 0, [-84.8379, 94.4878, -18.4484], 1.76, 2.24),
     ("lady_oriel", "Lady Oriel", 1042360823, 5330, [-336.1025, 93.4988, 105.5051], 2.18, 2.66),
     ("diego", "Diego the Duelmaster", 1042360825, 0, [5.0029, 94.1828, -44.0778], 1.9, 2.38),
     ("ugo_kalahad", "Ugo Kalahad", 1042360826, 3200, [-29.7745, 94.5018, -61.8978], 2.0, 2.6),
@@ -91,7 +109,7 @@ fn is_dead(entity: u32) -> bool {
 }
 
 /// Their models and entity IDs, for Game::entities.
-pub const MODELS: [u32; 4] = [0, 2170, 5330, 3200];
+pub const MODELS: [u32; 3] = [0, 5330, 3200];
 pub fn entity_ids() -> Vec<u32> {
     NPCS.iter().map(|n| n.2).collect()
 }
@@ -213,6 +231,8 @@ impl Camera {
 pub enum Marker {
     Offer,
     Talk,
+    /// Round 27 (A9): the merchant's purse.
+    Shop,
 }
 
 /// Every flag the markers read.
@@ -244,7 +264,10 @@ pub fn marker(npc: &str, flag: &dyn Fn(u32) -> bool) -> Option<Marker> {
     if talk {
         return Some(Marker::Talk);
     }
-    OFFERS.iter().any(offer).then_some(Marker::Offer)
+    if OFFERS.iter().any(offer) {
+        return Some(Marker::Offer);
+    }
+    (npc == SHOP_NPC).then_some(Marker::Shop)
 }
 
 /// A map block's tile (x, z) in 256 m units and its scale, or None outside the open world (area 60).
@@ -359,7 +382,9 @@ pub fn npc_plates(camera: &Camera, spots: &[Spot], sight: &Sight, screen: [f32; 
             continue;
         }
         let k = (screen[1] / 768.0) * (8.0 / z.max(1.0)).clamp(0.7, 1.15);
-        out.push(crate::nameplates::Plate { at: on_screen, k, alpha, name, line: String::new(), school: "",
+        // Round 27 (A9): the merchant's title under his name.
+        let line = if NPCS[i].0 == SHOP_NPC { SHOP_TITLE.to_string() } else { String::new() };
+        out.push(crate::nameplates::Plate { at: on_screen, k, alpha, name, line, school: "",
                                              colour: NPC_NAME_COLOUR, z });
     }
     out
@@ -399,7 +424,8 @@ pub fn draw(
         let Some((on_screen, z)) = camera.project([at[0], at[1] + lift + CENTRE, at[2]], screen) else { continue };
         // Wizard101 draws it at its world size; far away it is kept to a still readable 1.5 % of the screen.
         let metre = camera.scale(z, screen[1]).max(screen[1] * 0.015 / SIGN);
-        drawn.push((z, on_screen, metre, alpha, if kind == Marker::Offer { OFFER } else { TALK }));
+        let sign = match kind { Marker::Offer => OFFER, Marker::Talk => TALK, Marker::Shop => SHOP };
+        drawn.push((z, on_screen, metre, alpha, sign));
     }
     // Far ones first, so near ones cover them.
     drawn.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -418,7 +444,7 @@ pub fn draw(
                 .build();
         }
         let Some((texture, _)) = textures.get(name) else { continue };
-        let h = SIGN * metre / 2.0;
+        let h = if name == SHOP { SIGN_SHOP } else { SIGN } * metre / 2.0;
         draw.add_image(texture, [at[0] - h, at[1] - h], [at[0] + h, at[1] + h]).col(tint).build();
     }
     crate::occlusion::end();

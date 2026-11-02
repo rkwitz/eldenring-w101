@@ -105,8 +105,20 @@ HUMAN_THINK, HUMAN_NPC = 523011000, 523010010
 #   Corhyn's rows; Corhyn's Robe, 23510), Private O'Ryan = Castellan Edgar (23110, named "Edgar the Revenger" by
 #   Smithbox: the only Edgar look row), Olivia Dawnwillow = Finger Reader Enia (c2170), Lady Oriel = St. Trina (c5330).
 # Rounds 15-23: Varre's rows with the 6194 / 6164 / 23201 looks and Melina (c2180 21800000).
-BERNAHL = (523260000, 523260000, 23260)
-CORHYN = (523510000, 523510000, 23510)
+BERNAHL = (523260000, 523260010, 23260)
+CORHYN = (523510000, 523510034, 23510)
+# Round 27 (A4, Ryan: "Connelly is missing when I load in; he appears after a Roundtable Hold trip"): his round 24-26
+# NpcParam 523260000 has disableInitializeDead 0 (like every NPC's base row x0000; Varre's 523010010 has 1), so once
+# Bernahl had been killed (before round 26 made the NPCs immortal) the save loaded him dead until a rest / warp
+# respawned him (Ryan's 22:59:42 log: "markers: dead street NPCs now [1042360820]" right after loading; 23:03:32
+# after the Roundtable trip: "[]"). Rows 523260010 / 523510034 are the same NPCs with disableInitializeDead 1
+# (differences: an item lot on death, NG+ scaling SpEffects 19351/19501 and 9630 status rates; they are immortal).
+# Round 27 (A7, Ryan: "Olivia: if Enia has no standing idle, use Rya the Scout standing"): c2170 has none (her rig is
+# seated even in its bind pose: pelvis 1.28 m, thighs level, feet 0.68 m up; no animation moves the pelvis), so
+# Olivia = Rya the Scout: c0000 with her CharaInit 23130 and her own rows (NpcParam 523130000: SpEffect 9829,
+# animIdOffset 329000000 -> 90100 = a329_090100, standing: pelvis 0.97, feet 0.11, head 1.40 m). Her base row has
+# disableInitializeDead 0 too (no team-26 row with 1 and a Think); she is immortal from the idle event on.
+RYA = (523130000, 523130000, 23130)
 EDGAR = (523110000, 523110000, 23110)
 ENIA = (21700000, 21700000, -1)
 TRINA = (53300000, 53300000, -1)
@@ -139,9 +151,9 @@ CHARACTERS = [
      *BERNAHL, 1042360820),
     ("ceren_nightchant", "Ceren Nightchant", "street", (-35.276, -0.299, 88.797), -45.69, "c0000",
      *CORHYN, 1042360821),
-    # Enia sits in her chair with gravity off (SEATED): root exactly as vanilla m11_10 has it under her chair.
-    ("olivia_dawnwillow", "Olivia Dawnwillow", "street", (-41.857, 0.300 - 0.084, 85.837), -24.23, "c2170",
-     *ENIA, 1042360822),
+    # Round 27 (A7): Rya the Scout standing (rounds 24-26: Enia seated in her chair, SEATED).
+    ("olivia_dawnwillow", "Olivia Dawnwillow", "street", (-41.857, 0.289 + SPAWN_LIFT, 85.837), -24.23, "c0000",
+     *RYA, 1042360822),
     # Round 22 (P1): on the centre of the battle circle (FX_MinigameSigilGlow (597.5, 313.7, -70.0); the sunken floor's
     # bounding centre in the classic maze OBJ is (5.98, 3.09); W101's own NPC02 instance (6.010, 3.035), 0.1 m off),
     # facing the garden's exit door (6.074, -35.75): yaw atan2(-dx, -dy) = -0.15.
@@ -159,7 +171,7 @@ LATE_CHARACTERS = {"diego", "ugo_kalahad"}
 # Round 26 (N3, Ryan: "Enia floats above her chair; the chair floats and isn't level"): characters that sit in a vanilla
 # seat (msb_npc_seats.py) with gravity off (2004[10], emevd_quests idle event), so the engine doesn't stand them on
 # the seat's collision: their MSB root is placed exactly where vanilla has it relative to the seat.
-SEATED = {"olivia_dawnwillow"}
+SEATED = set()  # round 27 (A7): nobody sits any more (rounds 26: {"olivia_dawnwillow"})
 # Round 26 (N7, Ryan: street NPCs must never die; flinching is fine): 2004[12] immortality (HP stays >= 1, hits still
 # land) on every character, in its idle event; talk events END while the character is dead.
 # Round 15 characters taken out in round 16 (F1): (slug, part name, model). msb_add_npcs.py deletes these parts.
@@ -179,6 +191,12 @@ REMOVED = [
 #     her lying idle a000_030001 keeps her head 0.06 m up, inside the flower mound, while a000_030000 (6 s, first and
 #     last frame alike, so it loops) has her risen out of the flowers, head bone 1.22 m (as her bind pose). Looped.
 IDLE = {"c0000": (90100, 0), "c2180": (0, 1), "c2170": (0, 1), "c5330": (30000, 1), "c3200": (0, 1)}
+# Round 27 (A5/A7, Ryan: "every street NPC standing where the model can"): per-character idles over IDLE. Bernahl's
+# 90100 (a345_090100) sits and Corhyn's (a361_090100) kneels; their 90101 (a345_090101 6 s, a361_090101 8 s: the
+# Roundtable Hold's standing Corhyn) stand from first to last frame (head bone 1.54 m, pelvis 0.96, feet 0.10-0.11 at
+# the first, middle and last spline control points; c0000_a9x.anibnd), looped. Diego (Varre's a320_090100), Ugo (Kale
+# a000_000000), Olivia (Rya a329_090100) already stand; Trina's risen a000_030000 is her only upright pose (head 1.22).
+IDLE_BY_SLUG = {"private_connelly": (90101, 1), "ceren_nightchant": (90101, 1)}
 # Round 21 (Q7): characters whose AI is switched off so they stay on their MSB spot (Lady Oriel ran around the maze).
 STAND_STILL = {"lady_oriel"}
 CHARACTER_PART_ID = 9100  # part header 0x08 / name suffix of the first character (<model>_9100..)

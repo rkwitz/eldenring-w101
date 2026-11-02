@@ -25,6 +25,10 @@ is flat (HD mesh 0.300 within 1.5 m all round), the chair's root is on that grou
 and she is a SEATED character: root at ground - 0.084 and gravity off (emevd_quests idle event), as in vanilla.
 Each seat's own ground height is GROUND (W101 HD street mesh under the seat, metres), when given.
 
+Round 27 (A5/A7, Ryan: "drop Connelly's seat (the pot is way to his right, and breakable); everyone stands"):
+Connelly (Bernahl) and Olivia (now Rya the Scout) stand, so no seat is placed and the round 25-26 seats
+(REMOVED_SEATS) are deleted when the map still has them. SEATS stays empty unless a sitting NPC comes back.
+
 Usage: python msb_npc_seats.py map.msb.dcx out.msb.dcx
 """
 import math
@@ -36,22 +40,31 @@ from msb_add_garden import put_asset, run  # noqa: E402
 from msb_add_npcs import rotation_of  # noqa: E402
 from msb_add_quests import FRAMES  # noqa: E402
 from msb_add_room import to_world  # noqa: E402
-from msb_floor import _list, find, read_msb, transform, write_msb  # noqa: E402
+from dome_clear import delete_parts  # noqa: E402
+from msb_floor import _list, entry_name, find, read_msb, transform, write_msb  # noqa: E402
 import w101_quests as Q  # noqa: E402
 
 SPAWN_LIFT = 0.2  # w101_quests.CHARACTERS local y = W101 ground (z * 0.01) + 0.2
 # slug: (seat part, model, part header id, offset in the NPC's frame (x, y, z), turn from the NPC's rotation)
-SEATS = {
+SEATS_R26 = {
     "olivia_dawnwillow": ("AEG221_605_9500", "AEG221_605", 9500, (-0.135, 0.084, 0.106), -0.7),
     "private_connelly": ("AEG201_043_9501", "AEG201_043", 9501, (0.990, 0.046, 0.440), 17.3),
 }
 # Round 26: the W101 street (HD mesh) height under each seat (frame-local y, metres), where it differs from the NPC's.
 GROUND = {"private_connelly": -1.300}  # HD mesh -1.247 .. -1.305 under the 0.45 m stool: its low corner
+SEATS = {}  # round 27: nobody sits
+REMOVED_SEATS = [v[0] for v in SEATS_R26.values()]  # AEG221_605_9500 (Enia's chair), AEG201_043_9501 (the stool)
 
 
 def place_seats(raw):
     header, lists = read_msb(raw)
     parts = _list(lists, "PARTS_PARAM_ST")
+    found = {entry_name(e): k for k, e in enumerate(parts.entries)}
+    gone = {found[n] for n in REMOVED_SEATS if n in found}
+    if gone:
+        lines = []
+        delete_parts("map", lists, gone, lines)
+        print("\n".join(lines + [f"seat {n} deleted" for n in REMOVED_SEATS if n in found]))
     for slug, (name, model, part_id, offset, turn) in SEATS.items():
         _slug, _title, frame, local, yaw, *_rest = Q.CHARACTER[slug]
         frame_position, frame_rotation = transform(parts.entries[find(parts, FRAMES[frame])])

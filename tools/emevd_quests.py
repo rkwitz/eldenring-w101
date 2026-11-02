@@ -328,7 +328,7 @@ def quest_events():
     for slug, *_rest, entity in Q.CHARACTERS:  # npcs
         events.append(npc_event(slug, entity))
     for _slug, _title, _frame, _local, _yaw, model, *_rows, entity in Q.CHARACTERS:  # idles (round 16 F3)
-        animation, loop = Q.IDLE[model]
+        animation, loop = Q.IDLE_BY_SLUG.get(_slug, Q.IDLE[model])
         body = [WAIT_FRAME, force_animation(entity, animation, loop)]  # vanilla waits a frame too
         # Round 26 (N7): never dies (HP stays >= 1; hits and flinches still happen). N3: a seated character keeps the
         # MSB root under its seat (gravity off), as vanilla Enia in her chair.

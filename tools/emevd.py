@@ -20,6 +20,7 @@ python emevd.py --bosses m60_42_36_00.emevd out.emevd
 python emevd.py --boss-watchdog in.emevd[.dcx] out.emevd[.dcx]
 python emevd.py --quest-window in.emevd[.dcx] out.emevd[.dcx]     (round 26 W2: tower's blue windows while its goal is current)
 python emevd.py --boss-resurface in.emevd[.dcx] out.emevd[.dcx]   (round 26 W3: Rattlebones rises again when out of battle)
+python emevd.py --fog-wall in.emevd[.dcx] out.emevd[.dcx]         (round 27 A6: Elden Ring's fog gate on the Commons arch)
   round 25: Rattlebones back onto his sigil when he leaves the room (under the floor), see boss_watchdog.
 python emevd.py --book-warps common.emevd out.emevd
   the HUD spellbook map page's warp buttons (see book_warps).
@@ -549,6 +550,30 @@ def quest_window(d, event_id=QUEST_WINDOW_EVENT, window=WINDOW_ENTITY, assigned=
     return build(e, events)
 
 
+FOG_WALL_EVENT = 1042362860
+FOG_WALLS = (1042361892, 1042361893)  # msb_fog_gate.FOG_WALLS: AEG099_001 copies across the Commons archway
+FOG_WALL_DUMMY, FOG_WALL_SFX = 101, 3  # as vanilla m18 event 18000870 -> common_func 9005811 (18001850, SFX 3)
+
+
+def fog_wall(d, event_id=FOG_WALL_EVENT, walls=FOG_WALLS):
+    """Round 27 (A6): Elden Ring's own fog gate look on the Commons archway. Vanilla shows a fog wall (AEG099_001, a
+    mesh-less asset) with common_func 9005811: 2005[3] Change Asset Enable State (asset, 1) and 2006[4] Create
+    Asset-following SFX (asset, dummypoly 101, SFX 3) (m18 event 18000870 for the Stranded Graveyard's own fog walls
+    18001850 / 18001851, SFX 3 / 4). New event `event_id` (rest 1, started from the top of event 0) does the same for
+    each of `walls` at every load and rest, deleting the SFX first (2006[5], as 9005811 does) so a restart never
+    stacks two. Rerunning replaces the event."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
+    ins = []
+    for wall in walls:
+        ins += [_i(2005, 3, "<IBxxx", wall, 1),
+                _i(2006, 5, "<IBxxx", wall, 1),
+                _i(2006, 4, "<Iii", wall, FOG_WALL_DUMMY, FOG_WALL_SFX)]
+    events.append({"id": event_id, "rest": 1, "pars": [], "ins": ins})
+    return build(e, events)
+
+
 RESURFACE_EVENT = 1042362859
 RESURFACE_WAIT = 10.0  # s out of battle state, checked twice, before he is made to rise again
 RESURFACE_ANIM_TIME = 16.0  # a000_020010 is 15.87 s long (c4960.tae)
@@ -985,6 +1010,9 @@ if __name__ == "__main__":
     if sys.argv[1] == "--quest-window":  # emevd.py --quest-window in.emevd[.dcx] out.emevd[.dcx] (round 26 W2)
         _dcx_apply(sys.argv[2], sys.argv[3], quest_window)
         sys.exit()
+    if sys.argv[1] == "--fog-wall":  # emevd.py --fog-wall in.emevd[.dcx] out.emevd[.dcx] (round 27 A6)
+        _dcx_apply(sys.argv[2], sys.argv[3], fog_wall)
+        sys.exit(0)
     if sys.argv[1] == "--boss-resurface":  # emevd.py --boss-resurface in.emevd[.dcx] out.emevd[.dcx] (round 26 W3)
         _dcx_apply(sys.argv[2], sys.argv[3], boss_resurface)
         sys.exit()

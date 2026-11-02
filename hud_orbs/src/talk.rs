@@ -228,6 +228,21 @@ impl Conversation {
         v
     }
 
+    /// Round 27 (A3, Ryan: "Diego's name in the dialogue box is not centred"): DialogWindow's txtTitle (169..730) and
+    /// txtMessage (185..768) leave room for the 180-wide portrait on the left, so a speaker without one (Diego and Ugo
+    /// had no ER portrait yet: the log's "NpcPortraits/ER/diego.png: cannot find the file") had his name centred
+    /// 48 layout px right of the box's middle over an empty space. With no portrait loaded the name is centred on the
+    /// whole title scroll (the box's 0..802 less the scroll ends: 40..762) and the text starts at the same 40.
+    /// With a portrait, Wizard101's own layout is kept.
+    pub fn without_portrait(window: &Layout, v: &mut View) {
+        for (name, left, right) in [("txtTitle", 40.0, 762.0), ("txtMessage", 40.0, 768.0)] {
+            if let Some(id) = window.find(name) {
+                let r = window.nodes[id].rect;
+                v.rect.insert(id, [left, r[1], right, r[3]]);
+            }
+        }
+    }
+
     /// The current page's speaker, (name, portrait): the request's own unless the page names another.
     pub fn speaker<'a>(&self, request: &'a Request) -> (&'a str, &'a str) {
         match request.speakers.get(self.page) {
