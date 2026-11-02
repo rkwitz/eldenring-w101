@@ -24,10 +24,11 @@ later part index remapped; models go in name order among the character models. T
   W101_<boss>_sigil  point on the duel sigil, facing the arrival: the boss event warps the boss there when the player
                      walks in (with gravity off until then: spawning with the map, before the room's asset collision
                      is there for him, he can fall through the floor)
+  W101_<boss>_room   (Rattlebones) the room above its floor, for emevd.boss_watchdog (see WATCHED)
 Positions are in the room asset's FLVER frame (W101 (x, z, y) * 0.01) through the part's transform. Rerunning moves
 the existing entries and updates their rows.
 
-Usage: python msb_add_boss.py map.msb.dcx template_map.msb out.msb.dcx
+Usage: python msb_add_boss.py map.msb.dcx template_map.msb out.msb.dcx [--only Rattlebones]
   template_map.msb: vanilla m60_43_36_00.msb (uncompressed, or DFLT DCX)
 """
 
@@ -43,10 +44,14 @@ from msb_add_mobs import ENEMY, insert_enemy  # noqa: E402
 from msb_add_room import to_world  # noqa: E402
 from msb_floor import _list, _set_name, entry_name, find, read_msb, transform, write_msb  # noqa: E402
 
+RATTLEBONES_BACK = 3.05  # sigil 3.5 m behind the room centre (W101 sigil (0, -45) = FLVER z -0.45; the door is at -z)
 # (key, part, Think, NpcParam, entity, room part, sigil (room FLVER frame), facing (0 = room +z), arena centre,
 #  arena radius, arena entity / region id, sigil entity / region id; region ids 9220-9225 are w101_quests')
 BOSSES = [
-    ("Rattlebones", "c4960_9000", 49600068, 49600168, 1042360850, "AEG030_519_9000", (0.0, 0.0, -0.45), 180.0,
+    # round 25 B3: on the far side of the duel circle (as Wizard101 puts the boss, ref 8_w101_boss_room.png), facing
+    # the door, instead of the centre: the torso is 16 m long (FLVER box +-8 m round its origin) and only hit the
+    # player near the walls from the centre of a 22 m room
+    ("Rattlebones", "c4960_9000", 49600068, 49600168, 1042360850, "AEG030_519_9000", (0.0, 0.0, RATTLEBONES_BACK), 180.0,
      (0.0, 4.0, 0.0), 13.0, (1042362808, 9208), (1042362809, 9209)),
     ("Blackhope", "c3300_9000", 33000000, 33000062, 1042360851, "AEG030_519_9001", (0.0, 0.0, -0.45), 180.0,
      (0.0, 4.0, 0.0), 13.0, (1042362824, 9218), (1042362825, 9219)),
@@ -61,15 +66,25 @@ BOSSES = [
      (6.0, 2.0, 30.0), 14.0, (1042362828, 9244), (1042362829, 9245)),
 ]
 SIGIL_LIFT = 0.1  # sigil region height above the floor
+# Round 25 B2 (Rattlebones fell through the floor and never came back): one more sphere per watched boss, so big that
+# it holds the whole room above the floor (radius 12.15 m at floor level, past the 11.2 m ring wall) but not 1.5 m
+# under it: centre WATCH_RADIUS - WATCH_DEPTH above the floor. emevd.boss_watchdog puts the boss back on his sigil
+# when he is alive and outside it (under the floor, or out through a wall). (key, room part, entity, region id)
+WATCH_RADIUS, WATCH_DEPTH = 50.0, 1.5
+WATCHED = [("Rattlebones", "AEG030_519_9000", 1042362856, 9259)]
 
 
-def place_bosses(raw, template_raw):
+def place_bosses(raw, template_raw, only=None):
+    """`only`: keys of BOSSES to place (and of WATCHED to add), e.g. {"Rattlebones"}; the others are left as they are
+    (round 23 took the Seraph out of the map: placing all would put her back)."""
     header, lists = read_msb(raw)
     _, template_lists = read_msb(template_raw)
     check_grouped(lists)
     parts = _list(lists, "PARTS_PARAM_ST")
     regions, frames = [], {}
     for key, name, think, npc, entity, room, sigil, facing, arena, radius, arena_ids, sigil_ids in BOSSES:
+        if only and key not in only:
+            continue
         room_position, room_rotation = transform(parts.entries[find(parts, room)])
         ry = room_rotation[1]
         frames[room] = (room_position, ry)
@@ -101,6 +116,14 @@ def place_bosses(raw, template_raw):
               f"{tuple(round(c, 3) for c in position)}, rotation y {rotation:.1f}")
         regions += [(f"W101_{key}_arena", room, arena, 0.0, radius, *arena_ids),
                     (f"W101_{key}_sigil", room, (sigil[0], sigil[1] + SIGIL_LIFT, sigil[2]), facing, 0.5, *sigil_ids)]
+    for key, room, entity, region_id in WATCHED:
+        if only and key not in only:
+            continue
+        if room not in frames:
+            room_position, room_rotation = transform(parts.entries[find(parts, room)])
+            frames[room] = (room_position, room_rotation[1])
+        regions.append((f"W101_{key}_room", room, (0.0, WATCH_RADIUS - WATCH_DEPTH, 0.0), 0.0, WATCH_RADIUS, entity,
+                        region_id))
     count_users(lists)
     put_regions(lists, regions, frames)
     check_grouped(lists)
@@ -108,6 +131,11 @@ def place_bosses(raw, template_raw):
 
 
 if __name__ == "__main__":
+    only = None
+    if "--only" in sys.argv:  # --only Rattlebones[,Blackhope...]
+        k = sys.argv.index("--only")
+        only = set(sys.argv[k + 1].split(","))
+        del sys.argv[k:k + 2]
     template = load(sys.argv[2])
     del sys.argv[2]
-    run(lambda raw: place_bosses(raw, template))
+    run(lambda raw: place_bosses(raw, template, only))

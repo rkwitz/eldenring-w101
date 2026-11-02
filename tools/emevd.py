@@ -17,6 +17,8 @@ python emevd.py --interiors m60_42_36_00.emevd out.emevd
   door warps of Lady Blackhope's tower and Fear of Fire's house (see interior_doors; msb_add_interiors.py).
 python emevd.py --bosses m60_42_36_00.emevd out.emevd
   all door warps (rideable up to the door, load-screen flag, camera turned) and all four bosses (see all_bosses).
+python emevd.py --boss-watchdog in.emevd[.dcx] out.emevd[.dcx]
+  round 25: Rattlebones back onto his sigil when he leaves the room (under the floor), see boss_watchdog.
 python emevd.py --book-warps common.emevd out.emevd
   the HUD spellbook map page's warp buttons (see book_warps).
 python emevd.py --crafting common.emevd er_recipes.tsv out.emevd
@@ -480,6 +482,39 @@ def phase_one_only(d, boss=SERAPH, event_id=PHASE_ONE_EVENT):
     return build(e, events)
 
 
+WATCHDOG_EVENT = 1042362857
+RATTLEBONES_ROOM = 1042362856  # msb_add_boss.WATCHED: sphere holding the room above its floor
+WATCHDOG_WAIT = 2.0  # seconds outside before he is put back (a fall is over by then; a brief dip is ignored)
+
+
+def boss_watchdog(d, event_id=WATCHDOG_EVENT, boss=RATTLEBONES, room=RATTLEBONES_ROOM, sigil=RATTLEBONES_SIGIL,
+                  animation=20010, wait=WATCHDOG_WAIT):
+    """Round 25 B2: Rattlebones (Giant Skeleton Torso) fell through the floor with a little HP left and never came
+    back (the room hangs in empty space 60 m under the street; blender_build_room now also has a catch floor 2 m
+    down). New event `event_id` (restarts on rest, started from the top of event 0):
+      wait until the boss is alive AND outside region `room` (msb_add_boss.WATCHED: everything above the floor)
+      wait `wait` s, then 2004[10] gravity off, 2004[41] warp onto the sigil, gravity on, 2003[18] the wake
+      animation (as boss_bar: he rises out of the floor), restart.
+    HP and the fight are kept. Conditions packed as in boss_bar (3[2] with the boss as the character). Rerunning
+    replaces the event."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
+    body = [
+        _i(4, 0, "<bxxxIBBxxf", 1, boss, 0, 0, 1.0),  # IF boss alive (group 1)
+        _i(3, 2, "<bBxxIIi", 1, 0, boss, room, 1),  # IF boss outside the room sphere (group 1)
+        _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
+        _i(1001, 0, "<f", wait),
+        _i(2004, 10, "<IBxxx", boss, 0),  # gravity off
+        _i(2004, 41, "<IIIi", boss, 1, sigil, -1),  # back onto the sigil
+        _i(2004, 10, "<IBxxx", boss, 1),  # gravity on
+        _i(2003, 18, "<IiBBBbf", boss, animation, 0, 0, 0, 0, 1.0),
+        _i(1000, 4, "<Bxxx", 1),  # restart
+    ]
+    events.append({"id": event_id, "rest": 1, "pars": [], "ins": body})
+    return build(e, events)
+
+
 WELCOME_EVENT = 1042362989
 WELCOME_DELAY = 10.0  # seconds into a map before the welcome message is armed again (the card shows in the first few)
 
@@ -509,7 +544,7 @@ def all_bosses(d, on_foot=False):
     d = welcome_cards(clear_weather(window_off(d)))
     for event_id, boss, arena, sigil, name, animation, masks in BOSSES:
         d = boss_bar(d, event_id, boss, arena, sigil, name, animation, masks)
-    return phase_one_only(boss_setup(d))
+    return boss_watchdog(phase_one_only(boss_setup(d)))
 
 
 GUIDANCE_GRACES = (1042361981, 1042361980)  # AEG099_090 grace markers of The First Step (76101) and Church of Elleh (76100)
@@ -877,6 +912,9 @@ if __name__ == "__main__":
         sys.exit()
     if sys.argv[1] == "--bosses":  # emevd.py --bosses in.emevd out.emevd [--on-foot] (msb_add_boss.py, msb_add_indoor.py)
         open(sys.argv[3], "wb").write(all_bosses(open(sys.argv[2], "rb").read(), "--on-foot" in sys.argv))
+        sys.exit()
+    if sys.argv[1] == "--boss-watchdog":  # emevd.py --boss-watchdog in.emevd[.dcx] out.emevd[.dcx] (round 25 B2)
+        _dcx_apply(sys.argv[2], sys.argv[3], boss_watchdog)
         sys.exit()
     if sys.argv[1] == "--no-guidance":  # emevd.py --no-guidance m60_42_36_00.emevd out.emevd
         open(sys.argv[3], "wb").write(no_guidance_wisps(open(sys.argv[2], "rb").read()))

@@ -384,6 +384,9 @@ impl Music {
                 boss = Some(format!("boss bar up for entity {entity} (fight active {active})"));
             }
         }
+        if msb[1] < ROOM_HEIGHT {
+            boss_probe(&creatures, player, msb);
+        }
         if boss.is_none() && msb[1] < ROOM_HEIGHT {
             if let Some(c) = creatures.iter().find(|c| c.3 > 0 && BOSS_MODELS.contains(&c.1) && dist(c.2) < BOSS_RANGE) {
                 boss = Some(format!("{} alive {:.0} m away in its room", name(c.1), dist(c.2)));
@@ -476,6 +479,29 @@ impl Music {
             }
         }
     }
+}
+
+/// Round 25 B2/B3 (Rattlebones fell through the floor; he only hit near the walls): his place, height above the floor
+/// and HP every 2 s while the player is in a room under the street with him loaded, so a test run shows where he goes.
+/// MSB position = the player's MSB position + the physics offset between them; the room is msb_add_room's
+/// AEG030_519_9000 (centre on the floor at RATTLEBONES_ROOM).
+fn boss_probe(creatures: &[(usize, u32, [f32; 3], i32)], player: Option<[f32; 3]>, msb: [f32; 3]) {
+    const RATTLEBONES_MODEL: u32 = 4960;
+    const RATTLEBONES_ROOM: [f32; 3] = [-242.63, 34.0, 20.07];
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    let (Some(p), Some(c)) = (player, creatures.iter().find(|c| c.1 == RATTLEBONES_MODEL)) else { return };
+    let now = Instant::now();
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if last.is_some_and(|t| now - t < Duration::from_secs(2)) {
+        return;
+    }
+    *last = Some(now);
+    let at = [msb[0] + c.2[0] - p[0], msb[1] + c.2[1] - p[1], msb[2] + c.2[2] - p[2]];
+    let r = |q: [f32; 3]| ((q[0] - RATTLEBONES_ROOM[0]).powi(2) + (q[2] - RATTLEBONES_ROOM[2]).powi(2)).sqrt();
+    let apart = ((c.2[0] - p[0]).powi(2) + (c.2[2] - p[2]).powi(2)).sqrt();
+    tracing::info!("boss probe: Rattlebones HP {} at MSB [{:.1}, {:.1}, {:.1}] ({:.1} m from the room centre, \
+                    {:+.1} m above the floor); player {:.1} m from the centre, {apart:.1} m apart",
+                   c.3, at[0], at[1], at[2], r(at), at[1] - RATTLEBONES_ROOM[1], r(msb));
 }
 
 // ---------------------------------------------------------------------------------------------------------------
