@@ -309,17 +309,27 @@ pub(crate) fn marker(l: &Layout, v: &mut View, marker: &str, first: &str, chosen
     v.rect.insert(m, [cr[0] + mr[0] - fr[0], cr[1] + mr[1] - fr[1], cr[0] + mr[2] - fr[0], cr[1] + mr[3] - fr[1]]);
 }
 
-/// "p/n" in a page number box, greying the arrows at the ends; returns the clamped page.
+/// Round 24 (Ryan B2: "Page arrows everywhere ... if there is only one page, remove both arrows. With 2+ pages keep
+/// both and grey out the one that can't go further"): the back / forward arrows of a list on `page` of `pages`.
+pub(crate) fn page_arrows(l: &Layout, v: &mut View, page: usize, pages: usize, back: &str, forward: &str) {
+    if pages <= 1 {
+        hide(l, v, &[back, forward]);
+        return;
+    }
+    if page == 0 {
+        grey(l, v, &[back]);
+    }
+    if page + 1 >= pages {
+        grey(l, v, &[forward]);
+    }
+}
+
+/// "p/n" in a page number box, the arrows as page_arrows says; returns the clamped page.
 pub(crate) fn paging(l: &Layout, v: &mut View, st: &mut State, count: usize, per_page: usize, ids: (&str, &str, &str)) -> usize {
     let pages = count.div_ceil(per_page.max(1)).max(1);
     st.page = st.page.min(pages - 1);
     v.set(l.find(ids.0), centre(&format!("{}/{}", st.page + 1, pages)));
-    if st.page == 0 {
-        grey(l, v, &[ids.1]);
-    }
-    if st.page + 1 >= pages {
-        grey(l, v, &[ids.2]);
-    }
+    page_arrows(l, v, st.page, pages, ids.1, ids.2);
     st.page
 }
 
@@ -1241,8 +1251,9 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         v.rect.insert(t, [r[0].max(l.nodes[a].rect[2] + 2.0), r[1], r[2].min(l.nodes[b].rect[0] - 2.0), r[3]]);
     }
     v.set(l.find("txtStageRace"), centre(&format!("{kind}  ({} of {})", i + 1, pets.len())));
+    // Round 24 (B2): one pet = one page, no arrows (with more they go round, so neither is ever at an end).
     if pets.len() < 2 {
-        grey(l, v, &["btnPrevPet", "btnNextPet"]);
+        hide(l, v, &["btnPrevPet", "btnNextPet"]);
     }
     match level {
         Some(level) => {
@@ -1608,14 +1619,15 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
         style.middle = false;
         style.picture = CARD_SYMBOL_SIZE;
         style.leading = pitch / line;
-        v.add([b0[0], b0[1], b1[0], b1[1]], effect, style);
         // Round 20 (Ryan B3): the needs line sits at the bottom of the parchment box (its inside ends at 188 in
-        // the frame art), no longer right under the two description lines.
-        let top = CARD_TEXT_TOP + 2.0 * pitch;
-        let (n0, n1) = (card(CARD_NEEDS_X[0], top), card(CARD_NEEDS_X[1], top + line));
+        // the frame art), no longer right under the two description lines. Round 24 (Ryan B1: "If the 2nd line is
+        // empty, put it on the 2nd line; never leave an empty line/gap"): it follows the description's last line
+        // (TextStyle::then), so after a one-line description it is the second line, after two the third.
+        let (n0, n1) = (card(CARD_NEEDS_X[0], 0.0), card(CARD_NEEDS_X[1], 0.0));
         let mut needs_style = TextStyle::new("SpellDescription", CARD_TEXT_SCALE * k, BLACK).centred();
         needs_style.picture = CARD_SYMBOL_SIZE;
-        v.add([n0[0], n0[1], n1[0], n1[1]], needs.join(" "), needs_style);
+        style.then = Some(Box::new((needs.join(" "), [n0[0], n1[0]], needs_style)));
+        v.add([b0[0], b0[1], b1[0], b1[1]], effect, style);
     }
 }
 
@@ -1912,12 +1924,7 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     let per_page = columns * rows;
     let pages = known.len().div_ceil(per_page).max(1);
     st.page = st.page.min(pages - 1);
-    if st.page == 0 {
-        grey(l, v, &["PageUp"]);
-    }
-    if st.page + 1 >= pages {
-        grey(l, v, &["PageDown"]);
-    }
+    page_arrows(l, v, st.page, pages, "PageUp", "PageDown");
     for (i, (name, id)) in known.iter().skip(st.page * per_page).take(per_page).enumerate() {
         let (cx, cy) = ((i % columns) as f32, (i / columns) as f32);
         let x = r[0] + cx * (cw + gx);
@@ -1966,12 +1973,7 @@ fn quests(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     }
     let pages = d.quests.len().div_ceil(QUESTS_PER_PAGE).max(1);
     st.page = st.page.min(pages - 1);
-    if st.page == 0 {
-        grey(l, v, &["btnPrevPage"]);
-    }
-    if st.page + 1 >= pages {
-        grey(l, v, &["btnNextPage"]);
-    }
+    page_arrows(l, v, st.page, pages, "btnPrevPage", "btnNextPage");
     // Round 20 (Q7): a click on a card tracks that quest (book.rs: the pulsing glow, the arrow at its top left, the
     // Quest Helper follows it).
     for i in 0..QUESTS_PER_PAGE {

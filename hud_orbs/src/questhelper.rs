@@ -10,6 +10,8 @@
 //! is one flat quad 42.46 x 70 units (the arrow lying on the ground, tip forward); here it is drawn as that quad seen
 //! by a fixed camera above and behind it, turned by the goal's bearing from the camera's view direction, so it
 //! leans into the screen when the goal is ahead and swings round as the camera turns.
+//! Round 24 (H2): replaced by the flat yellow arrow of Ryan's Wizard101 screenshot (arrow_faces: no texture, olive
+//! underside, fitted to the screenshot).
 //!
 //! The goal is the first quest of the Quests page (main quests first, as Wizard101's helper follows the main
 //! quest unless another is picked): its first current goal, or once ready its turn-in. Where each goal is
@@ -31,16 +33,11 @@ use std::path::Path;
 
 use hudhook::imgui::{DrawListMut, ImColor32};
 
-use crate::layout::{Layout, Textures, View};
+use crate::layout::{Layout, View};
 use crate::markers::Camera;
 use crate::quests::Active;
 
 pub const LAYOUT: &str = "QuestHelperHud";
-pub const ARROW: &str = "Quest/Quest_Arrow.png";
-/// Round 23 (H1, Ryan: "It should be a flat arrow, and then it's just extended downwards. The one you have is too
-/// fancy"): Wizard101's flat arrow (FX_Quest_Arrow_JT on Quest_Arrow_JT.nif's quad) extruded into a slab by
-/// tools/w101_quest_arrow.py, under the book folder. Round 22's bevelled WC_QuestArrow.tsv is no longer used.
-pub const MESH: &str = "Quest/Quest_Arrow_Slab.tsv";
 pub const SCREEN_H: f32 = 768.0;
 /// Round 22 (H1, Ryan: "the quest description needs to be moved way down, right above the level bar"): the gap
 /// (layout pixels) between txtGoalName's bottom and the experience bar's top.
@@ -50,22 +47,30 @@ const TILE: [i32; 2] = [42, 36];
 const TILE_RANGE: f32 = 600.0;
 /// Below this MSB height the player is in one of the rooms under the street (the street is at about 94 m).
 const ROOM_HEIGHT: f32 = 70.0;
-/// Quest_Arrow_JT.nif's quad (the fallback when WC_QuestArrow.tsv is missing): half width and half length (units).
-const HALF_W: f32 = 21.23;
-const HALF_L: f32 = 35.0;
-/// Round 22 (H2): the little camera ArrowWindow looks at the arrow with: pitched ELEVATION down onto it from
-/// DISTANCE units away, FOCAL layout pixels per unit at depth 1 (side on, the 62-unit arrow is about 110 layout
-/// pixels long, most of ArrowWindow's 150).
-const ELEVATION: f32 = 0.70;
-const DISTANCE: f32 = 170.0;
-const FOCAL: f32 = 300.0;
-/// The light (camera space: right, up, toward the arrow; from the upper left in front) and the ink outline's width
-/// (layout pixels), as Wizard101 draws its toon-shaded models with a black edge.
-const LIGHT: [f32; 3] = [-0.38, 0.80, -0.46];
-const OUTLINE: f32 = 1.3;
-/// The sign that culls back faces with the outward winding `ArrowMesh::load` sets (checked in the preview: the
-/// arrow's top, not its underside, shows).
-const SIDE: f32 = 1.0;
+/// Round 24 (H2, Ryan's screenshot of the real helper, round24/ryan_arrow_w101.png: "a flat, wide yellow up-arrow (big
+/// triangle head, short wide stem) seen almost face-on, with a darker yellow/orange underside visible below it as
+/// thickness, the step count (black, bold) INSIDE the arrow"): no texture and no ink edge, one flat yellow top and
+/// olive sides. Shape and little camera fitted to the screenshot's corners (tip, wing tips, stem top and bottom
+/// corners, the thickness under the stem and a wing; 0.5 px rms; scratchpad h1/fitarrow.py): in units of the stem's
+/// width where it meets the head, the tail is TAIL wide, the head HEAD wide and HEAD_L long, the stem STEM_L long,
+/// THICK deep; seen from ELEVATION above with the camera's axis on the ground AXIS units behind the tail at DISTANCE.
+const TAIL: f32 = 1.379;
+const HEAD: f32 = 2.005;
+const STEM_L: f32 = 2.025;
+const HEAD_L: f32 = 0.956;
+const THICK: f32 = 0.222;
+const ELEVATION: f32 = 0.698; // 40 degrees
+const DISTANCE: f32 = 6.444;
+const AXIS: f32 = -1.285;
+/// The point it turns about and the step count is centred on (txtDistance's middle): on the stem PIVOT units from
+/// the tail, where the screenshot's number sits (just under the head).
+const PIVOT: f32 = 1.640;
+/// Layout pixels per unit at depth 1: the screenshot's 318.8 px, scaled so the arrow's size against the goal text
+/// (txtGoalName, the same WizardNormal line in both) matches the screenshot (head 71 px over 234 px of text).
+const FOCAL: f32 = 338.0;
+/// The screenshot's colours: the top (255, 238, 42) and the sides under it (132, 119, 14).
+const TOP: [u8; 3] = [255, 238, 42];
+const UNDER: [u8; 3] = [132, 119, 14];
 
 // tools/w101_quest_targets.py m60_42_36_00.msb.dcx (msb 17b1dd61): (quest, goal index from 0, MSB points, the
 // room's door on the street for goals inside a room).
@@ -198,118 +203,59 @@ pub fn pivot(layout: &Layout) -> [f32; 2] {
         .unwrap_or([110.0, 73.0, 489.0, 97.0]);
     [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0]
 }
-
-/// One point of the arrow model (units: forward, up, right on the ground) turned by `bearing`, in the little
-/// camera's space (right, up, depth).
-fn view_space(forward: f32, up: f32, right: f32, bearing: f32) -> [f32; 3] {
+/// Round 24 (H2): a point of the arrow (units: `right`, `forward` from the tail, `up`) turned by `bearing` about the
+/// pivot, in the little camera's space (right, up, depth; camera at the origin).
+fn view_space(right: f32, forward: f32, up: f32, bearing: f32) -> [f32; 3] {
     let (sin, cos) = bearing.sin_cos();
-    let (r, f) = (right * cos + forward * sin, -right * sin + forward * cos);
+    let f0 = forward - PIVOT;
+    let (r, f) = (right * cos + f0 * sin, -right * sin + f0 * cos);
+    let g = f + PIVOT - AXIS;
     let (se, ce) = ELEVATION.sin_cos();
-    [r, up * ce + f * se, DISTANCE + f * ce - up * se]
+    [r, up * ce + g * se, DISTANCE + g * ce - up * se]
 }
 
+/// Layout pixels of a view-space point, the pivot landing on `pivot` (an off-centre view: the camera's axis is
+/// behind the arrow, as in the screenshot where the arrow sits above the middle of its window).
 fn to_layout(p: [f32; 3], pivot: [f32; 2]) -> [f32; 2] {
-    [pivot[0] + p[0] / p[2] * FOCAL, pivot[1] - p[1] / p[2] * FOCAL]
+    let c = view_space(0.0, PIVOT, 0.0, 0.0);
+    [pivot[0] + p[0] / p[2] * FOCAL, pivot[1] - (p[1] / p[2] - c[1] / c[2]) * FOCAL]
 }
 
-/// The flat arrow quad's corners in layout pixels (tail left, tail right, tip right, tip left: the texture's (0,0),
-/// (1,0), (1,1), (0,1)), turned by `bearing` about the pivot: the fallback without WC_QuestArrow.tsv.
-pub fn arrow_quad(layout: &Layout, bearing: f32) -> [[f32; 2]; 4] {
+/// The arrow's outline on the ground (right, forward), counter-clockwise seen from above: tail, stem, wings, tip.
+fn outline() -> [[f32; 2]; 7] {
+    [[-TAIL / 2.0, 0.0], [TAIL / 2.0, 0.0], [0.5, STEM_L], [HEAD / 2.0, STEM_L], [0.0, STEM_L + HEAD_L],
+     [-HEAD / 2.0, STEM_L], [-0.5, STEM_L]]
+}
+
+/// Round 24 (H2): the arrow turned by `bearing`, in layout pixels: the sides the camera sees (far ones first) and the
+/// top as two convex pieces (stem, head), each (corners, colour).
+pub fn arrow_faces(layout: &Layout, bearing: f32) -> Vec<(Vec<[f32; 2]>, [u8; 3])> {
     let c = pivot(layout);
-    let corner = |x: f32, y: f32| to_layout(view_space(y, 0.0, x, bearing), c);
-    [corner(-HALF_W, -HALF_L), corner(HALF_W, -HALF_L), corner(HALF_W, HALF_L), corner(-HALF_W, HALF_L)]
+    let o = outline();
+    let top: Vec<[f32; 3]> = o.iter().map(|p| view_space(p[0], p[1], 0.0, bearing)).collect();
+    let bottom: Vec<[f32; 3]> = o.iter().map(|p| view_space(p[0], p[1], -THICK, bearing)).collect();
+    let mut sides: Vec<(f32, Vec<[f32; 2]>)> = Vec::new();
+    for i in 0..o.len() {
+        let j = (i + 1) % o.len();
+        let (a, b, d) = (top[i], top[j], bottom[i]);
+        // Outward normal = (b - a) x (d - a) for a counter-clockwise outline seen from above; seen when it faces the
+        // camera at the origin.
+        let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [d[0] - a[0], d[1] - a[1], d[2] - a[2]]);
+        let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, (a[2] + b[2]) / 2.0];
+        if n[0] * mid[0] + n[1] * mid[1] + n[2] * mid[2] >= 0.0 {
+            continue;
+        }
+        sides.push((mid[2], [top[i], top[j], bottom[j], bottom[i]].iter().map(|p| to_layout(*p, c)).collect()));
+    }
+    sides.sort_by(|x, y| y.0.total_cmp(&x.0));
+    let mut out: Vec<(Vec<[f32; 2]>, [u8; 3])> = sides.into_iter().map(|s| (s.1, UNDER)).collect();
+    let t: Vec<[f32; 2]> = top.iter().map(|p| to_layout(*p, c)).collect();
+    out.push((vec![t[0], t[1], t[2], t[6]], TOP));
+    out.push((vec![t[3], t[4], t[5]], TOP));
+    out
 }
 
-/// Round 22 (H2, Ryan: "it looks 2D; make sure it looks like it does in Wizard101"): Wizard101's solid quest arrow,
-/// _Shared-WorldData.wad Character/Arrow/WC_QuestArrow.nif (tools/w101_quest_arrow.py -> book/Quest/
-/// WC_QuestArrow.tsv): a bevelled arrow 62 units long (tip at +x), 36 wide (z), 11 thick (y), 104 triangles, its UVs
-/// on FX_Quest_Arrow_JT (Quest/Quest_Arrow.png).
-#[derive(Default)]
-pub struct ArrowMesh {
-    /// x, y, z, u, v
-    vertices: Vec<[f32; 5]>,
-    triangles: Vec<[usize; 3]>,
-    /// Which side of a face (by its winding) faces the camera: -1 or 1 (see `faces`).
-    side: f32,
-}
-
-impl ArrowMesh {
-    pub fn load(path: &Path) -> ArrowMesh {
-        let mut mesh = ArrowMesh::default();
-        let text = std::fs::read_to_string(path).unwrap_or_default();
-        for line in text.lines() {
-            let f: Vec<&str> = line.split('\t').collect();
-            let num = |k: usize| f.get(k).and_then(|v| v.parse::<f32>().ok());
-            match f.first().copied() {
-                Some("V") => {
-                    if let (Some(x), Some(y), Some(z), Some(u), Some(v)) = (num(1), num(2), num(3), num(4), num(5)) {
-                        mesh.vertices.push([x, y, z, u, v]);
-                    }
-                }
-                Some("T") => {
-                    if let (Some(a), Some(b), Some(c)) = (num(1), num(2), num(3)) {
-                        mesh.triangles.push([a as usize, b as usize, c as usize]);
-                    }
-                }
-                _ => {}
-            }
-        }
-        let n = mesh.vertices.len();
-        mesh.triangles.retain(|t| t.iter().all(|&i| i < n));
-        // Outward faces: the strip's winding turned so the enclosed volume comes out positive.
-        let volume: f32 = mesh.triangles.iter().map(|t| {
-            let [a, b, c] = t.map(|i| [mesh.vertices[i][0], mesh.vertices[i][1], mesh.vertices[i][2]]);
-            a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])
-        }).sum();
-        if volume < 0.0 {
-            for t in &mut mesh.triangles {
-                t.swap(1, 2);
-            }
-        }
-        mesh.side = SIDE;
-        tracing::info!("quest helper: arrow model {} vertices, {} triangles from {}", n, mesh.triangles.len(),
-                       path.display());
-        mesh
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.triangles.is_empty()
-    }
-
-    /// The faces the little camera sees, far ones first: (layout corners, uvs, shade 0..1).
-    pub fn faces(&self, layout: &Layout, bearing: f32) -> Vec<([[f32; 2]; 3], [[f32; 2]; 3], f32)> {
-        let c = pivot(layout);
-        let at: Vec<[f32; 3]> = self.vertices.iter().map(|v| view_space(v[0], v[1], v[2], bearing)).collect();
-        let light = {
-            let l = (LIGHT[0] * LIGHT[0] + LIGHT[1] * LIGHT[1] + LIGHT[2] * LIGHT[2]).sqrt();
-            LIGHT.map(|v| v / l)
-        };
-        let mut out: Vec<(f32, [[f32; 2]; 3], [[f32; 2]; 3], f32)> = Vec::new();
-        for t in &self.triangles {
-            let [a, b, cc] = t.map(|i| at[i]);
-            let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [cc[0] - a[0], cc[1] - a[1], cc[2] - a[2]]);
-            // The view space is left-handed (x right, y up, z away): flip the cross product to keep it outward.
-            let n = [-(u[1] * v[2] - u[2] * v[1]), -(u[2] * v[0] - u[0] * v[2]), -(u[0] * v[1] - u[1] * v[0])];
-            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
-            if len < 1e-6 {
-                continue;
-            }
-            let centre = [(a[0] + b[0] + cc[0]) / 3.0, (a[1] + b[1] + cc[1]) / 3.0, (a[2] + b[2] + cc[2]) / 3.0];
-            let facing = n[0] * centre[0] + n[1] * centre[1] + n[2] * centre[2];
-            if facing * self.side >= 0.0 {
-                continue; // facing away
-            }
-            // Turned toward the camera for the light.
-            let n = n.map(|x| x / len * -facing.signum());
-            let lit = n[0] * light[0] + n[1] * light[1] + n[2] * light[2];
-            let shade = 0.55 + 0.45 * lit.max(0.0);
-            let uv = t.map(|i| [self.vertices[i][3], self.vertices[i][4]]);
-            out.push((centre[2], [a, b, cc].map(|p| to_layout(p, c)), uv, shade));
-        }
-        out.sort_by(|x, y| y.0.total_cmp(&x.0));
-        out.into_iter().map(|f| (f.1, f.2, f.3)).collect()
-    }
-}
 
 /// Round 20 (Q8): metres per step, and how far from the walk graph a point still joins it.
 const STEP: f32 = 0.75;
@@ -326,6 +272,69 @@ pub struct Nav {
     grid: Vec<u8>,
     grid_origin: [f32; 2],
     grid_size: [usize; 2],
+    /// Round 24 (H1): the street's own geometry as voxels (street_sight.bin, tools/w101_street_sight.py), for
+    /// sees_3d; None without the file (then sees_3d falls back to the walk-graph test).
+    geometry: Option<StreetSight>,
+}
+
+/// Round 24 (H1, Ryan: "Wisps are STILL visible through walls"): round 23's walk-graph test (Nav::sees) let 19 % of
+/// the sight lines through that the street's houses and walls block (checked on every position in Ryan's round 23 log
+/// against the street mesh): its open area reaches OPEN_REACH metres into the buildings, a wall had to be 2.4 m thick
+/// along the line, and lines leaving the grid counted as open. This is the street mesh itself (the classic street the
+/// game draws) on a CELL x CELL grid, each cell a bit per SLAB metres of height: a surface in that box.
+pub struct StreetSight {
+    origin: [f32; 2],
+    cell: f32,
+    y0: f32,
+    slab: f32,
+    size: [usize; 2],
+    cells: Vec<u64>,
+}
+
+impl StreetSight {
+    pub fn load(path: &Path) -> Option<StreetSight> {
+        let data = std::fs::read(path).ok()?;
+        let f = |i: usize| f32::from_le_bytes(data[i..i + 4].try_into().unwrap());
+        let u = |i: usize| u32::from_le_bytes(data[i..i + 4].try_into().unwrap()) as usize;
+        if data.len() < 36 || &data[0..4] != b"W1SG" || u(4) != 1 {
+            return None;
+        }
+        let size = [u(28), u(32)];
+        let cells: Vec<u64> = data[36..].chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect();
+        (cells.len() == size[0] * size[1]).then_some(StreetSight { origin: [f(8), f(12)], cell: f(16), y0: f(20),
+                                                                  slab: f(24), size, cells })
+    }
+
+    /// Whether the line from `a` to `b` (MSB metres) is clear of the street's geometry. The first and last END metres
+    /// (the eye's and the target's own spot) don't count, and a surface blocks only where it reaches at least one more
+    /// slab above the line (so the ground under a line that dips near the ends and a kerb hide nothing) and over two
+    /// samples in a row (STEP apart).
+    pub fn sees(&self, a: [f32; 3], b: [f32; 3]) -> bool {
+        const STEP: f32 = 0.2;
+        const END: f32 = 0.8;
+        let flat = ((b[0] - a[0]).powi(2) + (b[2] - a[2]).powi(2)).sqrt();
+        let length = (flat * flat + (b[1] - a[1]).powi(2)).sqrt();
+        let n = (length / STEP) as usize;
+        let mut run = 0;
+        for i in 1..n {
+            let t = i as f32 / n as f32;
+            if flat * t < END || flat * (1.0 - t) < END {
+                run = 0;
+                continue;
+            }
+            let p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+            let (x, z) = ((p[0] - self.origin[0]) / self.cell, (p[2] - self.origin[1]) / self.cell);
+            let s = ((p[1] - self.y0) / self.slab).floor();
+            let blocked = x >= 0.0 && z >= 0.0 && (x as usize) < self.size[0] && (z as usize) < self.size[1]
+                && (0.0..63.0).contains(&s)
+                && (self.cells[z as usize * self.size[0] + x as usize] >> s as u32) & 3 == 3;
+            run = if blocked { run + 1 } else { 0 };
+            if run >= 2 {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 /// Round 22 (H6): grid cell (metres); a point within OPEN_REACH of a walk node is open (the nodes are 4.8 m apart,
@@ -354,8 +363,14 @@ impl Nav {
             }
         }
         nav.build_grid();
-        tracing::info!("quest helper: walk graph {} nodes from {} (sight grid {}x{})", nav.nodes.len(), path.display(),
-                       nav.grid_size[0], nav.grid_size[1]);
+        let sight = path.with_file_name("street_sight.bin");
+        nav.geometry = StreetSight::load(&sight);
+        tracing::info!("quest helper: walk graph {} nodes from {} (sight grid {}x{}); street geometry for sight {}",
+                       nav.nodes.len(), path.display(), nav.grid_size[0], nav.grid_size[1],
+                       match &nav.geometry {
+                           Some(g) => format!("{}x{} cells of {} m from {}", g.size[0], g.size[1], g.cell, sight.display()),
+                           None => format!("MISSING ({}): falling back to the walk graph", sight.display()),
+                       });
         nav
     }
 
@@ -457,6 +472,15 @@ impl Nav {
         true
     }
 
+    /// Round 24 (H1): whether an eye at `a` sees `b` (MSB x, y, z): the street's geometry (StreetSight) when
+    /// street_sight.bin is there, else round 22's walk-graph test.
+    pub fn sees_3d(&self, a: [f32; 3], b: [f32; 3]) -> bool {
+        match &self.geometry {
+            Some(g) => g.sees(a, b),
+            None => self.sees([a[0], a[2]], [b[0], b[2]]),
+        }
+    }
+
     fn nearest(&self, p: [f32; 2]) -> Option<(usize, f32)> {
         self.nodes.iter().enumerate().map(|(i, n)| (i, dist(*n, p))).min_by(|a, b| a.1.total_cmp(&b.1))
             .filter(|(_, d)| *d <= NAV_REACH)
@@ -508,37 +532,14 @@ pub fn view(layout: &Layout, active: &Active, steps: u32) -> View {
     v
 }
 
-/// Draws the arrow (screen pixels: `origin` and scale `s` from placement): Wizard101's solid arrow model when
-/// loaded (an ink outline, then its faces lit from the upper left), else the flat quad.
-pub fn draw_arrow(draw: &DrawListMut, textures: &Textures, layout: &Layout, mesh: &ArrowMesh, bearing: f32,
-                  origin: [f32; 2], s: f32, alpha: f32) {
-    let Some((texture, _)) = textures.get(ARROW) else { return };
+/// Draws the arrow (screen pixels: `origin` and scale `s` from placement): round 24 (H2) Wizard101's flat yellow
+/// arrow with its olive underside showing as thickness.
+pub fn draw_arrow(draw: &DrawListMut, layout: &Layout, bearing: f32, origin: [f32; 2], s: f32, alpha: f32) {
     let screen = |p: [f32; 2]| [origin[0] + p[0] * s, origin[1] + p[1] * s];
     let a = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
-    if mesh.is_empty() {
-        let q = arrow_quad(layout, bearing).map(screen);
-        draw.add_image_quad(texture, q[0], q[1], q[2], q[3])
-            .uv([0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0])
-            .col(ImColor32::from_rgba(255, 255, 255, a))
-            .build();
-        return;
-    }
-    let faces = mesh.faces(layout, bearing);
-    let ink = ImColor32::from_rgba(0, 0, 0, a);
-    let o = OUTLINE * s;
-    for (dx, dy) in [(-o, 0.0), (o, 0.0), (0.0, -o), (0.0, o), (-0.7 * o, -0.7 * o), (0.7 * o, -0.7 * o),
-                     (-0.7 * o, 0.7 * o), (0.7 * o, 0.7 * o)] {
-        for (p, _, _) in &faces {
-            let [p0, p1, p2] = p.map(|q| { let q = screen(q); [q[0] + dx, q[1] + dy] });
-            draw.add_triangle(p0, p1, p2, ink).filled(true).build();
-        }
-    }
-    for (p, uv, shade) in &faces {
-        let [p0, p1, p2] = p.map(screen);
-        let k = (shade * 255.0) as u8;
-        draw.add_image_quad(texture, p0, p1, p2, p2)
-            .uv(uv[0], uv[1], uv[2], uv[2])
-            .col(ImColor32::from_rgba(k, k, k, a))
-            .build();
+    for (corners, rgb) in arrow_faces(layout, bearing) {
+        let colour = ImColor32::from_rgba(rgb[0], rgb[1], rgb[2], a);
+        let points: Vec<[f32; 2]> = corners.into_iter().map(screen).collect();
+        draw.add_polyline(points, colour).filled(true).build();
     }
 }

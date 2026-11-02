@@ -154,8 +154,7 @@ pub struct Book {
     pub nav: crate::questhelper::Nav,
     /// Round 21 (Q6): the Quest Helper's last state, logged when it changes ("quest helper: ...").
     helper_state: String,
-    /// Round 22 (H2): Wizard101's solid quest arrow (questhelper::MESH) and the bearing it shows (eased).
-    arrow_mesh: crate::questhelper::ArrowMesh,
+    /// Round 22 (H2): the bearing the quest arrow shows (eased).
     arrow_bearing: Option<f32>,
     /// Round 22 (H6): the street NPCs in sight of the player (markers::Sight).
     sight: markers::Sight,
@@ -378,7 +377,6 @@ impl Book {
             tracked: None,
             nav: Default::default(),
             helper_state: String::new(),
-            arrow_mesh: Default::default(),
             arrow_bearing: None,
             sight: Default::default(),
             hud_scale: 1.0,
@@ -453,7 +451,6 @@ impl Book {
         crate::crafting::load(&folder.join("er"));
         self.quests = Quests::load(&folder.join("quests.tsv"));
         self.nav = crate::questhelper::Nav::load(&folder.join("quest_nav.tsv"));
-        self.arrow_mesh = crate::questhelper::ArrowMesh::load(&folder.join(crate::questhelper::MESH));
         self.quest_flags = self.quests.flags();
         self.quest_flags.extend(markers::flags());
         // w101_quests: the talk events' conversation requests (round 17) and Wizard101's dialogue box.
@@ -788,9 +785,7 @@ impl Book {
                                 active.slug, active.goal_index, active.goal, steps / 10 * 10, player[0], player[1],
                                 player[2]));
         let Some(layout) = self.layouts.get(qh::LAYOUT) else { return };
-        let mut wanted = layout.images();
-        wanted.push(qh::ARROW.into());
-        self.textures.want(wanted);
+        self.textures.want(layout.images());
         let screen = ui.io().display_size;
         let (s, origin) = qh::placement(layout, screen, talk::xp_bar_top(screen, self.hud_scale));
         let draw = ui.get_background_draw_list();
@@ -805,7 +800,7 @@ impl Book {
             None => target,
         };
         self.arrow_bearing = Some(bearing);
-        qh::draw_arrow(&draw, &self.textures, layout, &self.arrow_mesh, bearing, origin, s, 1.0);
+        qh::draw_arrow(&draw, layout, bearing, origin, s, 1.0);
         let canvas = Canvas {
             draw: &draw,
             textures: &self.textures,

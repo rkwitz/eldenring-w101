@@ -425,6 +425,10 @@ fn main() {
     for (n, sh) in names.iter().zip(&shows) {
         shots.push((Box::leak(n.clone().into_boxed_str()), pages::Tab::Character, 0, [0.0, 0.0], Box::leak(sh.clone().into_boxed_str())));
     }
+    // Round 24: PREVIEW_SHOW=<name>=<show> adds one shot (e.g. a camera turn for the quest arrow).
+    if let Some((n, sh)) = std::env::var("PREVIEW_SHOW").ok().and_then(|v| v.split_once('=').map(|(a, b)| (a.to_string(), b.to_string()))) {
+        shots.push((Box::leak(n.into_boxed_str()), pages::Tab::Character, 0, [0.0, 0.0], Box::leak(sh.into_boxed_str())));
+    }
     let mut load_screen = loadscreen::LoadScreen::default();
     book.textures.want([loadscreen::IMAGE.to_string()]);
     let settings_image = settings::load_settings(Path::new("/nonexistent")).loadscreen_image;

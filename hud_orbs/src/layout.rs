@@ -42,6 +42,10 @@ pub struct TextStyle {
     /// Line pitch in line heights (1.0 unless a caller sets it: the spell cards set their lines closer, as
     /// Wizard101's three card text lines sit in the card's parchment box).
     pub leading: f32,
+    /// Round 24 (B1): a line drawn on the line right after this (wrapped) text's last one, never below the box's
+    /// bottom: (text, its left and right x, its style). The spell cards' slots and needs line follows a one-line
+    /// description on the second line instead of leaving it empty.
+    pub then: Option<Box<(String, [f32; 2], TextStyle)>>,
 }
 
 impl TextStyle {
@@ -59,6 +63,7 @@ impl TextStyle {
             tracking: 0.0,
             picture: PICTURE_SIZE,
             leading: 1.0,
+            then: None,
         }
     }
 
@@ -168,6 +173,7 @@ impl Layout {
                 tracking: get("ka").and_then(|v| v.parse().ok()).unwrap_or(0.0),
                 picture: PICTURE_SIZE,
                 leading: 1.0,
+                then: None,
             });
             let frame = |key: &str| get(key).and_then(floats::<4>);
             nodes.push(Node {
@@ -625,6 +631,16 @@ impl Canvas<'_, '_> {
         let pitch = line_h * style.leading;
         let total = pitch * lines.len() as f32;
         let mut y = if style.middle && total < height { r[1] + (height - total) / 2.0 } else { r[1] };
+        // Round 24 (B1): the following line goes where the next line would (on the first if there is no text).
+        if let Some(then) = &style.then {
+            // The lines the loop below draws (a wrapped text stops at its box's bottom); none for an empty text.
+            let fit = if style.wrap { ((r[3] + pitch * 0.25 - y) / pitch).floor().max(0.0) as usize } else { usize::MAX };
+            let used = if lines.iter().all(|l| l.trim().is_empty()) { 0 } else { lines.len().min(fit) };
+            let next = (y + pitch * used as f32).min(r[3]);
+            let (text, x, follow) = then.as_ref();
+            let line = font_line_height(self.fonts, &follow.font) * follow.scale;
+            self.text(text, [x[0], next, x[1], next + line], follow, hovered);
+        }
         let colour = if hovered { style.hover.unwrap_or(style.colour) } else { style.colour };
         let colour = fade(colour, self.alpha);
         let dark = fade(ImColor32::from_rgba(0, 0, 0, 200), self.alpha * colour.a as f32 / 255.0);
@@ -681,6 +697,11 @@ impl Canvas<'_, '_> {
             y += pitch;
         }
     }
+}
+
+/// A font's line height (font pixels; 0 when it isn't loaded).
+fn font_line_height(fonts: &HashMap<String, BitmapFont>, name: &str) -> f32 {
+    fonts.get(name).map_or(0.0, |f| f.line_height)
 }
 
 /// An inline picture's side (line heights) and the space each side of it (font pixels).

@@ -395,7 +395,8 @@ impl Sight {
                 Some(p) if in_room(p) => false,
                 Some(p) if in_garden(p) != in_garden(spot) => false,
                 Some(p) if in_garden(p) => true,
-                Some(p) => nav.sees([p[0], p[2]], [spot[0], spot[2]]),
+                // Round 24 (H1): through the street's geometry (Nav::sees_3d), head height to name height.
+                Some(p) => nav.sees_3d([p[0], p[1] + 1.6, p[2]], [spot[0], spot[1] + 2.0, spot[2]]),
             };
             self.unseen[i] = if seen { 0.0 } else { self.unseen[i] + dt };
             let shown = self.unseen[i] < HIDE_AFTER;

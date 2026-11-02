@@ -24,6 +24,9 @@
 //!   ground glow, and wisp_count defaults to 5 per path.
 //! - H5: hidden behind walls like the NPC markers (questhelper::Nav::sees from the player's MSB spot to the wisp's,
 //!   held HIDE_AFTER s before fading over FADE s); none from a room under the street or the hedge maze garden.
+//!   Round 24 (H1, "STILL visible through walls"): that walk-graph test let 19 % of the blocked sight lines in Ryan's
+//!   round 23 log through; now the line runs from the camera to the cloud through the street mesh's voxels
+//!   (Nav::sees_3d, street_sight.bin from tools/w101_street_sight.py). Log "wisps: n of m in sight".
 //! - H6: W101's pickup is ObjectData CombatBonus_WispHealth's WispDespawn effect Character/FX_WispRed_Dsppr.nif
 //!   (FX_WispBlue_Dsppr for mana) played on the player, with Sound/GUI/ui_health_powerup_01.wav: its "Mover" node
 //!   carries the wisp cloud (FX_Cloud_Leave) at chest height, moving 0.94 -> 1.04 -> 0.79 -> 0.99 -> 0.94 m over
@@ -126,6 +129,8 @@ pub struct Wisps {
     rng: u64,
     wanted: bool,
     logged: bool,
+    /// Round 24 (H1): the last "in sight" log line (when, how many).
+    sight_log: Option<(Instant, usize)>,
 }
 
 /// Round 23 (H6): FX_WispRed_Dsppr.nif's Mover height (metres above the feet) `t` seconds in (its keys, linear).
@@ -175,6 +180,7 @@ impl Wisps {
                 .map_or(1, |d| d.as_nanos() as u64),
             wanted: false,
             logged: false,
+            sight_log: None,
         };
         let ini = folder.join("w101_orbs.ini");
         for line in std::fs::read_to_string(ini).unwrap_or_default().lines() {
@@ -286,13 +292,26 @@ impl Wisps {
         }
         // Round 23 (H5): behind a wall (off the street's walk area between the player and the wisp), or the player in
         // a room under the street or in the hedge maze garden: out of sight.
+        // Round 24 (H1): the sight line runs from the camera (what the screen shows) to the cloud through the street's
+        // own geometry (Nav::sees_3d, street_sight.bin), not the walk graph.
         use crate::questhelper::{in_garden, in_room};
         let away = in_room(msb) || in_garden(msb);
+        let m = &camera.matrix;
+        let eye = [m[3][0] - player[0] + msb[0], m[3][1] - player[1] + msb[1], m[3][2] - player[2] + msb[2]];
+        // A camera read far from the player (a bad frame) falls back to the player's head.
+        let eye = if (eye[0] - msb[0]).hypot(eye[2] - msb[2]) < 12.0 { eye } else { [msb[0], msb[1] + 1.6, msb[2]] };
+        let mut in_sight = 0;
         for (w, s) in self.wisps.iter_mut().zip(&spots) {
-            let seen = w.picked.is_some() || (!away && nav.sees([msb[0], msb[2]], [s.2[0], s.2[2]]));
+            let seen = w.picked.is_some() || (!away && nav.sees_3d(eye, s.2));
+            in_sight += seen as usize;
             w.unseen = if seen { 0.0 } else { w.unseen + dt };
             let step = dt / FADE;
             w.seen = if w.unseen < HIDE_AFTER { (w.seen + step).min(1.0) } else { (w.seen - step).max(0.0) };
+        }
+        if self.sight_log.is_none_or(|(t, n)| n != in_sight && (now - t).as_secs_f32() > 5.0) {
+            self.sight_log = Some((now, in_sight));
+            tracing::info!("wisps: {in_sight} of {} in sight from the camera at MSB [{:.1}, {:.1}, {:.1}]{}",
+                           self.wisps.len(), eye[0], eye[1], eye[2], if away { " (player in a room or the garden)" } else { "" });
         }
         for (w, (p, _, _)) in self.wisps.iter_mut().zip(&spots) {
             if w.picked.is_some() || !gameplay {
