@@ -154,6 +154,13 @@ pub struct Book {
     nav: crate::questhelper::Nav,
     /// Round 21 (Q6): the Quest Helper's last state, logged when it changes ("quest helper: ...").
     helper_state: String,
+    /// Round 22 (H2): Wizard101's solid quest arrow (questhelper::MESH) and the bearing it shows (eased).
+    arrow_mesh: crate::questhelper::ArrowMesh,
+    arrow_bearing: Option<f32>,
+    /// Round 22 (H6): the street NPCs in sight of the player (markers::Sight).
+    sight: markers::Sight,
+    /// Round 22 (H1, H4): w101_orbs.ini `scale` (the experience bar's size), for docking over the bar.
+    hud_scale: f32,
     quest_flags: Vec<u32>,
     flags: HashMap<u32, bool>,
     flags_time: Option<Instant>,
@@ -369,6 +376,10 @@ impl Book {
             tracked: None,
             nav: Default::default(),
             helper_state: String::new(),
+            arrow_mesh: Default::default(),
+            arrow_bearing: None,
+            sight: Default::default(),
+            hud_scale: 1.0,
             quest_flags: Vec::new(),
             flags: HashMap::new(),
             flags_time: None,
@@ -439,6 +450,7 @@ impl Book {
         crate::crafting::load(&folder.join("er"));
         self.quests = Quests::load(&folder.join("quests.tsv"));
         self.nav = crate::questhelper::Nav::load(&folder.join("quest_nav.tsv"));
+        self.arrow_mesh = crate::questhelper::ArrowMesh::load(&folder.join(crate::questhelper::MESH));
         self.quest_flags = self.quests.flags();
         self.quest_flags.extend(markers::flags());
         // w101_quests: the talk events' conversation requests (round 17) and Wizard101's dialogue box.
@@ -733,12 +745,18 @@ impl Book {
         let Some(game) = cx.game else { return };
         let Some(camera) = game.camera() else { return };
         // Round 18 G1: the NPCs where the game has them (their MSB spots only for ones it hasn't loaded).
-        let (position, entities) = (game.position(), game.entities(&markers::MODELS, &markers::entity_ids()));
+        // Round 22 (H5): positions that jump for a frame are refused (markers::steady).
+        let position = game.position();
+        let entities = markers::steady(&camera, &game.entities(&markers::MODELS, &markers::entity_ids()));
         let spots = markers::locate(&camera, position, &entities);
         let draw = ui.get_background_draw_list();
         let render = game.entity_render_bits(&markers::MODELS, &markers::entity_ids());
-        markers::draw(&draw, &self.textures, &camera, position, &entities, &spots, &render, &self.flags, ui.time() as f32,
-                      ui.io().display_size);
+        // Round 22 (H6): who is in sight (the player's MSB position as the Quest Helper finds it).
+        let player = crate::questhelper::player_msb_from_npcs(&camera, &entities)
+            .or_else(|| position.and_then(crate::questhelper::player_msb));
+        self.sight.update(&self.nav, player, ui.time() as f32);
+        markers::draw(&draw, &self.textures, &camera, position, &entities, &spots, &render, &self.flags, &self.sight,
+                      ui.time() as f32, ui.io().display_size);
     }
 
     /// Wizard101's Quest Helper (questhelper.rs, round 18 quests F4): the yellow arrow toward the current goal of
@@ -751,6 +769,7 @@ impl Book {
             Ok(v) => v,
             Err(why) => {
                 self.helper_log(why.to_string());
+                self.arrow_bearing = None;
                 return;
             }
         };
@@ -763,9 +782,20 @@ impl Book {
         wanted.push(qh::ARROW.into());
         self.textures.want(wanted);
         let screen = ui.io().display_size;
-        let (s, origin) = qh::placement(layout, screen);
+        let (s, origin) = qh::placement(layout, screen, talk::xp_bar_top(screen, self.hud_scale));
         let draw = ui.get_background_draw_list();
-        qh::draw_arrow(&draw, &self.textures, layout, qh::bearing(&camera, player, goal), origin, s);
+        // Round 22 (H2): the bearing eased (about 0.1 s) so a jittery read doesn't shake the arrow.
+        let target = qh::bearing(&camera, player, goal);
+        let bearing = match self.arrow_bearing {
+            Some(b) => {
+                let k = 1.0 - (-ui.io().delta_time.clamp(0.0, 0.1) * 12.0).exp();
+                let turn = (target - b + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+                b + turn * k
+            }
+            None => target,
+        };
+        self.arrow_bearing = Some(bearing);
+        qh::draw_arrow(&draw, &self.textures, layout, &self.arrow_mesh, bearing, origin, s, 1.0);
         let canvas = Canvas {
             draw: &draw,
             textures: &self.textures,
@@ -803,7 +833,7 @@ impl Book {
         }
         // The player's MSB position: from the street NPCs the game has loaded (their MSB spot plus the player's
         // offset from them in the physics space), else from the block origin (round 20's only way).
-        let entities = game.entities(&markers::MODELS, &markers::entity_ids());
+        let entities = markers::steady(&camera, &game.entities(&markers::MODELS, &markers::entity_ids()));
         let player = qh::player_msb_from_npcs(&camera, &entities).or_else(|| game.position().and_then(qh::player_msb));
         let Some(player) = player else { return Err("hidden: player not on Unicorn Way's tile") };
         let tracked = self.tracked_index().and_then(|i| self.active.get(i));
@@ -842,8 +872,12 @@ impl Book {
         let screen = ui.io().display_size;
         let mut plates = nameplates::plates(&camera, &enemies, screen);
         // w101_quests: the street NPCs' names (markers.rs), as the creature plates without the rank line
-        let entities = game.entities(&markers::MODELS, &markers::entity_ids());
-        plates.extend(markers::npc_plates(&camera, &markers::locate(&camera, game.position(), &entities), screen));
+        let entities = markers::steady(&camera, &game.entities(&markers::MODELS, &markers::entity_ids()));
+        let player = crate::questhelper::player_msb_from_npcs(&camera, &entities)
+            .or_else(|| game.position().and_then(crate::questhelper::player_msb));
+        self.sight.update(&self.nav, player, ui.time() as f32);
+        plates.extend(markers::npc_plates(&camera, &markers::locate(&camera, game.position(), &entities), &self.sight,
+                                          screen));
         if plates.is_empty() {
             return;
         }
@@ -925,6 +959,7 @@ impl Book {
         }
         let dt = self.last_frame.elapsed().as_secs_f32().min(0.1);
         self.last_frame = Instant::now();
+        self.hud_scale = cx.settings.scale;
         input::set_gameplay(cx.gameplay && !self.open && self.dialogue.is_none());
         // M1: the character still walks with the book open (WASD, left stick), except on the map page.
         // Not over Elden Ring's own menus, except the book's own live mirror (round 18 A1: the game keeps going under
@@ -1928,7 +1963,7 @@ impl Book {
         };
         let request = &self.requests[d.request];
         let screen = ui.io().display_size;
-        let (s, origin) = talk::placement(window, screen);
+        let (s, origin) = talk::placement(window, screen, talk::xp_bar_top(screen, self.hud_scale));
         let view = d.view(window, request);
         // Ask for the art this frame needs (the box, its buttons, the portrait, the quest card); it loads before the
         // next frame.

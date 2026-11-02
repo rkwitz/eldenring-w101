@@ -2078,6 +2078,24 @@ pub const QUEST_PAPER_LIT: &str = "GUI/QuestPage/Art_Quest_Paper_Lit.png";
 /// Round 21 (Q3): imgGoalObjective1 (66 square, 40,67 in the .gui) centred on the card.
 pub const GOAL_PICTURE: [f32; 4] = [103.0, 67.0, 169.0, 133.0];
 
+/// Round 22 (H8, Ryan: "the current quest should be pulsing yellow, not constantly yellow; a slow pulse"): the lit
+/// paper's alpha, rising and falling smoothly once every QUEST_PULSE seconds between QUEST_PULSE_LOW and 1. Wizard101
+/// drives such glows from code with its WinAnimAlphaFade (Root.wad Scripts/API/WindowAnimations.lua:
+/// CreateWinAnimAlphaFade(cycleTime, cycle), an alpha fade that cycles); the quest page's own cycle time is not in the
+/// client's files, so the period is a slow breath.
+const QUEST_PULSE: f32 = 2.4;
+const QUEST_PULSE_LOW: f32 = 0.15;
+
+pub fn quest_pulse() -> f32 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    // The preview renders a moment of the pulse (env PREVIEW_PULSE_T, seconds).
+    static FIXED: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+    let fixed = *FIXED.get_or_init(|| std::env::var("PREVIEW_PULSE_T").ok().and_then(|v| v.parse().ok()));
+    let t = fixed.unwrap_or_else(|| START.get_or_init(std::time::Instant::now).elapsed().as_secs_f32());
+    let wave = 0.5 - 0.5 * (t / QUEST_PULSE * std::f32::consts::TAU).cos();
+    QUEST_PULSE_LOW + (1.0 - QUEST_PULSE_LOW) * wave
+}
+
 /// Round 20 (Q7): the tracked quest's card: Wizard101's tracker arrow in imgActiveQuest (32 square), moved from
 /// 36,44 (where it covered the goal text's first letters) into the card's top-left corner under the star.
 pub fn quest_tracked(card: &Layout, v: &mut View) {
@@ -2086,6 +2104,7 @@ pub fn quest_tracked(card: &Layout, v: &mut View) {
     // paper, under everything on it.
     if let Some(id) = card.find("wndQuestInfo") {
         v.node_images.insert(id, QUEST_PAPER_LIT.into());
+        v.node_image_alpha.insert(id, quest_pulse());
     }
     if let Some(id) = card.find("imgActiveQuest") {
         v.node_art.insert(id, QUEST_TRACKER.into());

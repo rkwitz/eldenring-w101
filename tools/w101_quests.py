@@ -339,6 +339,8 @@ GOAL_PICTURES = {  # Root.wad ObjectData/WC/<template>.xml of each mob
     "lady_blackhope": "GUI/NpcPortraits/Art_Portrait_GhostLady_Green.png",  # Heroic_WC_Blackhope
     "fear_of_fire": "GUI/NpcPortraits/Art_Portrait_Scarecrow.png",  # WC_StandIn_FearOfFire
     "bone_cage": "GUI/QuestButtons/Art_HD_WC_BoneCage.png",
+    # Round 22 (H7): the Hedge Maze (goto): Wizard101's green place disc of a hedge garden (w101_quest_arrow.py).
+    "hedge_maze": "GUI/QuestButtons/Art_Quest_AV_WalledGarden.png",
 }
 GOAL_PICTURES.update({slug: PORTRAITS[slug] for slug in PORTRAITS if slug != "intro"})
 # Round 20 (Q4, Ryan: "the picture of the enemy should correspond to the actual Elden Ring enemy"): the street's

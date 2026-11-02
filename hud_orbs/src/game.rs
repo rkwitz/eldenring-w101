@@ -46,6 +46,8 @@ pub struct Game {
     models_logged: std::sync::Mutex<Vec<u32>>,
     /// Round 21 (quests Q2): the camera of the last few frames, newest last (`tick_camera`).
     cameras: std::sync::Mutex<std::collections::VecDeque<crate::markers::Camera>>,
+    /// Round 22 (H5): the last camera sample taken, when, and since when samples have been refused (`tick_camera`).
+    camera_guard: std::sync::Mutex<(Option<(crate::markers::Camera, std::time::Instant)>, Option<std::time::Instant>)>,
 }
 
 impl Game {
@@ -60,6 +62,7 @@ impl Game {
             characters: Default::default(),
             models_logged: Default::default(),
             cameras: Default::default(),
+            camera_guard: Default::default(),
         })
     }
 
@@ -111,8 +114,47 @@ impl Game {
     /// the character as the camera turned. The overlay draws at Present, when the game thread is already stepping
     /// the next frame, so CSCam holds a newer camera than the picture being shown (it can't hold an older one).
     /// `camera()` then answers with the camera of `delay` frames ago (w101_orbs.ini marker_frames, default 1).
+    ///
+    /// Round 22 (H5, Ryan: the "?" "glitches to the side of the screen" while running toward the NPC; names "randomly
+    /// slide across the screen"). His round 21 log shows single frames where every NPC is ~30 m nearer than the frame
+    /// before and after (markers: private_connelly 229 m then 261 m 15 ms later, 202/230, 167/199, 134/166, 101/133)
+    /// : a camera/player read from a moment the game was mid-update. A sample whose player or camera moved further
+    /// than anyone can in that time, or whose camera is far from the player, is refused and the last good one kept;
+    /// if the jump lasts GUARD_HOLD (a warp, a respawn) it is taken. Every refusal is logged ("camera: refused").
     pub fn tick_camera(&self, delay: usize) {
-        let now = self.camera_now();
+        const GUARD_HOLD: f32 = 0.35;
+        let mut now = self.camera_now();
+        {
+            let mut guard = self.camera_guard.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(c) = now {
+                let at = std::time::Instant::now();
+                let bad = guard.0.as_ref().and_then(|(last, when)| {
+                    let dt = at.duration_since(*when).as_secs_f32().min(1.0);
+                    let d = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+                    let cam = |c: &crate::markers::Camera| [c.matrix[3][0], c.matrix[3][1], c.matrix[3][2]];
+                    let (player_jump, camera_jump, apart) = (d(c.player, last.player), d(cam(&c), cam(last)), d(cam(&c), c.player));
+                    (player_jump > 2.5 + 30.0 * dt || camera_jump > 3.0 + 40.0 * dt || apart > 30.0)
+                        .then(|| format!("player moved {player_jump:.1} m, camera {camera_jump:.1} m in {:.0} ms, camera {apart:.1} m from the player", dt * 1000.0))
+                });
+                match bad {
+                    Some(why) if guard.1.is_none_or(|since| since.elapsed().as_secs_f32() < GUARD_HOLD) => {
+                        if guard.1.is_none() {
+                            tracing::info!("camera: refused a sample ({why})");
+                            guard.1 = Some(at);
+                        }
+                        now = guard.0.map(|(last, _)| last);
+                    }
+                    _ => {
+                        if guard.1.take().is_some() && bad.is_some() {
+                            tracing::info!("camera: jump kept for {GUARD_HOLD} s, taken (warp or respawn)");
+                        }
+                        guard.0 = Some((c, at));
+                    }
+                }
+            } else {
+                *guard = (None, None);
+            }
+        }
         let mut cameras = self.cameras.lock().unwrap_or_else(|e| e.into_inner());
         match now {
             Some(c) => {

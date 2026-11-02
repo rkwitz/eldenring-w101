@@ -251,14 +251,23 @@ pub fn button(name: &str) -> Option<Press> {
     })
 }
 
+/// The experience bar's top on a `screen` (pixels), as lib.rs draws it (XP_BAR 733 of HUDWindow's 768, scaled by
+/// the screen's height and w101_orbs.ini `scale`).
+pub fn xp_bar_top(screen: [f32; 2], hud_scale: f32) -> f32 {
+    const XP_BAR_TOP: f32 = 733.0;
+    screen[1] - (SCREEN[1] - XP_BAR_TOP) * hud_scale * screen[1] / SCREEN[1]
+}
+
 /// DialogWindow's place on a `screen` (pixels): the scale (screen pixels per layout pixel, Wizard101 scaling its GUI
-/// with the screen's height) and the window's top-left corner, bottom-docked and centred as its flags say.
-pub fn placement(window: &Layout, screen: [f32; 2]) -> (f32, [f32; 2]) {
+/// with the screen's height) and the window's top-left corner, centred across. Round 22 (H4, Ryan: "move the
+/// dialogue down a little bit; put it right above the level bar"): its bottom BAR_GAP layout pixels over the
+/// experience bar's top (`bar_top`, xp_bar_top), not at DialogWindow.gui's 687 of 768 (81 pixels up).
+pub fn placement(window: &Layout, screen: [f32; 2], bar_top: f32) -> (f32, [f32; 2]) {
+    const BAR_GAP: f32 = 4.0;
     let s = screen[1] / SCREEN[1];
     let r = window.nodes.first().map(|n| n.rect).unwrap_or([0.0, 0.0, 800.0, 180.0]);
-    let bottom_gap = SCREEN[1] - 687.0;
     let (w, h) = (r[2] - r[0], r[3] - r[1]);
-    (s, [(screen[0] - w * s) / 2.0, screen[1] - (bottom_gap + h) * s])
+    (s, [(screen[0] - w * s) / 2.0, bar_top - (BAR_GAP + h) * s])
 }
 
 /// DialogImage's picture square (imgSprite, 399 square, centred across the screen; its 588-high parent window

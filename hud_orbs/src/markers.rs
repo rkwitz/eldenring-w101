@@ -121,8 +121,6 @@ const TALKS: &[(&str, u32, u32, u32, &[u32])] = &[
     ("olivia_dawnwillow", 1042360450, 1042360459, 1042360453, &[1042360452]),
 ];
 
-/// Markers are drawn this far (metres) and fade out over the last part.
-const RANGE: f32 = 150.0;
 /// Quest_Marker_*.nif: the billboard's height over the marker's origin, the sign's and the spiral's quad sides (W101
 /// units = cm), and the spiral's turn (its z rotation keys: -2 pi over 6.67 s).
 const CENTRE: f32 = 0.3871;
@@ -283,7 +281,7 @@ fn log_state(camera: &Camera, position: Option<([f32; 3], i32, i32)>, entities: 
 
 /// The Wizard101 name plates of the street NPCs in view (book.rs draws them with the creature plates): the name in
 /// Wizard101's NPC green, no second line (none of these NPCs has a title in Wizard101's data).
-pub fn npc_plates(camera: &Camera, spots: &[Spot], screen: [f32; 2]) -> Vec<crate::nameplates::Plate> {
+pub fn npc_plates(camera: &Camera, spots: &[Spot], sight: &Sight, screen: [f32; 2]) -> Vec<crate::nameplates::Plate> {
     let mut out = Vec::new();
     let p = camera.player;
     for &(i, at, _) in spots {
@@ -297,7 +295,10 @@ pub fn npc_plates(camera: &Camera, spots: &[Spot], screen: [f32; 2]) -> Vec<crat
         if x < -200.0 || x > screen[0] + 200.0 || y < -100.0 || y > screen[1] + 100.0 {
             continue;
         }
-        let alpha = ((PLATE_RANGE - d) / (PLATE_RANGE * 0.2)).clamp(0.0, 1.0);
+        let alpha = ((PLATE_RANGE - d) / (PLATE_RANGE * 0.2)).clamp(0.0, 1.0) * sight.alpha(i);
+        if alpha <= 0.0 {
+            continue;
+        }
         let k = (screen[1] / 768.0) * (8.0 / z.max(1.0)).clamp(0.7, 1.15);
         out.push(crate::nameplates::Plate { at: on_screen, k, alpha, name, line: String::new(), school: "",
                                              colour: NPC_NAME_COLOUR });
@@ -317,6 +318,7 @@ pub fn draw(
     spots: &[Spot],
     render: &[(u32, u8, u8, u32)],
     flags: &HashMap<u32, bool>,
+    sight: &Sight,
     time: f32,
     screen: [f32; 2],
 ) {
@@ -327,8 +329,11 @@ pub fn draw(
     for &(i, at, _) in spots {
         let (slug, _, _, _, _, _, lift) = NPCS[i];
         let Some(kind) = marker(slug, &flag) else { continue };
-        let distance = ((at[0] - p[0]).powi(2) + (at[2] - p[2]).powi(2)).sqrt();
-        let alpha = (255.0 * ((RANGE - distance) / (RANGE * 0.2)).clamp(0.0, 1.0)) as u8;
+        // Round 22 (H6, Ryan: "the name fades away at a certain distance; make those symbols also fade"): faded with
+        // distance exactly as the names are (PLATE_RANGE, 3D distance), and out of sight behind walls (`sight`).
+        let d3 = ((at[0] - p[0]).powi(2) + (at[1] - p[1]).powi(2) + (at[2] - p[2]).powi(2)).sqrt();
+        let fade = ((PLATE_RANGE - d3) / (PLATE_RANGE * 0.2)).clamp(0.0, 1.0) * sight.alpha(i);
+        let alpha = (255.0 * fade) as u8;
         if alpha == 0 {
             continue;
         }
@@ -355,4 +360,85 @@ pub fn draw(
         let h = SIGN * metre / 2.0;
         draw.add_image(texture, [at[0] - h, at[1] - h], [at[0] + h, at[1] + h]).col(tint).build();
     }
+}
+
+/// Round 22 (H6): whether each street NPC can be seen from the player (MSB positions; questhelper::Nav::sees), eased
+/// in and out over FADE seconds so a marker doesn't blink at a corner. In a room under the street nobody on the
+/// street is in sight; the garden (hedge maze) and the street don't see each other.
+#[derive(Default)]
+pub struct Sight {
+    fade: [f32; NPCS.len()],
+    time: Option<f32>,
+}
+
+const FADE: f32 = 0.25;
+
+impl Sight {
+    pub fn update(&mut self, nav: &crate::questhelper::Nav, player: Option<[f32; 3]>, time: f32) {
+        use crate::questhelper::{in_garden, in_room};
+        let dt = self.time.map_or(1.0, |t| (time - t).clamp(0.0, 1.0));
+        self.time = Some(time);
+        for (i, npc) in NPCS.iter().enumerate() {
+            let spot = npc.4;
+            let seen = match player {
+                None => true,
+                Some(p) if in_room(p) => false,
+                Some(p) if in_garden(p) != in_garden(spot) => false,
+                Some(p) if in_garden(p) => true,
+                Some(p) => nav.sees([p[0], p[2]], [spot[0], spot[2]]),
+            };
+            let step = dt / FADE;
+            self.fade[i] = if seen { (self.fade[i] + step).min(1.0) } else { (self.fade[i] - step).max(0.0) };
+        }
+    }
+
+    pub fn alpha(&self, i: usize) -> f32 {
+        self.fade.get(i).copied().unwrap_or(1.0)
+    }
+}
+
+/// Round 22 (H5): the street NPCs' positions (Game::entities) held steady: a position that jumps, relative to the
+/// player, further in one read than the player can move (a read from a moment the game was mid-update) is refused and
+/// the last good one kept (moved with the player), unless the jump lasts HOLD seconds. Logged once per refusal.
+pub fn steady(camera: &Camera, entities: &[(u32, [f32; 3])]) -> Vec<(u32, [f32; 3])> {
+    use std::time::Instant;
+    const HOLD: f32 = 0.35;
+    // id -> (offset from the player, when taken, refused since)
+    static LAST: std::sync::Mutex<Vec<(u32, [f32; 3], Instant, Option<Instant>)>> = std::sync::Mutex::new(Vec::new());
+    // The player's own jumps already passed the camera's check (Game::tick_camera): one this big is a warp, after
+    // which every offset is new.
+    static PLAYER: std::sync::Mutex<Option<[f32; 3]>> = std::sync::Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    let p = camera.player;
+    let now = Instant::now();
+    {
+        let mut player = PLAYER.lock().unwrap_or_else(|e| e.into_inner());
+        if player.is_some_and(|q| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2) > 20.0 * 20.0) {
+            last.clear();
+        }
+        *player = Some(p);
+    }
+    entities.iter().map(|&(id, at)| {
+        let offset = [at[0] - p[0], at[1] - p[1], at[2] - p[2]];
+        if !offset.iter().all(|v| v.is_finite()) {
+            return (id, at);
+        }
+        let Some(k) = last.iter().position(|l| l.0 == id) else {
+            last.push((id, offset, now, None));
+            return (id, at);
+        };
+        let (_, old, when, since) = last[k];
+        let dt = now.duration_since(when).as_secs_f32().min(1.0);
+        let jump = ((offset[0] - old[0]).powi(2) + (offset[1] - old[1]).powi(2) + (offset[2] - old[2]).powi(2)).sqrt();
+        if jump > 2.5 + 30.0 * dt && since.is_none_or(|s| s.elapsed().as_secs_f32() < HOLD) {
+            if since.is_none() {
+                tracing::info!("markers: refused a position of {id} (moved {jump:.1} m against the player in {:.0} ms)",
+                               dt * 1000.0);
+                last[k].3 = Some(now);
+            }
+            return (id, [p[0] + old[0], p[1] + old[1], p[2] + old[2]]);
+        }
+        last[k] = (id, offset, now, None);
+        (id, at)
+    }).collect()
 }

@@ -92,6 +92,12 @@ const ER_PICTURES: &[(&str, &str)] = &[
     ("GUI/NpcPortraits/Human_WCGuard_B.png", "GUI/NpcPortraits/ER/private_oryan.png"),
 ];
 
+/// Round 22 (H7, Ryan: "Monsters and Mazes, hedge maze, there's no picture"): a goal with no picture in quests.tsv
+/// gets its place's (goal column "place"): the Hedge Maze is Wizard101's green place disc of a hedge garden,
+/// _Shared-WorldData.wad GUI/QuestButtons/Art_Quest_AV_WalledGarden (tools/w101_quest_arrow.py; w101_quests.py
+/// GOAL_PICTURES["hedge_maze"]).
+const PLACE_PICTURES: &[(&str, &str)] = &[("The Hedge Maze", "GUI/QuestButtons/Art_Quest_AV_WalledGarden.png")];
+
 #[derive(Default)]
 pub struct Quests {
     pub quests: Vec<Quest>,
@@ -154,6 +160,10 @@ impl Quests {
                             let art = path.parent().map(|b| b.join("art"));
                             match ER_PICTURES.iter().find(|e| e.0 == p) {
                                 Some((_, er)) if art.as_ref().is_some_and(|a| a.join(er).exists()) => er.to_string(),
+                                // Round 22 (H7): the Hedge Maze goals had no picture in quests.tsv.
+                                _ if p.is_empty() => PLACE_PICTURES.iter()
+                                    .find(|e| e.0 == f[8] && art.as_ref().is_some_and(|a| a.join(e.1).exists()))
+                                    .map_or(String::new(), |e| e.1.to_string()),
                                 _ => p.to_string(),
                             }
                         },

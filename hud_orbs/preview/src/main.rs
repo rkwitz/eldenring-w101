@@ -371,6 +371,17 @@ fn main() {
         ("21c_monsters_and_mazes_card", pages::Tab::Character, 0, [0.0, 0.0], "talk:ceren_nightchant|skeleton_crew|goal2:5"),
         ("21d_quests_page_selected_paper", pages::Tab::Quests, 0, [0.0, 0.0], ""),
         ("21e_quest_helper", pages::Tab::Character, 0, [0.0, 0.0], "turn:0"),
+        // Round 22 (hud H1-H8): helper over the experience bar with Wizard101's solid arrow (ahead, left, right,
+        // behind), the dialogue over the bar, the Monsters and Mazes card's picture, the quest page's pulse
+        // (PREVIEW_PULSE_T=0 dim, =1.2 bright), the markers.
+        ("22a_helper_ahead", pages::Tab::Character, 0, [0.0, 0.0], "turn:0"),
+        ("22b_helper_left", pages::Tab::Character, 0, [0.0, 0.0], "turn:70"),
+        ("22c_helper_right", pages::Tab::Character, 0, [0.0, 0.0], "turn:-70"),
+        ("22d_helper_behind", pages::Tab::Character, 0, [0.0, 0.0], "turn:160"),
+        ("22e_dialogue_over_bar", pages::Tab::Character, 0, [0.0, 0.0], "talk:ceren_nightchant|ghost_hunters|goal3:0"),
+        ("22f_monsters_and_mazes_card", pages::Tab::Character, 0, [0.0, 0.0], "talk:ceren_nightchant|monsters_and_mazes|offer:9"),
+        ("22g_quests_page_pulse", pages::Tab::Quests, 0, [0.0, 0.0], ""),
+        ("22h_markers", pages::Tab::Character, 0, [0.0, 0.0], "markers"),
         ("14a_quest_helper_ahead", pages::Tab::Character, 0, [0.0, 0.0], "turn:0"),
         ("14b_quest_helper_turned_left", pages::Tab::Character, 0, [0.0, 0.0], "turn:-70"),
         ("14c_quest_helper_behind", pages::Tab::Character, 0, [0.0, 0.0], "turn:150"),
@@ -484,6 +495,17 @@ fn main() {
                 book.draw_markers(ui, &cx);
                 book.draw_quest_helper(ui, &cx);
                 book.draw_nameplates(ui, &cx);
+            }
+            // Round 22 (H1, H4): the experience bar where lib.rs draws it (its frame art copied to
+            // book/art/preview_hud/Art_Bar_Exp.png in the preview's data), to show the helper and dialogue over it.
+            if show.starts_with("turn:") || show.starts_with("talk:") {
+                book.textures.want(["preview_hud/Art_Bar_Exp.png".to_string()]);
+                if let Some((t, _)) = book.textures.get("preview_hud/Art_Bar_Exp.png") {
+                    let s = height / 768.0;
+                    let (w, h) = (504.0 * s, 19.0 * s);
+                    let top = talk::xp_bar_top([width, height], 1.0);
+                    ui.get_foreground_draw_list().add_image(t, [(width - w) / 2.0, top], [(width + w) / 2.0, top + h]).build();
+                }
             }
             if let Some(t) = show.strip_prefix("poof:").and_then(|t| t.parse::<f32>().ok()) {
                 // The camera of tools/w101_poof_reference.py: at (0, 1.55, -3.4)

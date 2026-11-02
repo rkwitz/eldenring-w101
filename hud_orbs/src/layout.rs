@@ -278,6 +278,8 @@ pub struct View {
     pub extra: Vec<([f32; 4], String, TextStyle)>,
     /// Images drawn over a node, right after its own (in the layout's painter's order).
     pub node_images: HashMap<usize, String>,
+    /// Round 22 (H8): an alpha for a node image (default 1): the tracked quest card's pulsing light.
+    pub node_image_alpha: HashMap<usize, f32>,
     /// Another picture for a node's own art (same frames).
     pub node_art: HashMap<usize, String>,
     /// Images drawn after the nodes, under the fills (backgrounds): (rect, image, uv).
@@ -779,7 +781,10 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
                     }
                     crate::live_preview::key_blend(false);
                 }
-                None => canvas.image(img, r, [0.0, 0.0, 1.0, 1.0], fade(ImColor32::WHITE, alpha)),
+                None => {
+                    let a = alpha * view.node_image_alpha.get(&i).copied().unwrap_or(1.0);
+                    canvas.image(img, r, [0.0, 0.0, 1.0, 1.0], fade(ImColor32::WHITE, a))
+                }
             }
         }
         if let Some(img) = view.node_art.get(&i).or(n.img.as_ref()) {
