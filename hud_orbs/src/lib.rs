@@ -20,6 +20,7 @@ mod loadscreen;
 mod markers;
 mod music;
 mod wisps;
+mod goalpopup;
 mod nameplates;
 mod steam;
 mod teleport;
@@ -365,11 +366,12 @@ impl ImguiRenderLoop for Orbs {
         if !self.loadscreen.holding() {
             self.book.draw_markers(ui, &cx);
             self.book.draw_quest_helper(ui, &cx);
+            self.book.draw_goal_popup(ui, &cx);
             if cx.settings.nameplates {
                 self.book.draw_nameplates(ui, &cx);
             }
             let wisp_play = cx.gameplay && !self.book.blocking();
-            self.wisps.frame(ui, &mut self.book.textures, game, wisp_play, street);
+            self.wisps.frame(ui, &mut self.book.textures, game, wisp_play, street, &self.book.nav);
         }
         // Polled every frame: the screen goes up on the first frame the door flag is on, or Elden Ring starts a
         // loading screen of its own. The flag is cleared when the screen starts to fade (or right away when the

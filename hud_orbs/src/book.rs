@@ -151,7 +151,7 @@ pub struct Book {
     /// quest in progress (main quests first), as before.
     tracked: Option<String>,
     /// Round 20 (Q8): Wizard101's walk graph of the street for the Quest Helper's step count (quest_nav.tsv).
-    nav: crate::questhelper::Nav,
+    pub nav: crate::questhelper::Nav,
     /// Round 21 (Q6): the Quest Helper's last state, logged when it changes ("quest helper: ...").
     helper_state: String,
     /// Round 22 (H2): Wizard101's solid quest arrow (questhelper::MESH) and the bearing it shows (eased).
@@ -164,6 +164,8 @@ pub struct Book {
     quest_flags: Vec<u32>,
     flags: HashMap<u32, bool>,
     flags_time: Option<Instant>,
+    /// Round 23 (H7): Wizard101's quest popups ("Goal Update: ...", goalpopup.rs).
+    pub popups: crate::goalpopup::GoalPopups,
     active: Vec<Active>,
     /// The conversations the map's talk events can ask for (talk.rs, dialogue.tsv), and the one on screen.
     requests: Vec<talk::Request>,
@@ -383,6 +385,7 @@ impl Book {
             quest_flags: Vec::new(),
             flags: HashMap::new(),
             flags_time: None,
+            popups: Default::default(),
             active: Vec::new(),
             requests: Vec::new(),
             dialogue: None,
@@ -757,6 +760,13 @@ impl Book {
         self.sight.update(&self.nav, player, ui.time() as f32);
         markers::draw(&draw, &self.textures, &camera, position, &entities, &spots, &render, &self.flags, &self.sight,
                       ui.time() as f32, ui.io().display_size);
+    }
+
+    /// Round 23 (H7): the current quest popup (goalpopup.rs), shown in normal play while no book, dialogue or map is up.
+    pub fn draw_goal_popup(&mut self, ui: &Ui, cx: &Context) {
+        let visible = cx.gameplay && !self.blocking() && self.map == MapState::Idle;
+        let draw = ui.get_foreground_draw_list();
+        self.popups.draw(&draw, &self.textures, &self.fonts, ui.io().display_size, visible);
     }
 
     /// Wizard101's Quest Helper (questhelper.rs, round 18 quests F4): the yellow arrow toward the current goal of
@@ -1870,6 +1880,11 @@ impl Book {
         if first || on_now != on_of(&self.flags) {
             tracing::info!("quest flags{}: on {:?} ({} read; quest reset v3 done: {:?})", if first { " at load" } else { "" },
                            on_now, now.len(), now.get(&markers::QUEST_RESET));
+        }
+        // Round 23 (H7): what changed since the last poll, as Wizard101's popups (not at load, nor before the quest
+        // reset has run on an old save).
+        if !first && now.get(&markers::QUEST_RESET) == Some(&true) {
+            self.popups.changes(&self.quests, &self.flags, &now);
         }
         self.flags = now;
         let flags = &self.flags;

@@ -48,6 +48,9 @@ pub struct Game {
     cameras: std::sync::Mutex<std::collections::VecDeque<crate::markers::Camera>>,
     /// Round 22 (H5): the last camera sample taken, when, and since when samples have been refused (`tick_camera`).
     camera_guard: std::sync::Mutex<(Option<(crate::markers::Camera, std::time::Instant)>, Option<std::time::Instant>)>,
+    /// Round 23 (H2): other characters' positions at the last camera sample taken (ChrIns, physics position), to tell
+    /// a world rebase (everything shifts together) from a bad read (`tick_camera`).
+    rebase_refs: std::sync::Mutex<Vec<(usize, [f32; 3])>>,
 }
 
 impl Game {
@@ -63,6 +66,7 @@ impl Game {
             models_logged: Default::default(),
             cameras: Default::default(),
             camera_guard: Default::default(),
+            rebase_refs: Default::default(),
         })
     }
 
@@ -121,14 +125,25 @@ impl Game {
     /// : a camera/player read from a moment the game was mid-update. A sample whose player or camera moved further
     /// than anyone can in that time, or whose camera is far from the player, is refused and the last good one kept;
     /// if the jump lasts GUARD_HOLD (a warp, a respawn) it is taken. Every refusal is logged ("camera: refused").
+    ///
+    /// Round 23 (H2, Ryan: "all of the name tags appear at once and they all disappear"). His round 22 log has 33
+    /// refusals of 32-40 m every 3.5-4.5 s while running, each also refusing all five NPC positions by the same
+    /// distance, then "jump kept for 0.35 s, taken" with the player's MSB position continuous across it: the game moves
+    /// its whole coordinate frame (player, camera and every character together) every ~35 m travelled. Those are not
+    /// bad reads: the guard froze the camera for 0.35 s each time (names and markers stuck on the screen, creature
+    /// plates and wisps 35 m off, then all snapping back). Now a jump that the other loaded characters made too (same
+    /// vector within 2 m, `rebase`) is taken at once, and the frames queued for `delay` are moved by it, so the camera
+    /// of a frame ago matches this frame's characters. Logged ("camera: world shifted ...").
     pub fn tick_camera(&self, delay: usize) {
         const GUARD_HOLD: f32 = 0.35;
         let mut now = self.camera_now();
+        let refs = self.reference_positions();
+        let mut shift: Option<[f32; 3]> = None;
         {
             let mut guard = self.camera_guard.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(c) = now {
                 let at = std::time::Instant::now();
-                let bad = guard.0.as_ref().and_then(|(last, when)| {
+                let mut bad = guard.0.as_ref().and_then(|(last, when)| {
                     let dt = at.duration_since(*when).as_secs_f32().min(1.0);
                     let d = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
                     let cam = |c: &crate::markers::Camera| [c.matrix[3][0], c.matrix[3][1], c.matrix[3][2]];
@@ -136,6 +151,20 @@ impl Game {
                     (player_jump > 2.5 + 30.0 * dt || camera_jump > 3.0 + 40.0 * dt || apart > 30.0)
                         .then(|| format!("player moved {player_jump:.1} m, camera {camera_jump:.1} m in {:.0} ms, camera {apart:.1} m from the player", dt * 1000.0))
                 });
+                // A jump every other character made too is the world moving, not a bad read.
+                if bad.is_some() {
+                    if let Some((last, _)) = guard.0.as_ref() {
+                        let jump = [c.player[0] - last.player[0], c.player[1] - last.player[1], c.player[2] - last.player[2]];
+                        let old = self.rebase_refs.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        if rebase(jump, &old, &refs) {
+                            tracing::info!("camera: world shifted by ({:.1}, {:.1}, {:.1}) m with every character; taken",
+                                           jump[0], jump[1], jump[2]);
+                            shift = Some(jump);
+                            bad = None;
+                            guard.1 = None;
+                        }
+                    }
+                }
                 match bad {
                     Some(why) if guard.1.is_none_or(|since| since.elapsed().as_secs_f32() < GUARD_HOLD) => {
                         if guard.1.is_none() {
@@ -149,6 +178,7 @@ impl Game {
                             tracing::info!("camera: jump kept for {GUARD_HOLD} s, taken (warp or respawn)");
                         }
                         guard.0 = Some((c, at));
+                        *self.rebase_refs.lock().unwrap_or_else(|e| e.into_inner()) = refs;
                     }
                 }
             } else {
@@ -156,6 +186,14 @@ impl Game {
             }
         }
         let mut cameras = self.cameras.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(d) = shift {
+            for c in cameras.iter_mut() {
+                for k in 0..3 {
+                    c.matrix[3][k] += d[k];
+                    c.player[k] += d[k];
+                }
+            }
+        }
         match now {
             Some(c) => {
                 cameras.push_back(c);
@@ -165,6 +203,21 @@ impl Game {
             }
             None => cameras.clear(),
         }
+    }
+
+    /// Round 23 (H2): up to 8 loaded characters other than the player (from the half-second cache) and their physics
+    /// positions now, for `rebase`.
+    fn reference_positions(&self) -> Vec<(usize, [f32; 3])> {
+        use eldenring::cs::{CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
+        use std::mem::offset_of;
+        let player = self.player();
+        let list = self.characters.lock().unwrap_or_else(|e| e.into_inner()).1.clone();
+        list.iter().filter(|(chr, _)| Some(*chr) != player).filter_map(|&(chr, _)| {
+            let modules = read::<usize>(chr + offset_of!(ChrIns, modules))?;
+            let physics = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics))?;
+            let [x, y, z, _] = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position))?;
+            [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6).then_some((chr, [x, y, z]))
+        }).take(8).collect()
     }
 
     /// The camera as CSCam holds it right now (see `camera`).
@@ -1019,3 +1072,19 @@ const _: () = {
         assert!(offset_of!(GameSettings, camera_auto_rotation) == opt::AUTO_ROTATION);
     }
 };
+
+/// Round 23 (H2): whether the player's `jump` is a world rebase: more than half of the characters seen both at the
+/// last sample (`old`) and now (`new`) moved by the same vector (within 2 m), and at least one was seen.
+pub fn rebase(jump: [f32; 3], old: &[(usize, [f32; 3])], new: &[(usize, [f32; 3])]) -> bool {
+    const MATCH: f32 = 2.0;
+    let (mut same, mut seen) = (0, 0);
+    for (chr, p) in new {
+        let Some((_, q)) = old.iter().find(|(c, _)| c == chr) else { continue };
+        seen += 1;
+        let d = [p[0] - q[0] - jump[0], p[1] - q[1] - jump[1], p[2] - q[2] - jump[2]];
+        if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() < MATCH {
+            same += 1;
+        }
+    }
+    seen > 0 && same * 2 > seen
+}

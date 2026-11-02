@@ -367,19 +367,27 @@ pub fn draw(
 /// Round 22 (H6): whether each street NPC can be seen from the player (MSB positions; questhelper::Nav::sees), eased
 /// in and out over FADE seconds so a marker doesn't blink at a corner. In a room under the street nobody on the
 /// street is in sight; the garden (hedge maze) and the street don't see each other.
+///
+/// Round 23 (H2): a name is hidden only after it has been out of sight for HIDE_AFTER seconds (a glimpse of a corner
+/// no longer blinks every name), and the player position a world shift moved for a frame can't hide them all.
 #[derive(Default)]
 pub struct Sight {
     fade: [f32; NPCS.len()],
+    unseen: [f32; NPCS.len()],
     time: Option<f32>,
 }
 
 const FADE: f32 = 0.25;
+const HIDE_AFTER: f32 = 0.3;
 
 impl Sight {
     pub fn update(&mut self, nav: &crate::questhelper::Nav, player: Option<[f32; 3]>, time: f32) {
         use crate::questhelper::{in_garden, in_room};
         let dt = self.time.map_or(1.0, |t| (time - t).clamp(0.0, 1.0));
         self.time = Some(time);
+        if dt <= 0.0 {
+            return; // already updated this frame (markers and names both call it)
+        }
         for (i, npc) in NPCS.iter().enumerate() {
             let spot = npc.4;
             let seen = match player {
@@ -389,8 +397,10 @@ impl Sight {
                 Some(p) if in_garden(p) => true,
                 Some(p) => nav.sees([p[0], p[2]], [spot[0], spot[2]]),
             };
+            self.unseen[i] = if seen { 0.0 } else { self.unseen[i] + dt };
+            let shown = self.unseen[i] < HIDE_AFTER;
             let step = dt / FADE;
-            self.fade[i] = if seen { (self.fade[i] + step).min(1.0) } else { (self.fade[i] - step).max(0.0) };
+            self.fade[i] = if shown { (self.fade[i] + step).min(1.0) } else { (self.fade[i] - step).max(0.0) };
         }
     }
 

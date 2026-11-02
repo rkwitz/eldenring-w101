@@ -10,17 +10,32 @@
 //!
 //! Here (round 22 S5, Ryan: "these shouldn't spawn when enemies die ... they just float around on the sidewalk in a
 //! pathing"): the three W101 paths, moved into the street's MSB with the quest_nav.tsv fit (PATHS), each carry
-//! wisp_count wisps (ini, default 3) that float along the path loop; a picked-up one comes back on a random node of
+//! wisp_count wisps (ini, default 5 since round 23) that float along the path loop; a picked-up one comes back on a random node of
 //! its path after RESPAWN seconds. MSB spots become physics positions through the player's MSB position this frame
 //! (lib.rs: questhelper::player_msb_now) and Camera::player. They are drawn from the wisp nif's own textures
 //! (tools/w101_wisp_art.py -> w101_orbs/wisps/), projected with the markers' camera. Walking within PICKUP metres
 //! restores wisp_restore percent (default 20) of the player's max HP (red) or FP (blue) (Game::add_player_stat) and
 //! plays the W101 sound through the music thread's mixer. ini wisps = 0 turns them off.
+//!
+//! Round 23 (H4-H6, Ryan: "The wisps flying around look malnourished ... you can see them through walls ... When you
+//! collect them, it should spin around you"):
+//! - H4 fuller: FX_Wisp_Red.nif is six particle systems on one spot (cloud Main and Add, sparkles, focus sparks, the
+//!   glow), so the cloud is five bigger puffs over a bright core glow (GLOW tinted), eight sparkles round it, a wider
+//!   ground glow, and wisp_count defaults to 5 per path.
+//! - H5: hidden behind walls like the NPC markers (questhelper::Nav::sees from the player's MSB spot to the wisp's,
+//!   held HIDE_AFTER s before fading over FADE s); none from a room under the street or the hedge maze garden.
+//! - H6: W101's pickup is ObjectData CombatBonus_WispHealth's WispDespawn effect Character/FX_WispRed_Dsppr.nif
+//!   (FX_WispBlue_Dsppr for mana) played on the player, with Sound/GUI/ui_health_powerup_01.wav: its "Mover" node
+//!   carries the wisp cloud (FX_Cloud_Leave) at chest height, moving 0.94 -> 1.04 -> 0.79 -> 0.99 -> 0.94 m over
+//!   4 s (MOVER, its NiTransformData keys / 100), with "Wind02", two half-ring ribbons (17.6 and 11.6 units) round
+//!   it, and yellow sparkles leaving (FX_SparkleYllwExit). Here the picked-up wisp spirals round the player for SPIN
+//!   s (SPIN_TURNS turns, the radius closing from where it was to 0.3 m, its height on MOVER at twice the speed)
+//!   trailing a white wind ribbon, then bursts into yellow sparkles and is gone.
 
 use std::path::PathBuf;
 use std::time::Instant;
 
-use hudhook::imgui::{DrawListMut, Ui};
+use hudhook::imgui::{DrawListMut, ImColor32, Ui};
 
 use crate::game::Game;
 use crate::layout::Textures;
@@ -42,19 +57,29 @@ const BOB_PERIOD: f32 = 2.2;
 const SWAY: f32 = 0.5;
 /// Drift speed along the path (metres per second), each wisp a little faster or slower.
 const SPEED: f32 = 0.45;
-/// Sizes (metres): cloud puff, sparkle, ground glow.
-const PUFF: f32 = 0.55;
-const SPARKLE: f32 = 0.16;
-const GROUND: f32 = 1.1;
-/// The burst after a pick-up and the fade-in of a new wisp, seconds.
-const BURST: f32 = 0.6;
+/// Sizes (metres): cloud puff, sparkle, ground glow, core glow (round 23 H4: fuller).
+const PUFF: f32 = 0.8;
+const PUFFS: usize = 5;
+const SPARKLE: f32 = 0.2;
+const SPARKLES: usize = 8;
+const GROUND: f32 = 1.5;
+const CORE: f32 = 0.95;
+/// Round 23 (H6): the pickup spiral (seconds, turns), the sparkle burst after it, the fade-in of a new wisp.
+const SPIN: f32 = 1.6;
+const SPIN_TURNS: f32 = 2.5;
+const BURST: f32 = 0.5;
 const FADE_IN: f32 = 1.5;
+/// FX_WispRed_Dsppr.nif's Mover height keys (seconds, W101 units / 100 = metres above the feet).
+const MOVER: [(f32, f32); 5] = [(0.0, 0.94), (1.0, 1.04), (2.5, 0.79), (3.47, 0.99), (4.0, 0.94)];
 /// W101's spawn groups respawn after 10 s.
 const RESPAWN: f32 = 10.0;
 /// W101's spawn weights: WC_WispHealth 82 / 79 / 76 against WC_WispMana_UW 18 / 21 / 24.
 const MANA_CHANCE: [f32; 3] = [0.18, 0.21, 0.24];
 /// Wisps farther than this from the player aren't drawn.
 const DRAW_RANGE: f32 = 80.0;
+/// Round 23 (H5): out of sight this long before a wisp fades, and the fade (seconds).
+const HIDE_AFTER: f32 = 0.3;
+const FADE: f32 = 0.25;
 
 /// Wizard101's wisp paths on Unicorn Way (zone pathData.xml "Path Wisps 01..03", nodes from pathNodeData.bin), moved
 /// into m60_42_36_00 MSB x, y, z (round 20 make_nav.py's frame -> MSB fit; y = W101 z / 100 + 93.999). Each is a
@@ -82,8 +107,12 @@ struct Wisp {
     speed: f32,
     born: Instant,
     seed: f32,
-    /// Set when picked up: the burst plays, then it waits RESPAWN seconds.
-    picked: Option<Instant>,
+    /// Set when picked up: (when, its offset from the player then (world metres)); it spirals round the player, bursts,
+    /// then waits RESPAWN seconds.
+    picked: Option<(Instant, [f32; 3])>,
+    /// Round 23 (H5): how much of it shows (0..1, eased) and how long it has been out of sight.
+    seen: f32,
+    unseen: f32,
 }
 
 pub struct Wisps {
@@ -99,6 +128,32 @@ pub struct Wisps {
     logged: bool,
 }
 
+/// Round 23 (H6): FX_WispRed_Dsppr.nif's Mover height (metres above the feet) `t` seconds in (its keys, linear).
+fn mover(t: f32) -> f32 {
+    let mut prev = MOVER[0];
+    for &(k, h) in &MOVER[1..] {
+        if t <= k {
+            let f = ((t - prev.0) / (k - prev.0)).clamp(0.0, 1.0);
+            let s = f * f * (3.0 - 2.0 * f);
+            return prev.1 + (h - prev.1) * s;
+        }
+        prev = (k, h);
+    }
+    prev.1
+}
+
+/// Round 23 (H6): where a wisp picked up `t` seconds ago is, as an offset from the player's feet (world metres), from
+/// `from` (its offset when picked up): round the player SPIN_TURNS times over SPIN seconds, closing in to 0.3 m.
+fn spiral(from: [f32; 3], t: f32) -> [f32; 3] {
+    let f = (t / SPIN).clamp(0.0, 1.0);
+    let r0 = (from[0] * from[0] + from[2] * from[2]).sqrt().clamp(0.5, 1.0);
+    let a0 = from[2].atan2(from[0]);
+    let r = r0 + (0.3 - r0) * f * f;
+    let a = a0 + SPIN_TURNS * std::f32::consts::TAU * (f * (2.0 - f));
+    let h = from[1] + (mover(t * 2.0) - from[1]) * (f * 4.0).min(1.0);
+    [r * a.cos(), h, r * a.sin()]
+}
+
 impl Wisps {
     pub fn new(folder: &std::path::Path) -> Wisps {
         let lengths = PATHS.iter().map(|p| {
@@ -112,7 +167,7 @@ impl Wisps {
         let mut w = Wisps {
             folder: folder.to_path_buf(),
             enabled: true,
-            per_path: 3,
+            per_path: 5,
             restore: 20.0,
             wisps: Vec::new(),
             lengths,
@@ -151,7 +206,8 @@ impl Wisps {
         let node = (self.random() * PATHS[path].len() as f32) as usize % PATHS[path].len();
         let kind = if self.random() < MANA_CHANCE[path] { Kind::Mana } else { Kind::Health };
         let speed = SPEED * (0.7 + 0.6 * self.random()) * if self.random() < 0.5 { 1.0 } else { -1.0 };
-        Wisp { kind, path, along: self.lengths[path].1[node], speed, born: now, seed: self.random() * 100.0, picked: None }
+        Wisp { kind, path, along: self.lengths[path].1[node], speed, born: now, seed: self.random() * 100.0, picked: None,
+               seen: 0.0, unseen: 0.0 }
     }
 
     /// The MSB spot `along` metres round path `path` (on the path, no hover).
@@ -166,9 +222,10 @@ impl Wisps {
     }
 
     /// Every frame: drift, respawns, pick-ups, drawing. `gameplay` = normal play with the HUD up; `street` = the
-    /// player's MSB position on Unicorn Way this frame (None off the street or when it can't be read).
+    /// player's MSB position on Unicorn Way this frame (None off the street or when it can't be read); `nav` = the
+    /// street's walk area, for what walls hide (round 23 H5).
     pub fn frame(&mut self, ui: &Ui, textures: &mut Textures, game: Option<&Game>, gameplay: bool,
-                 street: Option<[f32; 3]>) {
+                 street: Option<[f32; 3]>, nav: &crate::questhelper::Nav) {
         let (Some(g), true, Some(msb)) = (game, self.enabled, street) else { return };
         if !self.wanted {
             self.wanted = true;
@@ -189,7 +246,7 @@ impl Wisps {
         // Drift (also while the book is open: W101's world goes on), and respawn the picked-up ones.
         for i in 0..self.wisps.len() {
             match self.wisps[i].picked {
-                Some(t) if (now - t).as_secs_f32() > BURST + RESPAWN => {
+                Some((t, _)) if (now - t).as_secs_f32() > SPIN + BURST + RESPAWN => {
                     let path = self.wisps[i].path;
                     self.wisps[i] = self.spawn(path, now);
                 }
@@ -203,7 +260,13 @@ impl Wisps {
         // MSB -> physics: the player's offset from its MSB spot.
         let to_world = |p: [f32; 3]| [p[0] - msb[0] + player[0], p[1] - msb[1] + player[1], p[2] - msb[2] + player[2]];
         let time = ui.time() as f32;
-        let spots: Vec<([f32; 3], [f32; 3])> = self.wisps.iter().map(|w| {
+        // (cloud centre, ground point) in the world, and the cloud's MSB spot.
+        let spots: Vec<([f32; 3], [f32; 3], [f32; 3])> = self.wisps.iter().map(|w| {
+            if let Some((t, from)) = w.picked {
+                let o = spiral(from, (now - t).as_secs_f32());
+                let c = [player[0] + o[0], player[1] + o[1], player[2] + o[2]];
+                return (c, [c[0], player[1], c[2]], msb);
+            }
             let ground = self.point(w.path, w.along);
             let ahead = self.point(w.path, w.along + 0.5);
             // Sway sideways across the path, bob up and down.
@@ -212,7 +275,7 @@ impl Wisps {
             let sway = SWAY * ((time * 0.35 + w.seed).sin() * 0.7 + (time * 0.9 + w.seed * 1.3).sin() * 0.3);
             let bob = BOB * (time * std::f32::consts::TAU / BOB_PERIOD + w.seed).sin();
             let centre = [ground[0] - dz / n * sway, ground[1] + HOVER + bob, ground[2] + dx / n * sway];
-            (to_world(centre), to_world([centre[0], ground[1], centre[2]]))
+            (to_world(centre), to_world([centre[0], ground[1], centre[2]]), centre)
         }).collect();
         if !self.logged {
             self.logged = true;
@@ -221,7 +284,17 @@ impl Wisps {
             tracing::info!("wisps: {} on the sidewalk paths, nearest {near:.0} m (player at MSB [{:.0}, {:.0}, {:.0}])",
                            self.wisps.len(), msb[0], msb[1], msb[2]);
         }
-        for (w, (p, _)) in self.wisps.iter_mut().zip(&spots) {
+        // Round 23 (H5): behind a wall (off the street's walk area between the player and the wisp), or the player in
+        // a room under the street or in the hedge maze garden: out of sight.
+        use crate::questhelper::{in_garden, in_room};
+        let away = in_room(msb) || in_garden(msb);
+        for (w, s) in self.wisps.iter_mut().zip(&spots) {
+            let seen = w.picked.is_some() || (!away && nav.sees([msb[0], msb[2]], [s.2[0], s.2[2]]));
+            w.unseen = if seen { 0.0 } else { w.unseen + dt };
+            let step = dt / FADE;
+            w.seen = if w.unseen < HIDE_AFTER { (w.seen + step).min(1.0) } else { (w.seen - step).max(0.0) };
+        }
+        for (w, (p, _, _)) in self.wisps.iter_mut().zip(&spots) {
             if w.picked.is_some() || !gameplay {
                 continue;
             }
@@ -231,7 +304,8 @@ impl Wisps {
                 if let Some((from, to)) = g.add_player_stat(fp, self.restore) {
                     tracing::info!("wisps: picked up a {:?} wisp on path {}, {} {from} -> {to}", w.kind, w.path + 1,
                                    if fp { "FP" } else { "HP" });
-                    w.picked = Some(now);
+                    w.picked = Some((now, [p[0] - player[0], p[1] - player[1], p[2] - player[2]]));
+                    w.seen = 1.0;
                     crate::music::play_file(self.folder.join(SOUND));
                 }
             }
@@ -243,62 +317,135 @@ impl Wisps {
         let screen = ui.io().display_size;
         // Far ones first so near ones draw over them.
         let mut order: Vec<(f32, usize)> = spots.iter().enumerate()
-            .filter(|(i, s)| self.wisps[*i].picked.is_none_or(|t| (now - t).as_secs_f32() < BURST)
+            .filter(|(i, s)| self.wisps[*i].picked.is_none_or(|(t, _)| (now - t).as_secs_f32() < SPIN + BURST)
+                && self.wisps[*i].seen > 0.0
                 && ((s.0[0] - player[0]).powi(2) + (s.0[2] - player[2]).powi(2)).sqrt() < DRAW_RANGE)
             .filter_map(|(i, s)| camera.project(s.0, screen).map(|(_, z)| (z, i))).collect();
         order.sort_by(|a, b| b.0.total_cmp(&a.0));
         for (_, i) in order {
-            draw_wisp(&draw, textures, &camera, &self.wisps[i], spots[i], time, now, screen);
+            let w = &self.wisps[i];
+            let picked = w.picked.map(|(t, from)| ((now - t).as_secs_f32(), from));
+            draw_wisp(&draw, textures, &camera, Look { kind: w.kind, seed: w.seed, age: (now - w.born).as_secs_f32(),
+                      picked, seen: w.seen }, (spots[i].0, spots[i].1), time, screen);
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn draw_wisp(draw: &DrawListMut, textures: &Textures, camera: &Camera, w: &Wisp, spot: ([f32; 3], [f32; 3]),
-             time: f32, now: Instant, screen: [f32; 2]) {
+/// What a wisp looks like this frame: kind, its random seed, seconds since it spawned, (seconds since picked up, its
+/// offset from the player then), how much of it is in sight.
+pub struct Look {
+    kind: Kind,
+    seed: f32,
+    age: f32,
+    picked: Option<(f32, [f32; 3])>,
+    seen: f32,
+}
+
+/// Preview (hud_orbs/preview "wisp:<t>"): a health wisp floating at `at` (world) and, when `picked` is given, a mana
+/// wisp picked up that many seconds ago by a player standing at `player` (it was at `at` then).
+pub fn preview(ui: &Ui, textures: &mut Textures, camera: &Camera, player: [f32; 3], at: [f32; 3], picked: Option<f32>,
+               time: f32) {
+    textures.want(CLOUD.iter().chain(SPARK.iter()).chain([GLOW].iter()).map(|n| format!("{DIR}{n}")));
+    let draw = ui.get_background_draw_list();
+    let screen = ui.io().display_size;
+    match picked {
+        None => {
+            let look = Look { kind: Kind::Health, seed: 1.7, age: 10.0, picked: None, seen: 1.0 };
+            draw_wisp(&draw, textures, camera, look, (at, [at[0], player[1], at[2]]), time, screen);
+        }
+        Some(t) => {
+            let from = [at[0] - player[0], at[1] - player[1], at[2] - player[2]];
+            let o = spiral(from, t);
+            let c = [player[0] + o[0], player[1] + o[1], player[2] + o[2]];
+            let look = Look { kind: Kind::Mana, seed: 3.1, age: 10.0, picked: Some((t, from)), seen: 1.0 };
+            draw_wisp(&draw, textures, camera, look, (c, [c[0], player[1], c[2]]), time, screen);
+        }
+    }
+}
+
+fn draw_wisp(draw: &DrawListMut, textures: &Textures, camera: &Camera, w: Look, spot: ([f32; 3], [f32; 3]),
+             time: f32, screen: [f32; 2]) {
     let k = (w.kind == Kind::Mana) as usize;
     let (Some((cloud, _)), Some((spark, _)), Some((glow, _))) = (textures.get(&format!("{DIR}{}", CLOUD[k])),
         textures.get(&format!("{DIR}{}", SPARK[k])), textures.get(&format!("{DIR}{GLOW}"))) else { return };
     let tint = if k == 0 { [1.0, 0.35, 0.3] } else { [0.35, 0.55, 1.0] };
-    let age = (now - w.born).as_secs_f32();
-    let mut alpha = (age / FADE_IN).min(1.0);
+    let mut alpha = (w.age / FADE_IN).min(1.0) * w.seen;
     let mut grow = 1.0;
-    if let Some(t) = w.picked {
-        let f = (now - t).as_secs_f32() / BURST;
-        grow = 1.0 + 1.5 * f;
-        alpha *= (1.0 - f).max(0.0);
-    }
     let centre = spot.0;
+    let tau = std::f32::consts::TAU;
+    let px_at = |z: f32, metres: f32| metres * screen[1] / (2.0 * z * (camera.fov / 2.0).tan());
+    if let Some((t, from)) = w.picked {
+        // Round 23 (H6): the wind ribbon (FX_WispRed_Dsppr's Wind02) trailing the last 0.2 s of the spiral round the
+        // player, and after SPIN s the yellow sparkles leaving (FX_SparkleYllwExit) while the cloud shrinks away.
+        let feet = [centre[0] - spiral(from, t)[0], spot.1[1], centre[2] - spiral(from, t)[2]];
+        let fade = (1.0 - (t - SPIN) / BURST).clamp(0.0, 1.0);
+        for ribbon in 0..2 {
+            let lag = 0.06 * ribbon as f32;
+            let points: Vec<([f32; 2], f32)> = (0..24).filter_map(|i| {
+                let s = (t - lag - 0.2 * i as f32 / 23.0).max(0.0);
+                let o = spiral(from, s.min(SPIN));
+                let r = if ribbon == 0 { 1.0 } else { 11.6 / 17.6 }; // Wind02's outer and inner half rings
+                let p = [feet[0] + o[0] * r, feet[1] + o[1] - 0.12 * ribbon as f32, feet[2] + o[2] * r];
+                camera.project(p, screen).map(|(q, z)| (q, z))
+            }).collect();
+            for (i, pair) in points.windows(2).enumerate() {
+                let a = (1.0 - i as f32 / 23.0) * 0.45 * fade * alpha;
+                let width = px_at(pair[0].1, 0.025).max(1.5);
+                draw.add_line(pair[0].0, pair[1].0, ImColor32::from_rgba_f32s(1.0, 1.0, 1.0, a)).thickness(width).build();
+            }
+        }
+        if t > SPIN {
+            let f = ((t - SPIN) / BURST).clamp(0.0, 1.0);
+            for i in 0..10 {
+                let a = i as f32 / 10.0 * tau + w.seed;
+                let up = 0.4 + 0.5 * ((i * 7 % 10) as f32 / 10.0);
+                let p = [centre[0] + a.cos() * 0.7 * f, centre[1] + up * f, centre[2] + a.sin() * 0.7 * f];
+                let Some((s, sz)) = camera.project(p, screen) else { continue };
+                let r = px_at(sz, SPARKLE * 1.2) / 2.0;
+                draw.add_image(glow, [s[0] - r, s[1] - r], [s[0] + r, s[1] + r])
+                    .col([1.0, 0.92, 0.35, (1.0 - f) * alpha]).build();
+            }
+            grow = 1.0 - 0.8 * f;
+            alpha *= 1.0 - f;
+        }
+    }
+    if alpha <= 0.0 {
+        return;
+    }
     let Some((c, z)) = camera.project(centre, screen) else { return };
-    let px = |metres: f32| metres * screen[1] / (2.0 * z * (camera.fov / 2.0).tan());
+    let px = |metres: f32| px_at(z, metres);
     // Ground glow (GlowShadow): flattened, under the wisp's drift point, not bobbing.
     let ground = [spot.1[0], spot.1[1] + 0.05, spot.1[2]];
     if let Some((g, _)) = camera.project(ground, screen) {
         let (rw, rh) = (px(GROUND) / 2.0, px(GROUND) / 2.0 * 0.35);
         draw.add_image(glow, [g[0] - rw, g[1] - rh], [g[0] + rw, g[1] + rh])
-            .col([tint[0], tint[1], tint[2], 0.45 * alpha]).build();
+            .col([tint[0], tint[1], tint[2], 0.5 * alpha]).build();
     }
-    // Cloud: three puffs turning at their own speeds round the centre (FX_Cloud Main / Add).
-    for i in 0..3 {
+    // Core glow behind the cloud (the bright heart of FX_Wisp's Add cloud).
+    let core = px(CORE) / 2.0 * grow * (1.0 + 0.06 * (time * 2.3 + w.seed).sin());
+    draw.add_image(glow, [c[0] - core, c[1] - core], [c[0] + core, c[1] + core])
+        .col([tint[0] * 0.6 + 0.4, tint[1] * 0.6 + 0.4, tint[2] * 0.6 + 0.4, 0.7 * alpha]).build();
+    // Cloud: PUFFS puffs turning at their own speeds round the centre (FX_Cloud Main / Add).
+    for i in 0..PUFFS {
         let f = i as f32;
-        let turn = time * (0.6 + 0.35 * f) * if i % 2 == 0 { 1.0 } else { -1.0 } + f * 2.1 + w.seed;
-        let off = [px(0.07) * (turn * 0.7).cos(), px(0.05) * (turn * 0.9).sin()];
-        let r = px(PUFF) / 2.0 * grow * (1.0 - 0.15 * f);
+        let turn = time * (0.5 + 0.25 * f) * if i % 2 == 0 { 1.0 } else { -1.0 } + f * 2.1 + w.seed;
+        let off = [px(0.11) * (turn * 0.7 + f).cos(), px(0.08) * (turn * 0.9 + f).sin()];
+        let r = px(PUFF) / 2.0 * grow * (1.0 - 0.1 * f);
         let corner = |a: f32| [c[0] + off[0] + r * 1.414 * a.cos(), c[1] + off[1] + r * 1.414 * a.sin()];
         let q = std::f32::consts::FRAC_PI_4;
         let a = [corner(turn - 3.0 * q), corner(turn - q), corner(turn + q), corner(turn + 3.0 * q)];
-        draw.add_image_quad(cloud, a[0], a[1], a[2], a[3]).col([1.0, 1.0, 1.0, alpha * (0.95 - 0.2 * f)]).build();
+        draw.add_image_quad(cloud, a[0], a[1], a[2], a[3]).col([1.0, 1.0, 1.0, alpha * (0.95 - 0.12 * f)]).build();
     }
     // Sparkles orbiting and twinkling (FX_SparkleBlue / FX_FocusSpark emitters).
-    for i in 0..4 {
+    for i in 0..SPARKLES {
         let f = i as f32;
-        let a = time * 1.4 + f * std::f32::consts::FRAC_PI_2 + w.seed;
-        let rise = ((time * 0.8 + f * 0.37 + w.seed).fract() - 0.5) * 0.5;
-        let p = [centre[0] + 0.32 * grow * a.cos(), centre[1] + rise, centre[2] + 0.32 * grow * a.sin()];
+        let a = time * 1.4 * if i % 2 == 0 { 1.0 } else { -0.8 } + f * tau / SPARKLES as f32 + w.seed;
+        let rise = ((time * 0.8 + f * 0.37 + w.seed).fract() - 0.5) * 0.7;
+        let rad = (0.32 + 0.12 * (i % 3) as f32) * grow;
+        let p = [centre[0] + rad * a.cos(), centre[1] + rise, centre[2] + rad * a.sin()];
         let Some((s, sz)) = camera.project(p, screen) else { continue };
-        let r = SPARKLE * screen[1] / (2.0 * sz * (camera.fov / 2.0).tan()) / 2.0;
+        let r = px_at(sz, SPARKLE) / 2.0;
         let twinkle = 0.5 + 0.5 * (time * 6.0 + f * 1.9 + w.seed).sin();
         draw.add_image(spark, [s[0] - r, s[1] - r], [s[0] + r, s[1] + r]).col([1.0, 1.0, 1.0, alpha * twinkle]).build();
     }
 }
-

@@ -37,8 +37,10 @@ use crate::quests::Active;
 
 pub const LAYOUT: &str = "QuestHelperHud";
 pub const ARROW: &str = "Quest/Quest_Arrow.png";
-/// Round 22 (H2): Wizard101's solid arrow model (tools/w101_quest_arrow.py), under the book folder.
-pub const MESH: &str = "Quest/WC_QuestArrow.tsv";
+/// Round 23 (H1, Ryan: "It should be a flat arrow, and then it's just extended downwards. The one you have is too
+/// fancy"): Wizard101's flat arrow (FX_Quest_Arrow_JT on Quest_Arrow_JT.nif's quad) extruded into a slab by
+/// tools/w101_quest_arrow.py, under the book folder. Round 22's bevelled WC_QuestArrow.tsv is no longer used.
+pub const MESH: &str = "Quest/Quest_Arrow_Slab.tsv";
 pub const SCREEN_H: f32 = 768.0;
 /// Round 22 (H1, Ryan: "the quest description needs to be moved way down, right above the level bar"): the gap
 /// (layout pixels) between txtGoalName's bottom and the experience bar's top.
@@ -408,12 +410,18 @@ impl Nav {
     /// walk graph (a wall, a house, the hedges). Elden Ring has no public ray cast for this game version, so the
     /// street's own walk area stands in for its walls. The first stretch while the player stands off the graph
     /// (steps, a doorway) and the last END metres before the NPC (who may stand at the street's edge) don't count.
+    ///
+    /// Round 23 (H2, Ryan: "all of the name tags appear at once and they all disappear"): one closed sample (a corner
+    /// of the 1.2 m grid, the walk graph's ~1-2 m fit) hid every NPC behind the same corner at once; now a wall must be
+    /// WALL metres thick along the line (two samples or more in a row) to hide anything.
     pub fn sees(&self, a: [f32; 2], b: [f32; 2]) -> bool {
         const STEP: f32 = 0.8;
         const END: f32 = 2.0;
+        const WALL: usize = 3;
         let length = dist(a, b);
         let n = (length / STEP).ceil().max(1.0) as usize;
         let mut started = false;
+        let mut closed = 0;
         for i in 1..n {
             let t = i as f32 / n as f32;
             if length * (1.0 - t) < END {
@@ -422,8 +430,16 @@ impl Nav {
             let p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
             match self.open(p) {
                 None => return true,
-                Some(true) => started = true,
-                Some(false) if started => return false,
+                Some(true) => {
+                    started = true;
+                    closed = 0;
+                }
+                Some(false) if started => {
+                    closed += 1;
+                    if closed >= WALL {
+                        return false;
+                    }
+                }
                 Some(false) => {}
             }
         }

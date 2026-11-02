@@ -27,6 +27,7 @@ python emevd.py --midday m60_42_36_00.emevd out.emevd [first_id second_id]
   always 12:00 (see midday; m60.emevd takes ids 1060002990 1060002991).
 """
 import struct
+import zlib
 class Emevd:
     def __init__(s,d):
         s.d=d; h=struct.unpack_from('<16q',d,0x10)
@@ -172,6 +173,7 @@ CAMERA_PITCH = 5.0  # as common event 950 after its warp
 LOAD_SCREEN_LEAD = 0.75  # seconds between LOAD_SCREEN_FLAG on and the warp, so the HUD's load screen is up first
 FADE = 0.5  # seconds of 2004[77] fade to black before the warp
 ARRIVAL_SETTLE = 1.0  # seconds after the warp before the door listens again
+WELCOME_REARM = 5.0  # round 23 H3: further seconds before an on-foot door's warp turns the welcome message back on
 
 
 MOUNTED_EVENT_OFFSET = 20  # door event id + this = its mounted twin (1042362830-839)
@@ -242,11 +244,18 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS, on_foot=False):
                 body.append(_i(2003, 14, "<BBBBIi", *HOME_MAP, SPAWN_OF[arrival], 0))  # map warp to its spawn point
                 body.append(_i(1001, 0, "<f", MOUNTED_WAIT))
             else:
+                # Round 23 (H3, Ryan: "When you go into the hedge maze, it shouldn't say Unicorn Way again"): the short
+                # warp also announces the arrival's MapNameOverride box (the garden's W101_name_maze, 610900), so the
+                # welcome message is off over the warp, as on the riding branch, and armed again WELCOME_REARM s later.
+                body.append(_i(2012, 8, "<Bxxx", 0))  # area welcome message off: no title card at the arrival
                 body.append(_i(2004, 41, "<IIIi", 10000, 1, arrival, -1))  # short warp to region
                 if arrival in ARRIVAL_YAW:  # camera looking where the arrival faces
                     body.append(_i(2008, 4, "<ff", CAMERA_PITCH, (ARRIVAL_YAW[arrival] + 180.0) % 360.0 - 180.0))
             body.append(_i(2004, 77, "<ffBxxxf", 0.0, 0.0, 0, 0.0))  # lift the fade and the freeze
             body.append(_i(1001, 0, "<f", ARRIVAL_SETTLE))
+            if not riding:
+                body.append(_i(1001, 0, "<f", WELCOME_REARM))
+                body.append(_i(2012, 8, "<Bxxx", 1))  # welcome message on again (graces, the graveyard door card)
             body.append(_i(1000, 4, "<Bxxx", 1))  # End Unconditionally: restart
             events.append({"id": this, "rest": 0, "pars": [], "ins": body})
     return build(e, events)
@@ -790,6 +799,20 @@ if __name__ == "__main__":
         sys.exit()
     if sys.argv[1] == "--garden":  # emevd.py --garden m60_42_36_00.emevd out.emevd (doors of msb_add_garden.py)
         open(sys.argv[3], "wb").write(garden_doors(open(sys.argv[2], "rb").read()))
+        sys.exit()
+    if sys.argv[1] == "--doors":  # emevd.py --doors in.emevd[.dcx] out.emevd[.dcx]: every door warp again (round 23 H3)
+        data = open(sys.argv[2], "rb").read()
+        dcx = data[:4] == b"DCX\0"
+        assert not dcx or data[0x28:0x2C] == b"DFLT", "expected a DFLT-compressed file"
+        raw = zlib.decompress(data[0x4C:]) if dcx else data
+        for doors in (RATTLEBONES_DOORS, GARDEN_DOORS, INTERIOR_DOORS):
+            raw = rattlebones_doors(raw, doors)
+        if dcx:
+            packed = zlib.compress(raw, 9)
+            head = bytearray(data[:0x4C])
+            struct.pack_into(">II", head, 0x1C, len(raw), len(packed))
+            raw = bytes(head) + packed
+        open(sys.argv[3], "wb").write(raw)
         sys.exit()
     if sys.argv[1] == "--interiors":  # emevd.py --interiors in.emevd out.emevd (doors of msb_add_interiors.py)
         open(sys.argv[3], "wb").write(interior_doors(open(sys.argv[2], "rb").read()))

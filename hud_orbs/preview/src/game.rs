@@ -59,6 +59,10 @@ impl Game {
         Ok(())
     }
 
+    pub fn add_player_stat(&self, _fp: bool, _percent: f32) -> Option<(i32, i32)> {
+        None
+    }
+
     pub fn fake() -> Game {
         Game
     }

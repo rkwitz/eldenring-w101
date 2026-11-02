@@ -45,6 +45,10 @@ mod nameplates;
 mod loadscreen;
 #[path = "../../src/teleport.rs"]
 mod teleport;
+#[path = "../../src/wisps.rs"]
+mod wisps;
+#[path = "../../src/goalpopup.rs"]
+mod goalpopup;
 mod input;
 mod game;
 mod live_preview;
@@ -54,6 +58,7 @@ mod music {
     pub fn voice(_page: Option<(&str, usize)>) {}
     pub fn music_setting() -> Option<u8> { None }
     pub fn take_music_setting(_value: u8) -> bool { false }
+    pub fn play_file(_path: std::path::PathBuf) {}
 }
 
 pub(crate) use settings::{save_settings, Settings};
@@ -384,6 +389,16 @@ fn main() {
         ("22f_monsters_and_mazes_card", pages::Tab::Character, 0, [0.0, 0.0], "talk:ceren_nightchant|monsters_and_mazes|offer:9"),
         ("22g_quests_page_pulse", pages::Tab::Quests, 0, [0.0, 0.0], ""),
         ("22h_markers", pages::Tab::Character, 0, [0.0, 0.0], "markers"),
+        // Round 23 (hud H4, H6): a wisp up close (fuller), and the pickup spiral round the player at these seconds.
+        ("23f_wisp_idle", pages::Tab::Character, 0, [0.0, 0.0], "wisp:"),
+        // Round 23 (hud H7): Wizard101's quest popups (WizardPopupText.gui, Quest.lang), shown and fading.
+        ("23l_popup_goal_update", pages::Tab::Character, 0, [0.0, 0.0], "popup:0.5|Goal Update: Defeat Lost Souls 1 of 2"),
+        ("23m_popup_goal_complete", pages::Tab::Character, 0, [0.0, 0.0], "popup:1.0|Goal Complete: Defeat Lost Souls"),
+        ("23n_popup_quest_complete_fading", pages::Tab::Character, 0, [0.0, 0.0], "popup:3.5|Quest Complete: Ghost Hunters"),
+        ("23g_wisp_pickup_0.3", pages::Tab::Character, 0, [0.0, 0.0], "wisp:0.3"),
+        ("23h_wisp_pickup_0.8", pages::Tab::Character, 0, [0.0, 0.0], "wisp:0.8"),
+        ("23i_wisp_pickup_1.4", pages::Tab::Character, 0, [0.0, 0.0], "wisp:1.4"),
+        ("23j_wisp_pickup_1.8", pages::Tab::Character, 0, [0.0, 0.0], "wisp:1.8"),
         ("14a_quest_helper_ahead", pages::Tab::Character, 0, [0.0, 0.0], "turn:0"),
         ("14b_quest_helper_turned_left", pages::Tab::Character, 0, [0.0, 0.0], "turn:-70"),
         ("14c_quest_helper_behind", pages::Tab::Character, 0, [0.0, 0.0], "turn:150"),
@@ -425,8 +440,11 @@ fn main() {
         }
         *game::CLOSE.lock().unwrap() = None;
         *game::TURN.lock().unwrap() = show.strip_prefix("turn:").and_then(|t| t.parse::<f32>().ok()).unwrap_or(0.0).to_radians();
-        if show.starts_with("turn:") {
+        if show.starts_with("turn:") || show.starts_with("popup:") {
             book.preview_closed();
+        }
+        if let Some((age, text)) = show.strip_prefix("popup:").and_then(|p| p.split_once('|')) {
+            book.popups.preview(text, age.parse().unwrap_or(0.0));
         }
         if let Some(at) = show.strip_prefix("markers") {
             book.preview_closed();
@@ -448,7 +466,7 @@ fn main() {
             book.preview_recipe(r.parse().unwrap(), true);
         }
         let load = show.strip_prefix("load:");
-        if load.is_some() || show.starts_with("poof") {
+        if load.is_some() || show.starts_with("poof") || show.starts_with("wisp:") {
             book.preview_closed();
         }
         if let Some(tab) = show.strip_prefix("settings:") {
@@ -496,6 +514,7 @@ fn main() {
             if !show.starts_with("poof") {
                 book.draw_markers(ui, &cx);
                 book.draw_quest_helper(ui, &cx);
+                book.draw_goal_popup(ui, &cx);
                 book.draw_nameplates(ui, &cx);
             }
             // Round 22 (H1, H4): the experience bar where lib.rs draws it (its frame art copied to
@@ -508,6 +527,21 @@ fn main() {
                     let top = talk::xp_bar_top([width, height], 1.0);
                     ui.get_foreground_draw_list().add_image(t, [(width - w) / 2.0, top], [(width + w) / 2.0, top + h]).build();
                 }
+            }
+            if let Some(t) = show.strip_prefix("wisp:") {
+                // Round 23 (H4, H6): the poof's camera at (0, 1.55, -3.4) looking at (0, 0.95, 0); the player's feet at
+                // the origin; the wisp drifting 0.9 m to the side.
+                let (pos, look) = ([0.0f32, 1.55, -3.4], [0.0f32, 0.95, 0.0]);
+                let f = [look[0] - pos[0], look[1] - pos[1], look[2] - pos[2]];
+                let l = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt();
+                let f = [f[0] / l, f[1] / l, f[2] / l];
+                let r = [f[2], 0.0, -f[0]];
+                let rl = (r[0] * r[0] + r[2] * r[2]).sqrt();
+                let r = [r[0] / rl, 0.0, r[2] / rl];
+                let u = [f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]];
+                let camera = markers::Camera { matrix: [[r[0], r[1], r[2], 0.0], [u[0], u[1], u[2], 0.0], [f[0], f[1], f[2], 0.0],
+                                                        [pos[0], pos[1], pos[2], 1.0]], fov: 48f32.to_radians(), player: [0.0; 3] };
+                wisps::preview(ui, &mut book.textures, &camera, [0.0; 3], [0.9, 0.9, 0.3], t.parse::<f32>().ok(), 2.0);
             }
             if let Some(t) = show.strip_prefix("poof:").and_then(|t| t.parse::<f32>().ok()) {
                 // The camera of tools/w101_poof_reference.py: at (0, 1.55, -3.4)
