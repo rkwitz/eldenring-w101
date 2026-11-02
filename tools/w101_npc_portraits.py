@@ -5,36 +5,31 @@ markers::er_portraits uses them in place of the Wizard101 picture). Personal art
 How:
 - The heads are drawn by the book's own software FLVER renderer (hud_orbs/src/model.rs) through the preview binary
   `npc_portrait` (cargo build --release --bin npc_portrait in hud_orbs/preview), posed with the book's idle pose.
-- The c0000 NPCs wear their CharaInitParam equipment (vanilla regulation, read with er_params.py): Private Connelly
-  and Private O'Ryan row 6194 (head/body/arms/legs model 2350), Ceren Nightchant 6164 (head/body 2130), Olivia
-  Dawnwillow 23201 (body/arms/legs 1390, female), with each armour's invisibleFlag_SexVerNN bits (HIDE below) and
-  FaceParam hair (row 1: hair 101 55,45,35; row 23200: hair 105 233,219,151).
-- Lady Oriel is Melina (c2180): her chrbnd FLVER with her c2180_h textures, packed as a part. model.rs picks a
-  mesh's albedo by the material's "P[NAME]" and a word of it, so each material path "C[c2180]_<name>" is rewritten in
-  place (same length) to "P[c2180]_<token>" and the textures renamed "c2180_<token>_a"; her hair (tinted in the
-  shader, no albedo) gets a flat texture of her eyebrows' colour; the eye occlusion shell is named "shadow" (left
-  out by model.rs).
+- The c0000 NPCs wear their CharaInitParam equipment (vanilla regulation, read with er_params.py) with each
+  armour's invisibleFlag_SexVerNN bits (HIDE below) and their FaceParam hair and beard.
+- Characters with their own model (chr) are packed as a part: the chrbnd FLVER with its _h textures. model.rs picks
+  a mesh's albedo by the material's "P[NAME]" and a word of it, so each material path "C[cXXXX]_<name>" is rewritten
+  in place (same length) to "P[cXXXX]_<token>" and the textures renamed "cXXXX_<token>_a"; a material without an
+  albedo gets a flat colour, and one left out is named "shadow" (model.rs skips it). These are drawn in their bind
+  pose (the idle pose is the c0000 skeleton's).
 - The background: Wizard101's NpcPortraits pictures (128 px) all share the gold ring (radius >= 51.5 px; their
   per-pixel median is used) and a painted blue inside it, here a quadratic in x, y fitted to the blue pixels of six
   of them. Output 256 px (Wizard101 shows its 128 px portraits scaled up in the 180-unit imgPortrait the same way).
 
-Usage (cloud container: needs Pillow, numpy and an `ooz` command-line build for DCX KRAK):
+Usage (cloud container: needs Pillow, numpy and pyooz):
   python3 -I w101_npc_portraits.py <ooz> <ELDEN RING\\Game> <book\\art\\GUI\\NpcPortraits> <book\\er\\idle_pose.tsv>
                                    <npc_portrait binary> <out folder>
-Files read from Game: parts\\{fc_m_0000,fc_f_0000,fg_a_0100,fg_a_1500,hd_m_2350,bd_m_2350,am_m_2350,lg_m_2350,
-hd_m_2130,bd_m_2130,bd_f_1390,am_m_1390,lg_m_1390,hr_a_0101,hr_a_0105}_l.partsbnd.dcx, chr\\c2180.chrbnd.dcx,
-chr\\c2180_h.texbnd.dcx.
+Files read from Game: parts\\<PARTS>_l.partsbnd.dcx, chr\\<CHRS>.chrbnd.dcx and chr\\<CHRS>_h.texbnd.dcx.
+ooz: unused (DCX KRAK is read by dcx_krak.py with pyooz); the argument is kept for the old command line.
 
-Round 24 (N1): the stand-ins changed (w101_quests.BERNAHL ...) and these portraits are NOT regenerated yet: the game's
-chr/parts folders were out of reach this round. New looks (vanilla CharaInitParam / EquipParamProtector equipModelId):
-  private_connelly / private_oryan: Knight Bernahl 23260 (no helm, bd_m_1331, am_m_1330, lg_m_1330; FaceParam 23260)
-    and Castellan Edgar 23110 (no helm, bd_m_1652, am_m_1650, lg_m_1650; FaceParam 23110): O'Ryan is no longer
-    Connelly's copy (SAME_LOOK)
-  ceren_nightchant: Corhyn 23510 (hd_m_1240 blindfold, bd_m_1240 robe, lg_m_1240; no gauntlets; FaceParam 23510)
-  olivia_dawnwillow: Finger Reader Enia, chr c2170 (+ c2170_h.texbnd); lady_oriel: St. Trina, chr c5330 (+ _h)
-  Needs from Game: parts\{bd_m_1331,am_m_1330,lg_m_1330,bd_m_1652,am_m_1650,lg_m_1650,hd_m_1240,bd_m_1240,
-  lg_m_1240}_l.partsbnd.dcx, chr\c2170.chrbnd.dcx, chr\c2170_h.texbnd.dcx, chr\c5330.chrbnd.dcx,
-  chr\c5330_h.texbnd.dcx; melina_part() then generalised from c2180 to any chr (its material renaming is per model).
+Round 24 (N1, Ryan's picks; w101_quests.BERNAHL ...): the stand-ins are now (vanilla CharaInitParam /
+EquipParamProtector equipModelId and invisibleFlag_SexVerNN, FaceParam hair_partsId -> hr_a_<id>, eyebrow_partsId
+-> fg_a_20<id>, beard_partsId -> fg_a_30<id>, all three drawn in the hair colour by hud_orbs model.rs):
+  private_connelly: Knight Bernahl 23260 (no helm, bd_m_1331, am_m_1330, lg_m_1330; hair 9, brow 5, beard 6, 79,69,59)
+  private_oryan: Castellan Edgar 23110 (no helm, bd_m_1652, am_m_1650, lg_m_1650; hair 5, brow 3, beard 2, 115,108,80)
+  ceren_nightchant: Brother Corhyn 23510 (hd_m_1240, bd_m_1240, lg_m_1240; hair 112, brow 6, 233,223,175)
+  olivia_dawnwillow: Finger Reader Enia c2170; lady_oriel: St. Trina c5330 (chrbnd + _h.texbnd, packed as a part by
+  chr_part with a per-model material -> texture table, CHRS).
 """
 import os
 import shutil
@@ -42,50 +37,55 @@ import struct
 import subprocess
 import sys
 import tempfile
-from io import BytesIO
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent))
+from dcx_krak import decompress  # noqa: E402
 from er_text import bnd4  # noqa: E402
 
 # invisibleFlag_SexVerNN bits of the worn armour (EquipParamProtector rows of the CharaInitParam row)
-HIDE_6194 = [3, 4, 32, 34, 37, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 75, 76, 79, 95, 5, 6, 7, 8, 9, 10, 19, 20, 21,
-             40, 41, 43, 44, 46, 48, 49, 50, 51, 54, 55, 56, 57, 59, 70, 73, 77, 11, 13, 18, 24, 26, 28, 29, 31, 12, 14,
-             15, 16, 72]
-HIDE_6164 = [32, 34, 37, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 75, 76, 5, 6, 7, 8, 9, 19, 20, 21, 40, 42, 43, 45, 46,
-             48, 49, 50, 51, 53, 54, 55, 56, 57, 58, 59, 73, 77, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94]
-HIDE_23201 = [5, 6, 7, 8, 9, 19, 20, 21, 41, 42, 43, 45, 47, 48, 49, 50, 51, 54, 55, 56, 57, 59, 67, 68, 69, 73, 77, 11,
-              13, 18, 24, 26, 28, 29, 31, 12, 14, 15, 16, 72]
-# (slug, parts set, sex, hide, hair, hair colour, view (centre, height m), armour stems)
+HIDE_23260 = [6, 7, 8, 9, 19, 20, 21, 41, 42, 43, 45, 46, 47, 49, 50, 52, 54, 55, 57, 59, 66, 68, 69, 70, 73, 77, 11,
+              13, 18, 25, 26, 28, 29, 30, 12, 14, 15, 16, 72]
+HIDE_23510 = [17, 23, 33, 37, 60, 61, 64, 65, 75, 19, 21, 40, 41, 42, 44, 46, 47, 48, 50, 51, 53, 54, 55, 56, 57, 58,
+              59, 66, 67, 68, 70, 73, 77, 12, 72]
+HIDE_23110 = [6, 7, 8, 9, 10, 19, 20, 21, 40, 41, 42, 45, 46, 48, 49, 50, 51, 53, 55, 57, 59, 66, 68, 69, 70, 73, 77,
+              81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 11, 13, 18, 24, 26, 28, 29, 30, 12, 14, 15, 16, 72]
+# (slug, parts set, sex, hide, hair, hair colour, view (centre, height m), armour stems (+ eyebrows fg_a_20NN, beard
+# fg_a_30NN), the face in the render (None: centred; else render size, centre x, y px: Trina sleeps on her side
+# 0.27 m left of her root, so a wider render at the same scale is cut round her face))
 NPCS = [
-    ("private_connelly", "parts", "m", HIDE_6194, "101", "55,45,35", "1.6,0.45", ["hd_m_2350", "bd_m_2350", "am_m_2350", "lg_m_2350"]),
-    ("ceren_nightchant", "parts", "m", HIDE_6164, "101", "55,45,35", "1.57,0.45", ["hd_m_2130", "bd_m_2130"]),
-    ("olivia_dawnwillow", "parts", "f", HIDE_23201, "105", "233,219,151", "1.53,0.45", ["bd_m_1390", "am_m_1390", "lg_m_1390"]),
-    ("lady_oriel", "melina", "f", None, "-", "0,0,0", "1.53,0.42", ["c2180"]),
+    ("private_connelly", "parts", "m", HIDE_23260, "9", "79,69,59", "1.6,0.45", ["bd_m_1331", "am_m_1330", "lg_m_1330", "fg_a_2005", "fg_a_3006"], None),
+    ("private_oryan", "parts", "m", HIDE_23110, "5", "115,108,80", "1.6,0.45", ["bd_m_1652", "am_m_1650", "lg_m_1650", "fg_a_2003", "fg_a_3002"], None),
+    ("ceren_nightchant", "parts", "m", HIDE_23510, "112", "233,223,175", "1.6,0.45", ["hd_m_1240", "bd_m_1240", "lg_m_1240", "fg_a_2006"], None),
+    ("olivia_dawnwillow", "c2170", "f", None, "-", "0,0,0", "1.86,0.7", ["c2170"], None),
+    ("lady_oriel", "c5330", "f", None, "-", "0,0,0", "1.25,1.1", ["c5330"], (600, 206, 344)),
 ]
-SAME_LOOK = {"private_oryan": "private_connelly"}  # same CharaInitParam row
-PARTS = ["fc_m_0000", "fc_f_0000", "fg_a_0100", "fg_a_1500", "hd_m_2350", "bd_m_2350", "am_m_2350", "lg_m_2350",
-         "hd_m_2130", "bd_m_2130", "bd_f_1390", "am_m_1390", "lg_m_1390", "hr_a_0101", "hr_a_0105"]
+PARTS = ["fc_m_0000", "fg_a_0100", "fg_a_1500", "bd_m_1331", "am_m_1330", "lg_m_1330", "bd_m_1652", "am_m_1650",
+         "lg_m_1650", "hd_m_1240", "bd_m_1240", "lg_m_1240", "hr_a_0009", "hr_a_0005", "hr_a_0112", "fg_a_2003",
+         "fg_a_2005", "fg_a_2006", "fg_a_3002", "fg_a_3006"]
+# Each chr's materials -> the cXXXX_<x>_a texture it uses (a tuple: a flat colour; None: left out)
+CHRS = {
+    "c2170": {
+        "Body": "Body", "Fabric": "Fabric", "Fabric_cloth": "Fabric", "Fraying": "Fraying",
+        "Fraying_cloth": "Fraying", "Hair": (200, 196, 186), "Metal": "Body", "WP_Wand": "WP_Wand",
+    },
+    "c5330": {
+        "Eyebrow": "Eyebrow", "Eyelash": "Eyelash", "Eyelash_Under": "Eyelash", "Fabric": "Trina_Body",
+        "Face": "Face", "Hair_glow": None, "Hair_glow_quick": None, "Hair_glow_slow": None,
+        "Hair_model": "Hair_model", "Hair_model_back": "Hair_model", "Mouse": "Mouth", "Plant_Body": "Plant_Body",
+        "Plant_Body_2": "Plant_Parts", "Plant_Body_Veil": "Petal_color", "Trina_Body": "Trina_Body",
+        "stem": "Plant_Parts",
+    },
+}
 W101 = ["Human_WCGuard_A", "Human_WCGuard_B", "Art_Portrait_Boy_Life02", "Human_WCShopKeepF_A_NPC",
         "Portrait_Seraph_Aerial_B_NPC", "Portrait_Owl_Gamma_A_NPC"]
 YAW = "0.3"
+YAWS = {"olivia_dawnwillow": "0", "lady_oriel": "-0.6"}  # facing the camera
 RENDER = 300
 SIDE = 256
-
-
-def undcx(ooz, path, tmp):
-    """The payload of a DCX KRAK file (ooz CLI: an 8-byte size header then the stream)."""
-    b = Path(path).read_bytes()
-    size, packed = struct.unpack_from(">II", b, 0x1C)
-    src, dst = Path(tmp) / "x.krak", Path(tmp) / "x.out"
-    src.write_bytes(struct.pack("<Q", size) + b[0x4C:0x4C + packed])
-    subprocess.run([ooz, "-d", "-f", str(src), str(dst)], check=True, capture_output=True)
-    out = dst.read_bytes()
-    assert len(out) == size, path
-    return out
 
 
 def make_bnd4(entries):
@@ -147,32 +147,23 @@ def dxt1_solid(rgb, side=16):
     return bytes(head) + struct.pack("<HHI", c, c, 0) * ((side // 4) ** 2)
 
 
-# Melina's materials -> the c2180_<x>_a texture each uses (None: left out)
-MELINA = {
-    "AM_Gloves": "am", "Stitch": "bd_stitch", "BD_Fabrick_Robe": "bd", "BD_Fabrick_Inner": "bd", "BD_Metal": "bd",
-    "BD_Mant_Fabric": "bd_mant", "BD_Mant_Metal": "bd_mant", "BD_Fabrick_Robe_cloth": "bd",
-    "BD_Fabrick_Inner_cloth": "bd", "BD_Mant_Fabric_cloth": "bd_mant", "Hair_ba1": "hair", "Hair_bu1": "hair",
-    "LG_Pants": "lg", "LG_Boots": "lg", "Face_SSS": "face", "Body_SSS": "body", "Eye": "eye",
-    "Eye_Occulusion": None, "Mouse_SSS": "mouth", "Eyelash": "eyelash",
-}
-
-
-def melina_part(chrbnd, texbnd):
+def chr_part(cid, chrbnd, texbnd):
     flver = bytearray(next(d for n, d in bnd4(chrbnd).items() if n.lower().endswith(".flver")))
     tpf = next(iter(bnd4(texbnd).values()))
-    tex = sorted({t for t in MELINA.values() if t})
+    table = CHRS[cid]
+    tex = sorted({t for t in table.values() if t}, key=str)
     token = {t: "q" + chr(ord("a") + i) for i, t in enumerate(tex)}
-    for name, t in MELINA.items():
-        old = f"C[c2180]_{name}.matxml".encode("utf-16-le")
-        body = token[t] if t else "shadow"
-        new = f"P[c2180]_{body + '_' * (len(name) - len(body))}.matxml".encode("utf-16-le")
-        flver = flver.replace(old, new)
+    for name, t in table.items():
+        # Left out: the folder "matxml" becomes "shadow" (same length), which model.rs skips.
+        old = f"matxml\\C[{cid}]_{name}.matxml".encode("utf-16-le")
+        body = token[t] if t else "z" * len(name)
+        new = f"{'matxml' if t else 'shadow'}\\P[{cid}]_{body + '_' * (len(name) - len(body))}.matxml"
+        assert old in flver and len(new) * 2 == len(old), (cid, name)
+        flver = flver.replace(old, new.encode("utf-16-le"))
     by = {n.lower(): d for n, d in tpf_entries(tpf)}
-    brow = Image.open(BytesIO(by["c2180_eyebrow_a"])).convert("RGBA")
-    px = np.asarray(brow).reshape(-1, 4)
-    hair = tuple(int(v) for v in px[px[:, 3] > 128][:, :3].mean(0))
-    textures = [(f"c2180_{token[t]}_a", by[f"c2180_{t}_a"] if t != "hair" else dxt1_solid(hair)) for t in tex]
-    return make_bnd4([("c2180.flver", bytes(flver)), ("c2180.tpf", make_tpf(textures))])
+    textures = [(f"{cid}_{token[t]}_a", dxt1_solid(t) if isinstance(t, tuple) else by[f"{cid}_{t}_a".lower()])
+                for t in tex]
+    return make_bnd4([(f"{cid}.flver", bytes(flver)), (f"{cid}.tpf", make_tpf(textures))])
 
 
 def background(portraits):
@@ -192,7 +183,7 @@ def background(portraits):
     return np.median(ims, 0), coef
 
 
-def compose(ring, coef, render):
+def compose(ring, coef, render, crop=None):
     k = SIDE / 128.0
     yy, xx = np.mgrid[0:SIDE, 0:SIDE]
     x, y = (xx + 0.5) / k - 0.5, (yy + 0.5) / k - 0.5
@@ -201,8 +192,8 @@ def compose(ring, coef, render):
     canvas[..., :3] = np.clip(X @ coef, 0, 255)
     r = np.hypot(x - 63.5, y - 63.5)
     face = np.asarray(Image.open(render).convert("RGBA")).astype(float)
-    o = (face.shape[0] - SIDE) // 2
-    face = face[o:o + SIDE, o:o + SIDE]
+    cx, cy = (face.shape[1] // 2, face.shape[0] // 2) if crop is None else crop[1:]
+    face = face[cy - SIDE // 2:cy + SIDE // 2, cx - SIDE // 2:cx + SIDE // 2]
     a = face[..., 3:4] / 255.0 * np.clip(52.0 - r, 0, 1)[..., None]
     canvas[..., :3] = canvas[..., :3] * (1 - a) + face[..., :3] * a
     ring_px = np.asarray(Image.fromarray(ring.astype(np.uint8), "RGBA").resize((SIDE, SIDE), Image.BICUBIC)).astype(float)
@@ -213,29 +204,30 @@ def compose(ring, coef, render):
 
 
 def main():
-    ooz, game, portraits, idle, binary, out = sys.argv[1:7]
+    _ooz, game, portraits, idle, binary, out = sys.argv[1:7]
     game, portraits, out = Path(game), Path(portraits), Path(out)
     out.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="npc_portraits_"))
     try:
         (work / "parts").mkdir()
-        (work / "melina").mkdir()
         for p in PARTS:
-            (work / "parts" / f"{p}_l.partsbnd.dcx").write_bytes(undcx(ooz, game / "parts" / f"{p}_l.partsbnd.dcx", work))
-        part = melina_part(undcx(ooz, game / "chr" / "c2180.chrbnd.dcx", work),
-                           undcx(ooz, game / "chr" / "c2180_h.texbnd.dcx", work))
-        (work / "melina" / "c2180_l.partsbnd.dcx").write_bytes(part)
+            (work / "parts" / f"{p}_l.partsbnd.dcx").write_bytes(
+                decompress((game / "parts" / f"{p}_l.partsbnd.dcx").read_bytes()))
+        for cid in CHRS:
+            (work / cid).mkdir()
+            part = chr_part(cid, decompress((game / "chr" / f"{cid}.chrbnd.dcx").read_bytes()),
+                            decompress((game / "chr" / f"{cid}_h.texbnd.dcx").read_bytes()))
+            (work / cid / f"{cid}_l.partsbnd.dcx").write_bytes(part)
         ring, coef = background(portraits)
         env = dict(os.environ, IDLE=idle)
-        for slug, folder, sex, hide, hair, rgb, view, armour in NPCS:
+        for slug, folder, sex, hide, hair, rgb, view, armour, crop in NPCS:
             render = work / f"{slug}.png"
             bits = ".".join(map(str, hide)) if hide else "-"
-            subprocess.run([binary, str(work / folder), str(render), sex, bits, hair, rgb, view, YAW, str(RENDER),
-                            *armour], env=env, check=True)
-            compose(ring, coef, render).save(out / f"{slug}.png")
-            print(out / f"{slug}.png")
-        for slug, same in SAME_LOOK.items():
-            shutil.copyfile(out / f"{same}.png", out / f"{slug}.png")
+            subprocess.run([binary, str(work / folder), str(render), sex, bits, hair, rgb, view, YAWS.get(slug, YAW),
+                            str(crop[0] if crop else RENDER), *armour], env=env, check=True)
+            compose(ring, coef, render, crop).save(out / f"{slug}.png")
+            if os.environ.get("KEEP"):
+                shutil.copyfile(render, out / f"{slug}.raw.png")
             print(out / f"{slug}.png")
     finally:
         shutil.rmtree(work, ignore_errors=True)

@@ -46,14 +46,20 @@ const TILE: [i32; 2] = [42, 36];
 ///
 /// Round 24 (N1, Ryan's picks; tools/w101_quests.py BERNAHL ...): Connelly = Knight Bernahl, Ceren = Brother Corhyn,
 /// O'Ryan = Castellan Edgar (all c0000 in their own looks), Olivia = Finger Reader Enia (c2170), Lady Oriel = St.
-/// Trina (c5330). The plate/marker heights are the old ones (c0000 1.9 / 2.38; Enia and Trina take Olivia's and
-/// Melina's woman-sized values): not yet measured on the new bodies (no game chr files in reach this round).
+/// Trina (c5330). Heights measured the round 18 way (plate = seen top + 0.21; marker = 1.53 x head bone, and at least
+/// plate + 0.48, the c0000 gap, so the sign never sits on the name):
+/// - Bernahl / Corhyn / Edgar (npc_portrait renders in the book's idle pose): hair / blindfold top 1.69 / 1.69 / 1.72
+///   m, head bone about 1.55 -> plates 1.9 / 1.9 / 1.93, markers 2.38 / 2.38 / 2.41.
+/// - Enia (tools/er_chr_height.py, idle a000_000020): head bone 1.96, hood top 2.19 (bind mesh top 2.14 over bind
+///   head 1.91) -> plate 2.4, marker 3.0.
+/// - Trina: a small girl asleep on her side inside tall flowers: head bone 1.22, but the flowers reach 1.97 (mesh top
+///   and highest bone Flower_B103) -> plate 2.18 over the flowers, marker 2.66 (plate + 0.48).
 pub const NPCS: [(&str, &str, u32, u32, [f32; 3], f32, f32); 5] = [
     ("private_connelly", "Private Connelly", 1042360820, 0, [5.0029, 94.1828, -44.0778], 1.9, 2.38),
     ("ceren_nightchant", "Ceren Nightchant", 1042360821, 0, [-84.8379, 94.4878, -18.4484], 1.9, 2.38),
-    ("olivia_dawnwillow", "Olivia Dawnwillow", 1042360822, 2170, [-65.8655, 92.8248, -7.9762], 1.85, 2.3),
-    ("lady_oriel", "Lady Oriel", 1042360823, 5330, [-336.1025, 93.4988, 105.5051], 1.9, 2.3),
-    ("private_oryan", "Private O'Ryan", 1042360824, 0, [-160.8270, 93.4878, -54.0237], 1.9, 2.38),
+    ("olivia_dawnwillow", "Olivia Dawnwillow", 1042360822, 2170, [-65.8655, 92.8248, -7.9762], 2.4, 3.0),
+    ("lady_oriel", "Lady Oriel", 1042360823, 5330, [-336.1025, 93.4988, 105.5051], 2.18, 2.66),
+    ("private_oryan", "Private O'Ryan", 1042360824, 0, [-160.8270, 93.4878, -54.0237], 1.93, 2.41),
 ];
 /// Their models and entity IDs, for Game::entities.
 pub const MODELS: [u32; 3] = [0, 2170, 5330];
