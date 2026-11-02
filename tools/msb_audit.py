@@ -45,7 +45,7 @@ TREASURE, MOUNT, RETRY_POINT = 4, 21, 24  # event types
 GARDEN, ROOMS = "AEG030_555_9000", ("AEG030_519_9000", "AEG030_519_9001", "AEG030_557_9000")
 GARDEN_RADIUS, GARDEN_BELOW = 70.0, 20.0  # the maze is ~80 m across; vanilla ground under it is 70 m lower
 ROOM_RADIUS = 35.0
-OUR_ENTITIES = range(1042360850, 1042360950)  # msb_add_boss (850-853) and msb_add_mobs (860 and up)
+OUR_ENTITIES = range(1042360820, 1042360950)  # w101_quests NPCs (820-849), msb_add_boss (850-853), msb_add_mobs (860 up)
 HELPERS = ("c1000",)  # invisible event characters: no model, no runes
 KIND = {2: "enemy", 9: "dummy asset", 10: "dummy enemy", 13: "asset"}
 # Animals that fly over the street (Ryan, 2026-10-26: "I can see Elden Ring birds"): Smithbox aliases c6001 Eagle,
