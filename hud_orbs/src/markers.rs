@@ -43,15 +43,20 @@ const TILE: [i32; 2] = [42, 36];
 /// stand-in by the Wizard City guard's proportion (ChatNode 290 units over the feet / head bone 189.2 = 1.53, times
 /// the stand-in's head bone: c0000 about 1.55 m, Melina 1.5 m), which leaves the sign just over the name. Round 17
 /// used the Seraph's proportion (285.9 / 152.4) for Melina, a winged creature twice her size.
+///
+/// Round 24 (N1, Ryan's picks; tools/w101_quests.py BERNAHL ...): Connelly = Knight Bernahl, Ceren = Brother Corhyn,
+/// O'Ryan = Castellan Edgar (all c0000 in their own looks), Olivia = Finger Reader Enia (c2170), Lady Oriel = St.
+/// Trina (c5330). The plate/marker heights are the old ones (c0000 1.9 / 2.38; Enia and Trina take Olivia's and
+/// Melina's woman-sized values): not yet measured on the new bodies (no game chr files in reach this round).
 pub const NPCS: [(&str, &str, u32, u32, [f32; 3], f32, f32); 5] = [
     ("private_connelly", "Private Connelly", 1042360820, 0, [5.0029, 94.1828, -44.0778], 1.9, 2.38),
     ("ceren_nightchant", "Ceren Nightchant", 1042360821, 0, [-84.8379, 94.4878, -18.4484], 1.9, 2.38),
-    ("olivia_dawnwillow", "Olivia Dawnwillow", 1042360822, 0, [-65.8655, 92.8248, -7.9762], 1.85, 2.3),
-    ("lady_oriel", "Lady Oriel", 1042360823, 2180, [-336.1025, 93.4988, 105.5051], 1.9, 2.3),
+    ("olivia_dawnwillow", "Olivia Dawnwillow", 1042360822, 2170, [-65.8655, 92.8248, -7.9762], 1.85, 2.3),
+    ("lady_oriel", "Lady Oriel", 1042360823, 5330, [-336.1025, 93.4988, 105.5051], 1.9, 2.3),
     ("private_oryan", "Private O'Ryan", 1042360824, 0, [-160.8270, 93.4878, -54.0237], 1.9, 2.38),
 ];
 /// Their models and entity IDs, for Game::entities.
-pub const MODELS: [u32; 2] = [0, 2180];
+pub const MODELS: [u32; 3] = [0, 2170, 5330];
 pub fn entity_ids() -> Vec<u32> {
     NPCS.iter().map(|n| n.2).collect()
 }

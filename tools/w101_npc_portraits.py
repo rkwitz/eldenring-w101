@@ -24,6 +24,17 @@ Usage (cloud container: needs Pillow, numpy and an `ooz` command-line build for 
 Files read from Game: parts\\{fc_m_0000,fc_f_0000,fg_a_0100,fg_a_1500,hd_m_2350,bd_m_2350,am_m_2350,lg_m_2350,
 hd_m_2130,bd_m_2130,bd_f_1390,am_m_1390,lg_m_1390,hr_a_0101,hr_a_0105}_l.partsbnd.dcx, chr\\c2180.chrbnd.dcx,
 chr\\c2180_h.texbnd.dcx.
+
+Round 24 (N1): the stand-ins changed (w101_quests.BERNAHL ...) and these portraits are NOT regenerated yet: the game's
+chr/parts folders were out of reach this round. New looks (vanilla CharaInitParam / EquipParamProtector equipModelId):
+  private_connelly / private_oryan: Knight Bernahl 23260 (no helm, bd_m_1331, am_m_1330, lg_m_1330; FaceParam 23260)
+    and Castellan Edgar 23110 (no helm, bd_m_1652, am_m_1650, lg_m_1650; FaceParam 23110): O'Ryan is no longer
+    Connelly's copy (SAME_LOOK)
+  ceren_nightchant: Corhyn 23510 (hd_m_1240 blindfold, bd_m_1240 robe, lg_m_1240; no gauntlets; FaceParam 23510)
+  olivia_dawnwillow: Finger Reader Enia, chr c2170 (+ c2170_h.texbnd); lady_oriel: St. Trina, chr c5330 (+ _h)
+  Needs from Game: parts\{bd_m_1331,am_m_1330,lg_m_1330,bd_m_1652,am_m_1650,lg_m_1650,hd_m_1240,bd_m_1240,
+  lg_m_1240}_l.partsbnd.dcx, chr\c2170.chrbnd.dcx, chr\c2170_h.texbnd.dcx, chr\c5330.chrbnd.dcx,
+  chr\c5330_h.texbnd.dcx; melina_part() then generalised from c2180 to any chr (its material renaming is per model).
 """
 import os
 import shutil

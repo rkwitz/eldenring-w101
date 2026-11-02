@@ -98,20 +98,32 @@ NPC_INDEX = {slug: k for k, (slug, *_rest) in enumerate(NPCS)}
 # faces the Hub arrival point (0.98); round 15's (-sin yaw, +cos yaw) mirrored every facing across the x axis.
 # O'Ryan's yaw: facing out of house H1's door, towards the "Street 1 House 1 Exit" location (-12463.1, 8646.2).
 HUMAN_THINK, HUMAN_NPC = 523011000, 523010010
+# Round 24 (N1, Ryan's picks): the stand-ins are now these vanilla NPCs, their own rows (vanilla regulation, Smithbox
+# row names; the base row of each: team 26 = friendly NPC, no item lot, no extra SpEffect): (Think, NpcParam,
+# CharaInitParam). c0000 humans wear their CharaInit row's look; c2170 / c5330 are their own models (CharaInit -1).
+#   Private Connelly = Knight Bernahl (Beast Champion armour, row 23260), Ceren Nightchant = Brother Corhyn (Scribe
+#   Corhyn's rows; Corhyn's Robe, 23510), Private O'Ryan = Castellan Edgar (23110, named "Edgar the Revenger" by
+#   Smithbox: the only Edgar look row), Olivia Dawnwillow = Finger Reader Enia (c2170), Lady Oriel = St. Trina (c5330).
+# Rounds 15-23: Varre's rows with the 6194 / 6164 / 23201 looks and Melina (c2180 21800000).
+BERNAHL = (523260000, 523260000, 23260)
+CORHYN = (523510000, 523510000, 23510)
+EDGAR = (523110000, 523110000, 23110)
+ENIA = (21700000, 21700000, -1)
+TRINA = (53300000, 53300000, -1)
 CHARACTERS = [
     ("private_connelly", "Private Connelly", "street", (26.543, 0.184, 22.200), 55.86, "c0000",
-     HUMAN_THINK, HUMAN_NPC, 6194, 1042360820),
+     *BERNAHL, 1042360820),
     ("ceren_nightchant", "Ceren Nightchant", "street", (-41.857, 0.489, 85.837), -24.23, "c0000",
-     HUMAN_THINK, HUMAN_NPC, 6164, 1042360821),
-    ("olivia_dawnwillow", "Olivia Dawnwillow", "street", (-20.198, -1.174, 86.550), -177.30, "c0000",
-     HUMAN_THINK, HUMAN_NPC, 23201, 1042360822),
+     *CORHYN, 1042360821),
+    ("olivia_dawnwillow", "Olivia Dawnwillow", "street", (-20.198, -1.174, 86.550), -177.30, "c2170",
+     *ENIA, 1042360822),
     # Round 22 (P1): on the centre of the battle circle (FX_MinigameSigilGlow (597.5, 313.7, -70.0); the sunken floor's
     # bounding centre in the classic maze OBJ is (5.98, 3.09)), facing the garden's exit door (6.074, -35.75): yaw
     # atan2(-dx, -dy) = -0.15. Rounds 15-21 used the Lady Oriel cinematic camera's spot and yaw (2.2 m short, backwards).
-    ("lady_oriel", "Lady Oriel", "garden", (5.975, -0.500, 3.137), -0.15, "c2180",
-     21800000, 21800000, -1, 1042360823),
+    ("lady_oriel", "Lady Oriel", "garden", (5.975, -0.500, 3.137), -0.15, "c5330",
+     *TRINA, 1042360823),
     ("private_oryan", "Private O'Ryan", "street", (-125.714, -0.511, 88.655), -26.27, "c0000",
-     HUMAN_THINK, HUMAN_NPC, 6194, 1042360824),
+     *EDGAR, 1042360824),
 ]
 # Round 15 characters taken out in round 16 (F1): (slug, part name, model). msb_add_npcs.py deletes these parts.
 REMOVED = [
@@ -125,7 +137,8 @@ REMOVED = [
 #     NpcParam 523010010 (Varre's row: SpEffect 9820, animIdOffset 320000000) it resolves to Varre's own a320_090100.
 #   c2180 Melina: 0, her standing idle (her row has no animation offset), looped.
 # (animation, loop) by model
-IDLE = {"c0000": (90100, 0), "c2180": (0, 1)}
+#   c2170 Enia, c5330 Trina (round 24): 0, their own default idle, looped, as Melina.
+IDLE = {"c0000": (90100, 0), "c2180": (0, 1), "c2170": (0, 1), "c5330": (0, 1)}
 # Round 21 (Q7): characters whose AI is switched off so they stay on their MSB spot (Lady Oriel ran around the maze).
 STAND_STILL = {"lady_oriel"}
 CHARACTER_PART_ID = 9100  # part header 0x08 / name suffix of the first character (<model>_9100..)
