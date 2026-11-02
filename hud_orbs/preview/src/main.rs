@@ -49,6 +49,10 @@ mod teleport;
 mod wisps;
 #[path = "../../src/goalpopup.rs"]
 mod goalpopup;
+#[path = "../../src/picker.rs"]
+mod picker;
+#[path = "../../src/prompt.rs"]
+mod prompt;
 mod input;
 mod game;
 mod live_preview;
@@ -392,6 +396,18 @@ fn main() {
         // Round 23 (hud H4, H6): a wisp up close (fuller), and the pickup spiral round the player at these seconds.
         ("23f_wisp_idle", pages::Tab::Character, 0, [0.0, 0.0], "wisp:"),
         // Round 23 (hud H7): Wizard101's quest popups (WizardPopupText.gui, Quest.lang), shown and fading.
+        // Round 25 (H1): the stacked yellow popups as in Ryan's ref/3_w101_stacked_popups.png and ref/1.
+        ("25a_popups_stacked", pages::Tab::Character, 0, [0.0, 0.0], "popup:5.1|Quest Complete: Who could it be now?;;1.0|New Quest: Sinister Skeleton;;0.5|New Goal: Search for Rattlebones (The Archives)"),
+        ("25b_popup_quest_complete", pages::Tab::Character, 0, [0.0, 0.0], "popup:1.0|Quest Complete: Rattlebones Report"),
+        ("25c_popup_ref_text", pages::Tab::Character, 0, [0.0, 0.0], "popup:5.0|Quest Complete: Rattlebones Report;;1.0|New Quest: Panic in Three Streets!;;1.0|New Quest: Enrollment"),
+        // Round 25 (H2): Wizard101's quest picker (NPCServices.gui) for an NPC asked for two conversations at once.
+        ("25d_picker_ceren", pages::Tab::Character, 0, [0.0, 0.0], "picker:0|ceren_nightchant|skeleton_crew|offer,ceren_nightchant|monsters_and_mazes|offer"),
+        ("25e_picker_ceren_three_focus2", pages::Tab::Character, 0, [0.0, 0.0], "picker:1|ceren_nightchant|who_could_it_be_now|goal1,ceren_nightchant|sinister_skeleton|offer,ceren_nightchant|skeleton_crew|underway"),
+        // Round 25 (H3): Wizard101's interact prompt (keyboard E, controller A, the cage's Examine) with the helper over it.
+        ("25f_prompt_talk_keyboard", pages::Tab::Character, 0, [0.0, 0.0], "prompt:ceren_nightchant|0"),
+        ("25g_prompt_talk_pad", pages::Tab::Character, 0, [0.0, 0.0], "prompt:lady_oriel|1"),
+        ("25h_prompt_examine_cage", pages::Tab::Character, 0, [0.0, 0.0], "prompt:cage|0"),
+        ("25i_prompt_connelly", pages::Tab::Character, 0, [0.0, 0.0], "prompt:private_connelly|0"),
         ("23l_popup_goal_update", pages::Tab::Character, 0, [0.0, 0.0], "popup:0.5|Goal Update: Defeat Lost Souls 1 of 2"),
         ("23m_popup_goal_complete", pages::Tab::Character, 0, [0.0, 0.0], "popup:1.0|Goal Complete: Defeat Lost Souls"),
         ("23n_popup_quest_complete_fading", pages::Tab::Character, 0, [0.0, 0.0], "popup:3.5|Quest Complete: Ghost Hunters"),
@@ -453,8 +469,29 @@ fn main() {
         if show.starts_with("turn:") || show.starts_with("popup:") {
             book.preview_closed();
         }
-        if let Some((age, text)) = show.strip_prefix("popup:").and_then(|p| p.split_once('|')) {
-            book.popups.preview(text, age.parse().unwrap_or(0.0));
+        // Round 25 (H2): "picker:<focus>|key,key"; (H3): "prompt:<npc slug or cage>|<pad 0/1>".
+        if let Some((focus, keys)) = show.strip_prefix("picker:").and_then(|p| p.split_once('|')) {
+            book.preview_closed();
+            book.preview_picker(&keys.split(',').collect::<Vec<_>>(), focus.parse().unwrap_or(0));
+        }
+        if let Some((who, pad)) = show.strip_prefix("prompt:").and_then(|p| p.split_once('|')) {
+            book.preview_closed();
+            let target = match markers::NPCS.iter().find(|n| n.0 == who) {
+                Some(n) => prompt::Target { name: n.1.into(), portrait: format!("{}/{}.png", markers::ER_PORTRAITS, n.0), examine: false },
+                None => prompt::Target { name: "Bone Cage".into(), portrait: "GUI/QuestButtons/Art_HD_WC_BoneCage.png".into(), examine: true },
+            };
+            book.preview_prompt(Some(target), pad == "1");
+        } else {
+            book.preview_prompt(None, false);
+        }
+        // Round 25 (H1): "popup:<age>|<text>;;<age>|<text>..." oldest first.
+        if !show.starts_with("popup:") {
+            book.popups.preview(&[]);
+        }
+        if let Some(list) = show.strip_prefix("popup:") {
+            let lines: Vec<(&str, f32)> = list.split(";;").filter_map(|p| p.split_once('|'))
+                .map(|(age, text)| (text, age.parse().unwrap_or(0.0))).collect();
+            book.popups.preview(&lines);
         }
         if let Some(at) = show.strip_prefix("markers") {
             book.preview_closed();
@@ -529,7 +566,7 @@ fn main() {
             }
             // Round 22 (H1, H4): the experience bar where lib.rs draws it (its frame art copied to
             // book/art/preview_hud/Art_Bar_Exp.png in the preview's data), to show the helper and dialogue over it.
-            if show.starts_with("turn:") || show.starts_with("talk:") {
+            if show.starts_with("turn:") || show.starts_with("talk:") || show.starts_with("picker:") || show.starts_with("prompt:") {
                 book.textures.want(["preview_hud/Art_Bar_Exp.png".to_string()]);
                 if let Some((t, _)) = book.textures.get("preview_hud/Art_Bar_Exp.png") {
                     let s = height / 768.0;

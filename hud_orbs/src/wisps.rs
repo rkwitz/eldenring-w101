@@ -61,12 +61,21 @@ const SWAY: f32 = 0.5;
 /// Drift speed along the path (metres per second), each wisp a little faster or slower.
 const SPEED: f32 = 0.45;
 /// Sizes (metres): cloud puff, sparkle, ground glow, core glow (round 23 H4: fuller).
-const PUFF: f32 = 0.8;
-const PUFFS: usize = 5;
-const SPARKLE: f32 = 0.2;
-const SPARKLES: usize = 8;
+/// Round 25 (H5, Ryan's W101 screenshot ref/5_w101_wisp.png next to ours): W101's cloud is a dense red ball about
+/// 1.1 m across whose middle burns white (its Add cloud adds light on itself), with many small four-point sparkles
+/// (about a tenth of the cloud) scattered round it out to twice its radius, each at its own angle. So: PUFFS puffs
+/// over a red body glow, the puffs and a white CORE / HOT centre drawn adding light (hudhook's additive pipeline),
+/// SPARKLES sparkles of SPARKLE m, each with its own turn and spin speed, drifting up through a shell 0.4..1.0 m.
+const PUFF: f32 = 0.95;
+const PUFFS: usize = 7;
+const BODY: f32 = 1.25;
+const SPARKLE: f32 = 0.085;
+const SPARKLES: usize = 16;
 const GROUND: f32 = 1.5;
-const CORE: f32 = 0.95;
+const CORE: f32 = 0.7;
+const HOT: f32 = 0.26;
+/// Cloud radius for the sight line's free end (round 25 H4).
+const CLOUD_RADIUS: f32 = 0.45;
 /// Round 23 (H6): the pickup spiral (seconds, turns), the sparkle burst after it, the fade-in of a new wisp.
 const SPIN: f32 = 1.6;
 const SPIN_TURNS: f32 = 2.5;
@@ -80,9 +89,10 @@ const RESPAWN: f32 = 10.0;
 const MANA_CHANCE: [f32; 3] = [0.18, 0.21, 0.24];
 /// Wisps farther than this from the player aren't drawn.
 const DRAW_RANGE: f32 = 80.0;
-/// Round 23 (H5): out of sight this long before a wisp fades, and the fade (seconds).
-const HIDE_AFTER: f32 = 0.3;
-const FADE: f32 = 0.25;
+/// Round 23 (H5) faded a wisp out 0.3 s after it went out of sight; round 25 (H4, Ryan: "still visible through
+/// walls for a moment before fading ... hide instantly") hides it on the frame its sight line is blocked and only
+/// eases it back in over SHOW seconds.
+const SHOW: f32 = 0.15;
 
 /// Wizard101's wisp paths on Unicorn Way (zone pathData.xml "Path Wisps 01..03", nodes from pathNodeData.bin), moved
 /// into m60_42_36_00 MSB x, y, z (round 20 make_nav.py's frame -> MSB fit; y = W101 z / 100 + 93.999). Each is a
@@ -113,9 +123,8 @@ struct Wisp {
     /// Set when picked up: (when, its offset from the player then (world metres)); it spirals round the player, bursts,
     /// then waits RESPAWN seconds.
     picked: Option<(Instant, [f32; 3])>,
-    /// Round 23 (H5): how much of it shows (0..1, eased) and how long it has been out of sight.
+    /// Round 23 (H5): how much of it shows (0..1; round 25: 0 at once when out of sight, eased back in).
     seen: f32,
-    unseen: f32,
 }
 
 pub struct Wisps {
@@ -213,7 +222,7 @@ impl Wisps {
         let kind = if self.random() < MANA_CHANCE[path] { Kind::Mana } else { Kind::Health };
         let speed = SPEED * (0.7 + 0.6 * self.random()) * if self.random() < 0.5 { 1.0 } else { -1.0 };
         Wisp { kind, path, along: self.lengths[path].1[node], speed, born: now, seed: self.random() * 100.0, picked: None,
-               seen: 0.0, unseen: 0.0 }
+               seen: 0.0 }
     }
 
     /// The MSB spot `along` metres round path `path` (on the path, no hover).
@@ -302,11 +311,9 @@ impl Wisps {
         let eye = if (eye[0] - msb[0]).hypot(eye[2] - msb[2]) < 12.0 { eye } else { [msb[0], msb[1] + 1.6, msb[2]] };
         let mut in_sight = 0;
         for (w, s) in self.wisps.iter_mut().zip(&spots) {
-            let seen = w.picked.is_some() || (!away && nav.sees_3d(eye, s.2));
+            let seen = w.picked.is_some() || (!away && nav.sees_3d_near(eye, s.2, CLOUD_RADIUS));
             in_sight += seen as usize;
-            w.unseen = if seen { 0.0 } else { w.unseen + dt };
-            let step = dt / FADE;
-            w.seen = if w.unseen < HIDE_AFTER { (w.seen + step).min(1.0) } else { (w.seen - step).max(0.0) };
+            w.seen = if seen { (w.seen + dt / SHOW).min(1.0) } else { 0.0 };
         }
         if self.sight_log.is_none_or(|(t, n)| n != in_sight && (now - t).as_secs_f32() > 5.0) {
             self.sight_log = Some((now, in_sight));
@@ -382,6 +389,14 @@ pub fn preview(ui: &Ui, textures: &mut Textures, camera: &Camera, player: [f32; 
     }
 }
 
+/// Round 25 (H5): switches the background list's blending for what follows (hudhook's additive pipeline, as
+/// teleport.rs does on the foreground list).
+unsafe fn blend(additive: bool) {
+    use hudhook::imgui::sys;
+    let mode = if additive { hudhook::BLEND_ADDITIVE } else { hudhook::BLEND_NORMAL };
+    sys::ImDrawList_AddCallback(sys::igGetBackgroundDrawList(), Some(hudhook::blend_callback), mode as *mut _);
+}
+
 fn draw_wisp(draw: &DrawListMut, textures: &Textures, camera: &Camera, w: Look, spot: ([f32; 3], [f32; 3]),
              time: f32, screen: [f32; 2]) {
     let k = (w.kind == Kind::Mana) as usize;
@@ -440,31 +455,50 @@ fn draw_wisp(draw: &DrawListMut, textures: &Textures, camera: &Camera, w: Look, 
         draw.add_image(glow, [g[0] - rw, g[1] - rh], [g[0] + rw, g[1] + rh])
             .col([tint[0], tint[1], tint[2], 0.5 * alpha]).build();
     }
-    // Core glow behind the cloud (the bright heart of FX_Wisp's Add cloud).
-    let core = px(CORE) / 2.0 * grow * (1.0 + 0.06 * (time * 2.3 + w.seed).sin());
-    draw.add_image(glow, [c[0] - core, c[1] - core], [c[0] + core, c[1] + core])
-        .col([tint[0] * 0.6 + 0.4, tint[1] * 0.6 + 0.4, tint[2] * 0.6 + 0.4, 0.7 * alpha]).build();
-    // Cloud: PUFFS puffs turning at their own speeds round the centre (FX_Cloud Main / Add).
+    // Round 25 (H5): a soft red body under the puffs, so the ball reads full and red on the bright street too.
+    let body = px(BODY) / 2.0 * grow;
+    let body_tint = if k == 0 { [1.0, 0.1, 0.06] } else { [0.12, 0.3, 1.0] };
+    draw.add_image(glow, [c[0] - body, c[1] - body], [c[0] + body, c[1] + body])
+        .col([body_tint[0], body_tint[1], body_tint[2], 0.8 * alpha]).build();
+    // Cloud: PUFFS puffs turning at their own speeds round the centre (FX_Cloud Main), dense and saturated.
     for i in 0..PUFFS {
         let f = i as f32;
-        let turn = time * (0.5 + 0.25 * f) * if i % 2 == 0 { 1.0 } else { -1.0 } + f * 2.1 + w.seed;
-        let off = [px(0.11) * (turn * 0.7 + f).cos(), px(0.08) * (turn * 0.9 + f).sin()];
-        let r = px(PUFF) / 2.0 * grow * (1.0 - 0.1 * f);
+        let turn = time * (0.45 + 0.2 * f) * if i % 2 == 0 { 1.0 } else { -1.0 } + f * 2.1 + w.seed;
+        let off = [px(0.12) * (turn * 0.7 + f).cos(), px(0.09) * (turn * 0.9 + f).sin()];
+        let r = px(PUFF) / 2.0 * grow * (1.0 - 0.07 * f);
         let corner = |a: f32| [c[0] + off[0] + r * 1.414 * a.cos(), c[1] + off[1] + r * 1.414 * a.sin()];
         let q = std::f32::consts::FRAC_PI_4;
         let a = [corner(turn - 3.0 * q), corner(turn - q), corner(turn + q), corner(turn + 3.0 * q)];
-        draw.add_image_quad(cloud, a[0], a[1], a[2], a[3]).col([1.0, 1.0, 1.0, alpha * (0.95 - 0.12 * f)]).build();
+        draw.add_image_quad(cloud, a[0], a[1], a[2], a[3]).col([1.0, 1.0, 1.0, alpha * (0.9 - 0.06 * f)]).build();
     }
-    // Sparkles orbiting and twinkling (FX_SparkleBlue / FX_FocusSpark emitters).
+    // The centre and sparkles add light (W101's Add cloud and sparks, Gamebryo ONE/ONE).
+    unsafe { blend(true) };
+    // The white glowing centre (FX_Wisp's focus): a warm-white glow and a small hot white heart, pulsing a little.
+    let pulse = 1.0 + 0.08 * (time * 2.3 + w.seed).sin();
+    let core = px(CORE) / 2.0 * grow * pulse;
+    draw.add_image(glow, [c[0] - core, c[1] - core], [c[0] + core, c[1] + core])
+        .col([1.0, 0.8 + 0.2 * k as f32, 0.75 + 0.25 * k as f32, 0.5 * alpha]).build();
+    let hot = px(HOT) / 2.0 * grow * pulse;
+    draw.add_image(glow, [c[0] - hot, c[1] - hot], [c[0] + hot, c[1] + hot]).col([1.0, 1.0, 1.0, 0.8 * alpha]).build();
+    // Sparkles (FX_SparkleBlue / FX_FocusSpark emitters): small four-point stars scattered round the ball, each with
+    // its own angle and spin (round 25 H5: they all stood at one angle before), drifting up and twinkling.
     for i in 0..SPARKLES {
         let f = i as f32;
-        let a = time * 1.4 * if i % 2 == 0 { 1.0 } else { -0.8 } + f * tau / SPARKLES as f32 + w.seed;
-        let rise = ((time * 0.8 + f * 0.37 + w.seed).fract() - 0.5) * 0.7;
-        let rad = (0.32 + 0.12 * (i % 3) as f32) * grow;
-        let p = [centre[0] + rad * a.cos(), centre[1] + rise, centre[2] + rad * a.sin()];
+        let h = |n: f32| ((f * 12.9898 + n * 78.233 + w.seed * 3.7).sin() * 43758.547).fract().abs();
+        let a = time * 0.35 * if i % 2 == 0 { 1.0 } else { -1.0 } + h(1.0) * tau;
+        let life = 2.4 + 1.6 * h(2.0);
+        let phase = (time / life + h(3.0)).fract();
+        let rad = (0.45 + 0.65 * h(4.0)) * grow;
+        let up = (phase - 0.5) * 0.9 + (h(5.0) - 0.5) * 0.5;
+        let p = [centre[0] + rad * a.cos(), centre[1] + up, centre[2] + rad * a.sin()];
         let Some((s, sz)) = camera.project(p, screen) else { continue };
-        let r = px_at(sz, SPARKLE) / 2.0;
-        let twinkle = 0.5 + 0.5 * (time * 6.0 + f * 1.9 + w.seed).sin();
-        draw.add_image(spark, [s[0] - r, s[1] - r], [s[0] + r, s[1] + r]).col([1.0, 1.0, 1.0, alpha * twinkle]).build();
+        let r = px_at(sz, SPARKLE * (0.7 + 0.6 * h(6.0))) / 2.0 * 1.414;
+        let spin = h(7.0) * tau + time * (1.5 + 2.5 * h(8.0)) * if h(9.0) < 0.5 { 1.0 } else { -1.0 };
+        let corner = |d: f32| [s[0] + r * (spin + d).cos(), s[1] + r * (spin + d).sin()];
+        let q = std::f32::consts::FRAC_PI_4;
+        let twinkle = (phase * std::f32::consts::PI).sin() * (0.6 + 0.4 * (time * 7.0 + f * 1.9).sin());
+        draw.add_image_quad(spark, corner(-3.0 * q), corner(-q), corner(q), corner(3.0 * q))
+            .col([1.0, 1.0, 1.0, alpha * twinkle.max(0.0)]).build();
     }
+    unsafe { blend(false) };
 }

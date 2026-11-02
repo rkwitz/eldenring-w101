@@ -79,8 +79,16 @@ pub const REWARDS: &[(&str, u32)] = &[
 pub const REWARD_OFFSET: u32 = 7;
 
 /// Round 20 (Q4): Wizard101 goal pictures of an older quests.tsv -> the Elden Ring stand-in's picture
-/// (w101_quests.GOAL_PICTURES), used when that file is in the book's art folder.
+/// (w101_quests.GOAL_PICTURES). Round 25 (H9, Ryan: "no W101 NPC face anywhere"): always, also for dialogue
+/// portraits (er_picture); round 24 checked the file at load, and Ryan's game, started 14:29, loaded before the new
+/// ER folder was deployed at 14:40, so it kept Lady Oriel's Seraph. Merle Ambrose = Ranni, Gamma = Miriel and
+/// Rattlebones = Giant Skeleton Torso c4960 (Ryan's stand-ins, round 24) have their own ER pictures now.
 const ER_PICTURES: &[(&str, &str)] = &[
+    ("GUI/NpcPortraits/Art_Portrait_Ambrose.png", "GUI/NpcPortraits/ER/merle_ambrose.png"),
+    ("GUI/NpcPortraits/Portrait_Owl_Gamma_A_NPC.png", "GUI/NpcPortraits/ER/gamma.png"),
+    ("GUI/NpcPortraits/Portrait_Skeleton_Armored_A_NPC.png", "GUI/NpcPortraits/ER/rattlebones.png"),
+    ("GUI/NpcPortraits/Art_Portrait_GhostLady_Green.png", "GUI/NpcPortraits/ER/lady_blackhope.png"),
+    ("GUI/NpcPortraits/Portrait_Skeleton_Armored_A_MOB.png", "GUI/NpcPortraits/ER/rattlebones.png"),
     ("GUI/NpcPortraits/Portrait_Ghost_LostSoul_MOB_A.png", "GUI/NpcPortraits/ER/lost_soul.png"),
     ("GUI/NpcPortraits/Portrait_Skeleton_Pirate_A_MOB.png", "GUI/NpcPortraits/ER/skeletal_pirate.png"),
     ("GUI/NpcPortraits/Fairy_DarkMinion_MOB.png", "GUI/NpcPortraits/ER/dark_fairy.png"),
@@ -96,6 +104,30 @@ const ER_PICTURES: &[(&str, &str)] = &[
 /// _Shared-WorldData.wad GUI/QuestButtons/Art_Quest_AV_WalledGarden (tools/w101_quest_arrow.py; w101_quests.py
 /// GOAL_PICTURES["hedge_maze"]).
 const PLACE_PICTURES: &[(&str, &str)] = &[("The Hedge Maze", "GUI/QuestButtons/Art_Quest_AV_WalledGarden.png")];
+
+/// Round 25 (H9): the Elden Ring picture for a Wizard101 NPC portrait `path` (unchanged when it isn't one).
+pub fn er_picture(path: &str) -> String {
+    ER_PICTURES.iter().find(|e| e.0 == path).map_or(path.to_string(), |e| e.1.to_string())
+}
+
+/// Round 25 (H8, Ryan: "Who Could It Be Now?" and "Sinister Skeleton / Search for Rattlebones" have no goal
+/// picture): a goal still without one after quests.tsv and PLACE_PICTURES gets the ER portrait of the NPC it names
+/// ("Talk to / Return to / Go to <name>"), else the picture of the quest's next goal that has one (Search for
+/// Rattlebones -> Defeat Rattlebones), else the previous one's.
+fn fill_pictures(quest: &mut Quest) {
+    for g in quest.goals.iter_mut().filter(|g| g.picture.is_empty()) {
+        if let Some(npc) = crate::markers::NPCS.iter().find(|n| g.text.contains(n.1)) {
+            g.picture = format!("{}/{}.png", crate::markers::ER_PORTRAITS, npc.0);
+        }
+    }
+    for i in 0..quest.goals.len() {
+        if quest.goals[i].picture.is_empty() {
+            let next = quest.goals[i + 1..].iter().chain(quest.goals[..i].iter().rev())
+                .find(|g| !g.picture.is_empty()).map(|g| g.picture.clone());
+            quest.goals[i].picture = next.unwrap_or_default();
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct Quests {
@@ -156,14 +188,11 @@ impl Quests {
                         place: f[8].into(),
                         picture: {
                             let p = f.get(9).copied().unwrap_or_default();
-                            let art = path.parent().map(|b| b.join("art"));
-                            match ER_PICTURES.iter().find(|e| e.0 == p) {
-                                Some((_, er)) if art.as_ref().is_some_and(|a| a.join(er).exists()) => er.to_string(),
+                            match p {
                                 // Round 22 (H7): the Hedge Maze goals had no picture in quests.tsv.
-                                _ if p.is_empty() => PLACE_PICTURES.iter()
-                                    .find(|e| e.0 == f[8] && art.as_ref().is_some_and(|a| a.join(e.1).exists()))
+                                "" => PLACE_PICTURES.iter().find(|e| e.0 == f[8])
                                     .map_or(String::new(), |e| e.1.to_string()),
-                                _ => p.to_string(),
+                                _ => er_picture(p),
                             }
                         },
                     });
@@ -174,6 +203,13 @@ impl Quests {
                     }
                 }
                 _ => {}
+            }
+        }
+        out.quests.iter_mut().for_each(fill_pictures);
+        for q in &out.quests {
+            for (i, g) in q.goals.iter().enumerate() {
+                tracing::info!("quests: {} goal {} \"{}\" picture {}", q.slug, i + 1, g.text,
+                               if g.picture.is_empty() { "NONE" } else { &g.picture });
             }
         }
         let n = out.flags().len();

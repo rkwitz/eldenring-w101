@@ -366,9 +366,14 @@ impl View {
 #[derive(Default)]
 pub struct Textures {
     map: HashMap<String, (TextureId, [f32; 2])>,
-    failed: HashSet<String>,
+    /// Round 25 (H8/H9): files that failed to load and when; tried again after RETRY seconds (Ryan's 14:38 log: the
+    /// ER portraits deployed at 14:40 never showed, the first failure was kept for the whole session).
+    failed: HashMap<String, std::time::Instant>,
     wanted: Vec<String>,
 }
+
+/// Seconds before a picture that failed to load is tried again (round 25).
+const RETRY: f32 = 20.0;
 
 impl Textures {
     pub fn get(&self, name: &str) -> Option<(TextureId, [f32; 2])> {
@@ -387,7 +392,8 @@ impl Textures {
             if name.starts_with('@') && !name.starts_with("@er/") {
                 continue;
             }
-            if !self.map.contains_key(&name) && !self.failed.contains(&name) && !self.wanted.contains(&name) {
+            let failed = self.failed.get(&name).is_some_and(|t| t.elapsed().as_secs_f32() < RETRY);
+            if !self.map.contains_key(&name) && !failed && !self.wanted.contains(&name) {
                 self.wanted.push(name);
             }
         }
@@ -416,11 +422,14 @@ impl Textures {
                 });
             match loaded {
                 Ok(t) => {
+                    self.failed.remove(&name);
                     self.map.insert(name, t);
                 }
                 Err(e) => {
-                    tracing::warn!("spellbook art {}: {e}", path.display());
-                    self.failed.insert(name);
+                    if !self.failed.contains_key(&name) {
+                        tracing::warn!("spellbook art {}: {e}", path.display());
+                    }
+                    self.failed.insert(name, std::time::Instant::now());
                 }
             }
         }

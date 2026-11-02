@@ -2183,10 +2183,12 @@ struct MapIcon {
 /// The bosses of Unicorn Way's towers that have rooms here: Lady Blackhope (tower T1; WCNameplates_00000178,
 /// "Blackhope" 75 wide) and Rattlebones (tower T2; WCNameplates_00000173, 91 wide), both on the Elite plate. Wizard101
 /// draws their tower icon (LocationIconUnicornWayTower) in the same spots before the quests reach them.
+/// Round 25 (H9): their Elden Ring stand-ins' faces (Nox Swordstress c3300, Giant Skeleton Torso c4960;
+/// tools/w101_npc_portraits.py), not Wizard101's.
 const MAP_BOSSES: [MapIcon; 2] = [
-    MapIcon { picture: "GUI/NpcPortraits/Art_Portrait_GhostLady_Green.png", rect: [203.0, 216.0, 252.0, 265.0],
+    MapIcon { picture: "GUI/NpcPortraits/ER/lady_blackhope.png", rect: [203.0, 216.0, 252.0, 265.0],
               plate: MAP_PLATE_ELITE, plate_size: [101.0, 52.0], text: "Lady\nBlackhope" },
-    MapIcon { picture: "GUI/NpcPortraits/Portrait_Skeleton_Armored_A_MOB.png", rect: [518.0, 273.0, 567.0, 322.0],
+    MapIcon { picture: "GUI/NpcPortraits/ER/rattlebones.png", rect: [518.0, 273.0, 567.0, 322.0],
               plate: MAP_PLATE_ELITE, plate_size: [117.0, 32.0], text: "Rattlebones" },
 ];
 

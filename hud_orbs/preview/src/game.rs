@@ -63,6 +63,18 @@ impl Game {
         None
     }
 
+    pub fn player_yaw(&self) -> Option<f32> {
+        None
+    }
+
+    pub fn action_button(&self, _row: u32) -> Option<ActionButton> {
+        None
+    }
+
+    pub fn set_action_button_text(&self, _row: u32, _text_id: i32) -> bool {
+        false
+    }
+
     pub fn fake() -> Game {
         Game
     }
@@ -177,4 +189,14 @@ pub fn quit_to_title() -> bool {
 }
 pub fn close_window() -> bool {
     false
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ActionButton {
+    pub region: u8,
+    pub radius: f32,
+    pub angle: i32,
+    pub height: f32,
+    pub base: f32,
+    pub text_id: i32,
 }

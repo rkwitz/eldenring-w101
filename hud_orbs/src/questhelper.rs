@@ -145,8 +145,13 @@ pub fn player_msb_now(game: &crate::game::Game) -> Option<[f32; 3]> {
 }
 
 /// The Bone Cages goal (finding_out_why goal 0) and the first cage's flag (tools/w101_quests.py CAGE_FLAG).
-const CAGES_GOAL: usize = 0;
-const CAGE_FLAG: u32 = 1042360540;
+pub const CAGES_GOAL: usize = 0;
+pub const CAGE_FLAG: u32 = 1042360540;
+
+/// Round 25 (H3): the Bone Cages' MSB spots (finding_out_why's first goal), in CAGE_FLAG order.
+pub fn cages() -> &'static [[f32; 3]] {
+    TARGETS.iter().find(|t| t.0 == "finding_out_why" && t.1 == CAGES_GOAL).map_or(&[], |t| t.2)
+}
 
 /// Where the arrow points for quest `active` with the player at `player` (MSB): the goal's nearest point, or the
 /// room's door while the player is out on the street.
@@ -310,15 +315,20 @@ impl StreetSight {
     /// slab above the line (so the ground under a line that dips near the ends and a kerb hide nothing) and over two
     /// samples in a row (STEP apart).
     pub fn sees(&self, a: [f32; 3], b: [f32; 3]) -> bool {
+        self.sees_ends(a, b, 0.8, 0.8)
+    }
+
+    /// `sees` with the free lengths at the eye's end (`end_a`) and the target's (`end_b`) given. Round 25 (H4): a wisp
+    /// uses its cloud's radius at its end, so a house corner within 0.8 m of it no longer lets it show.
+    pub fn sees_ends(&self, a: [f32; 3], b: [f32; 3], end_a: f32, end_b: f32) -> bool {
         const STEP: f32 = 0.2;
-        const END: f32 = 0.8;
         let flat = ((b[0] - a[0]).powi(2) + (b[2] - a[2]).powi(2)).sqrt();
         let length = (flat * flat + (b[1] - a[1]).powi(2)).sqrt();
         let n = (length / STEP) as usize;
         let mut run = 0;
         for i in 1..n {
             let t = i as f32 / n as f32;
-            if flat * t < END || flat * (1.0 - t) < END {
+            if flat * t < end_a || flat * (1.0 - t) < end_b {
                 run = 0;
                 continue;
             }
@@ -477,6 +487,14 @@ impl Nav {
     pub fn sees_3d(&self, a: [f32; 3], b: [f32; 3]) -> bool {
         match &self.geometry {
             Some(g) => g.sees(a, b),
+            None => self.sees([a[0], a[2]], [b[0], b[2]]),
+        }
+    }
+
+    /// Round 25 (H4): sees_3d with only `end_b` metres free at the target's end (a wisp's cloud radius).
+    pub fn sees_3d_near(&self, a: [f32; 3], b: [f32; 3], end_b: f32) -> bool {
+        match &self.geometry {
+            Some(g) => g.sees_ends(a, b, 0.8, end_b),
             None => self.sees([a[0], a[2]], [b[0], b[2]]),
         }
     }

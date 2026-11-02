@@ -4,11 +4,21 @@
 //! Wizard101's text (Root.wad Locale/en-US/Quest.lang): QuestCompletePopup "Quest Complete: $QUEST_NAME$",
 //! NewQuestPopup "New Quest: $QUEST_NAME$", *GoalCompletePopupText "Goal Complete: #1:$GOAL_NAME$ ...", *GoalReward
 //! "Goal Update: #1:$GOAL_NAME$ #2:$GOAL_COUNT$ of #3:$GOAL_TOTAL$ ...", *NewGoalPopupText "New Goal: #1:$GOAL_NAME$".
-//! Its window (Root.wad GUI/WizardPopupText.gui): wndWizardPopupText 550 x 90 at (300, 300) of the 768-high layout,
-//! one ControlText textText filling it, WizardFancy at 0.8, white (FFFFFFFF), drop shadow, no word wrap; it is
-//! placed and faded by the client's code (not in the files), so here it is centred across the screen at that height,
-//! held HOLD s and faded over FADE s, one popup after another. Sound: _Shared-WorldData.wad
-//! Sound/GUI/ui_quest_updated.wav (already in orbs\w101_orbs\sfx, round 22 S3), through music::sfx.
+//! Sound: _Shared-WorldData.wad Sound/GUI/ui_quest_updated.wav (orbs\w101_orbs\sfx, round 22 S3), through music::sfx.
+//!
+//! Round 25 (H1, Ryan's screenshots round25/ref/1_w101_quest_complete_popup.png and 3_w101_stacked_popups.png):
+//! round 23 drew them white, centred at WizardPopupText.gui's y 300, one after another. Measured on the screenshots
+//! (their XP bar and the scene's top give 0.905 screenshot pixels per pixel of W101's 768-high layout):
+//! - colour gold-yellow, mean of the glyph pixels (231, 231, 33), brightest (252, 249, 109) -> COLOUR, with a dark
+//!   edge and drop shadow (outlined + shadowed);
+//! - WizardFancy, mixed case (its lower case is small capitals): "Quest Complete: Rattlebones Report" is 642 font
+//!   pixels wide and 372 screenshot pixels -> SCALE 0.643; check: "New Quest: Panic in Three Streets!" (608) predicts
+//!   351, measured 351;
+//! - the newest line's middle at y 489 / 492 of the screenshot -> BOTTOM 517 of 768 (just over the player's feet,
+//!   the lower third), the lines 26 screenshot pixels apart -> PITCH 29;
+//! - several at once all show: the newest at the bottom pushing the older ones up (they slide, SLIDE s), each
+//!   fading out by its own age (the old "Quest Complete" nearly gone over two fresh "New Quest" lines).
+//! They show over the dialogue box too (screenshot 2: over the quest picker), not over the book or map.
 //!
 //! Driven by the quest flags book.rs polls (poll_quests): `messages` compares the flags before and after.
 
@@ -21,18 +31,32 @@ use crate::font::BitmapFont;
 use crate::layout::{Canvas, TextStyle, Textures};
 use crate::quests::{Counter, Quests};
 
-/// WizardPopupText.gui: the window (layout pixels of a 768-high screen) and the font scale.
-const WINDOW: [f32; 4] = [300.0, 300.0, 850.0, 390.0];
-const SCALE: f32 = 0.8;
-/// Seconds fully shown, then fading out.
-const HOLD: f32 = 3.0;
-const FADE: f32 = 1.0;
+/// Round 25 (H1): measured on Ryan's screenshots (see the top): font scale, colour, the newest line's middle and
+/// the line pitch (pixels of the 768-high layout).
+const SCALE: f32 = 0.643;
+const COLOUR: [u8; 3] = [238, 234, 36];
+const BOTTOM: f32 = 517.0;
+const PITCH: f32 = 29.0;
+/// Seconds fully shown, then fading out; seconds an older line takes to slide up a row; most lines at once.
+const HOLD: f32 = 4.0;
+const FADE: f32 = 1.5;
+const SLIDE: f32 = 0.2;
+const MAX_LINES: usize = 6;
 const SOUND: &str = "ui_quest_updated";
+
+struct Line {
+    text: String,
+    born: Instant,
+    /// Rows up from the bottom it is drawn at now (eased toward its slot).
+    row: f32,
+}
 
 #[derive(Default)]
 pub struct GoalPopups {
+    /// Oldest first; the last is the newest (bottom row).
+    lines: Vec<Line>,
+    /// Popups that came while hidden (book or map open): shown when it closes.
     queue: VecDeque<String>,
-    shown: Option<(String, Instant)>,
 }
 
 fn progress(counter: &Counter, flag: &dyn Fn(u32) -> bool) -> Option<u32> {
@@ -92,43 +116,73 @@ impl GoalPopups {
         }
     }
 
-    /// Preview: show `text` as if it came up `age` seconds ago.
-    pub fn preview(&mut self, text: &str, age: f32) {
-        self.shown = Some((text.to_string(), Instant::now() - std::time::Duration::from_secs_f32(age)));
+    /// Preview: lines (text, seconds since it came up), oldest first.
+    pub fn preview(&mut self, lines: &[(&str, f32)]) {
+        let now = Instant::now();
+        let n = lines.len();
+        self.lines = lines.iter().enumerate().map(|(i, (text, age))| Line {
+            text: text.to_string(),
+            born: now - std::time::Duration::from_secs_f32(*age),
+            row: (n - 1 - i) as f32,
+        }).collect();
     }
 
-    /// Draws the current popup (when `visible`; time runs on regardless), taking the next one from the queue.
+    fn alpha(age: f32) -> f32 {
+        if age < HOLD { 1.0 } else { (1.0 - (age - HOLD) / FADE).clamp(0.0, 1.0) }
+    }
+
+    /// Draws the popups (when `visible`; time runs on regardless), taking in the queued ones while visible.
     pub fn draw(&mut self, draw: &DrawListMut, textures: &Textures, fonts: &HashMap<String, BitmapFont>,
-                screen: [f32; 2], visible: bool) {
-        if self.shown.as_ref().is_some_and(|(_, t)| t.elapsed().as_secs_f32() > HOLD + FADE) {
-            self.shown = None;
-        }
-        if self.shown.is_none() && visible {
-            if let Some(m) = self.queue.pop_front() {
-                crate::music::sfx(SOUND);
-                self.shown = Some((m, Instant::now()));
+                screen: [f32; 2], visible: bool, dt: f32) {
+        let now = Instant::now();
+        self.lines.retain(|l| (now - l.born).as_secs_f32() < HOLD + FADE);
+        if visible && !self.queue.is_empty() {
+            crate::music::sfx(SOUND);
+            // The new lines come in at the bottom, the older ones keep their row and slide up from there.
+            for text in self.queue.drain(..) {
+                self.lines.push(Line { text, born: now, row: -1.0 });
+            }
+            let extra = self.lines.len().saturating_sub(MAX_LINES);
+            self.lines.drain(..extra);
+            for l in self.lines.iter_mut().filter(|l| l.row < 0.0) {
+                l.row = 0.0;
             }
         }
-        let (Some((text, t)), true) = (&self.shown, visible) else { return };
+        let n = self.lines.len();
+        let step = if SLIDE > 0.0 { dt / SLIDE } else { 1.0 };
+        for (i, l) in self.lines.iter_mut().enumerate() {
+            let slot = (n - 1 - i) as f32;
+            l.row = if l.row < slot { (l.row + step).min(slot) } else { slot };
+        }
+        if !visible {
+            return;
+        }
         let Some(font) = fonts.get("WizardFancy") else { return };
-        let age = t.elapsed().as_secs_f32();
-        let alpha = if age < HOLD { 1.0 } else { (1.0 - (age - HOLD) / FADE).clamp(0.0, 1.0) };
         let s = screen[1] / 768.0;
-        // The window's width, widened for a long line (the window doesn't wrap), centred across the screen.
-        let width = (WINDOW[2] - WINDOW[0]).max(font.width(text) * SCALE + 20.0).min(screen[0] / s);
-        let canvas = Canvas {
-            draw,
-            textures,
-            fonts,
-            origin: [(screen[0] - width * s) / 2.0, WINDOW[1] * s],
-            s,
-            mouse: [-1.0e4; 2],
-            mouse_down: false,
-            alpha,
-            hole: std::cell::Cell::new(None),
-        };
-        let style = TextStyle::new("WizardFancy", SCALE, ImColor32::from_rgba(255, 255, 255, (255.0 * alpha) as u8))
-            .centred().shadowed();
-        canvas.text(text, [0.0, 0.0, width, WINDOW[3] - WINDOW[1]], &style, false);
+        for l in &self.lines {
+            let alpha = Self::alpha((now - l.born).as_secs_f32());
+            if alpha <= 0.0 {
+                continue;
+            }
+            // Wide enough for the line (no wrap), centred across the screen, its middle `row` pitches over BOTTOM.
+            let width = (font.width(&l.text) * SCALE + 20.0).min(screen[0] / s);
+            let height = font.line_height * SCALE;
+            let middle = BOTTOM - l.row * PITCH;
+            let canvas = Canvas {
+                draw,
+                textures,
+                fonts,
+                origin: [(screen[0] - width * s) / 2.0, (middle - height / 2.0) * s],
+                s,
+                mouse: [-1.0e4; 2],
+                mouse_down: false,
+                alpha,
+                hole: std::cell::Cell::new(None),
+            };
+            let style = TextStyle::new("WizardFancy", SCALE,
+                                       ImColor32::from_rgba(COLOUR[0], COLOUR[1], COLOUR[2], (255.0 * alpha) as u8))
+                .centred().outlined().shadowed();
+            canvas.text(&l.text, [0.0, 0.0, width, height], &style, false);
+        }
     }
 }

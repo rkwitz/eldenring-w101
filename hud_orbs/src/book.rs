@@ -165,6 +165,17 @@ pub struct Book {
     flags_time: Option<Instant>,
     /// Round 23 (H7): Wizard101's quest popups ("Goal Update: ...", goalpopup.rs).
     pub popups: crate::goalpopup::GoalPopups,
+    /// Round 25 (H2): Wizard101's quest picker (picker.rs) while one NPC's events ask for several conversations.
+    picker: Option<crate::picker::Picker>,
+    /// The picker's rows follow the mouse once it moves (else the controller's focus row is lit).
+    picker_mouse: bool,
+    /// The preview's picker (no event flags behind it).
+    picker_pinned: bool,
+    /// Round 25 (H3): Wizard101's interact prompt (prompt.rs) and its box's top this frame (screen pixels).
+    pub prompt: crate::prompt::Prompt,
+    prompt_top: Option<f32>,
+    /// The preview's prompt (none in the game).
+    preview_prompt: Option<crate::prompt::Target>,
     active: Vec<Active>,
     /// The conversations the map's talk events can ask for (talk.rs, dialogue.tsv), and the one on screen.
     requests: Vec<talk::Request>,
@@ -384,6 +395,12 @@ impl Book {
             flags: HashMap::new(),
             flags_time: None,
             popups: Default::default(),
+            picker: None,
+            picker_mouse: false,
+            picker_pinned: false,
+            prompt: Default::default(),
+            prompt_top: None,
+            preview_prompt: None,
             active: Vec::new(),
             requests: Vec::new(),
             dialogue: None,
@@ -456,6 +473,10 @@ impl Book {
         // w101_quests: the talk events' conversation requests (round 17) and Wizard101's dialogue box.
         self.requests = talk::load(&folder.join("dialogue.tsv"));
         markers::er_portraits(&mut self.requests, folder); // round 18 G3: the Elden Ring faces
+        // Round 25 (H3): the interact prompt's key and whether to blank Elden Ring's own prompt (w101_orbs.ini).
+        if let Some(orbs) = folder.parent().and_then(|p| p.parent()) {
+            self.prompt.load(&orbs.join("w101_orbs.ini"));
+        }
         self.quest_flags.extend(self.requests.iter().map(|r| r.flag));
         for page in [talk::WINDOW, talk::IMAGE, crate::questhelper::LAYOUT] {
             match Layout::load(&folder.join(format!("{page}.lay"))) {
@@ -643,6 +664,7 @@ impl Book {
     #[allow(dead_code)]
     pub fn preview_show(&mut self, tab: Tab, sub: usize) {
         self.dialogue = None;
+        self.picker = None;
         self.map = MapState::Idle;
         self.set_open(true);
         self.opened_at = Instant::now() - Duration::from_secs(1);
@@ -723,6 +745,32 @@ impl Book {
         self.state.pet = pet;
     }
 
+    /// Round 25: the quest picker for conversations `keys` (dialogue.tsv), row `focus` lit (the preview renderer).
+    #[allow(dead_code)]
+    pub fn preview_picker(&mut self, keys: &[&str], focus: usize) {
+        self.set_open(false);
+        let rows: Vec<crate::picker::Row> = keys.iter().filter_map(|k| self.requests.iter().position(|r| r.key == *k))
+            .map(|i| crate::picker::Row {
+                request: i,
+                icon: crate::picker::icon(&self.requests[i].kind),
+                label: self.quests.quests.iter().find(|q| q.slug == self.requests[i].quest)
+                    .map_or(self.requests[i].quest.clone(), |q| q.title.clone()),
+            }).collect();
+        let Some(first) = rows.first().map(|r| r.request) else { return };
+        self.picker_pinned = true;
+        self.picker = Some(crate::picker::Picker { speaker: self.requests[first].speaker.clone(),
+            name: self.requests[first].name.clone(), portrait: self.requests[first].portrait.clone(), rows, focus,
+            opened: Instant::now() - Duration::from_secs(1) });
+    }
+
+    /// Round 25: the interact prompt for `target` with the controller's (`pad`) or the keyboard's key (the preview).
+    #[allow(dead_code)]
+    pub fn preview_prompt(&mut self, target: Option<crate::prompt::Target>, pad: bool) {
+        self.preview_prompt = target;
+        self.prompt.pad = pad;
+        self.prompt.preview = true;
+    }
+
     /// Shows conversation `key` (dialogue.tsv) on page `page` (the preview renderer).
     #[allow(dead_code)]
     pub fn preview_talk(&mut self, key: &str, page: usize) {
@@ -738,6 +786,7 @@ impl Book {
 
     /// Draws the quest markers over the quest givers (markers.rs) in normal play, from the last quest flags read.
     pub fn draw_markers(&mut self, ui: &Ui, cx: &Context) {
+        self.draw_prompt(ui, cx);
         self.textures.want([markers::OFFER, markers::TALK, markers::SPIRAL].map(String::from));
         if !cx.gameplay || self.blocking() || self.map != MapState::Idle || self.flags.is_empty() {
             return;
@@ -759,11 +808,13 @@ impl Book {
                       ui.time() as f32, ui.io().display_size);
     }
 
-    /// Round 23 (H7): the current quest popup (goalpopup.rs), shown in normal play while no book, dialogue or map is up.
+    /// Round 23 (H7): the quest popups (goalpopup.rs), shown in normal play while no book or map is up. Round 25 (H1):
+    /// over the dialogue box too, as Wizard101 shows them over its quest picker.
     pub fn draw_goal_popup(&mut self, ui: &Ui, cx: &Context) {
-        let visible = cx.gameplay && !self.blocking() && self.map == MapState::Idle;
+        let visible = cx.gameplay && !self.open && !self.holding && self.map == MapState::Idle;
         let draw = ui.get_foreground_draw_list();
-        self.popups.draw(&draw, &self.textures, &self.fonts, ui.io().display_size, visible);
+        self.popups.draw(&draw, &self.textures, &self.fonts, ui.io().display_size, visible,
+                         ui.io().delta_time.clamp(0.0, 0.1));
     }
 
     /// Wizard101's Quest Helper (questhelper.rs, round 18 quests F4): the yellow arrow toward the current goal of
@@ -787,7 +838,14 @@ impl Book {
         let Some(layout) = self.layouts.get(qh::LAYOUT) else { return };
         self.textures.want(layout.images());
         let screen = ui.io().display_size;
-        let (s, origin) = qh::placement(layout, screen, talk::xp_bar_top(screen, self.hud_scale));
+        // Round 25 (H3): over Wizard101's interact prompt while it is up (its box's top less PROMPT_GAP), as in Ryan's
+        // screenshot ref/4 (the goal's name 28 layout pixels over the prompt's scroll).
+        const PROMPT_GAP: f32 = 14.0;
+        let bar_top = match self.prompt_top {
+            Some(top) => top - PROMPT_GAP * screen[1] / 768.0,
+            None => talk::xp_bar_top(screen, self.hud_scale),
+        };
+        let (s, origin) = qh::placement(layout, screen, bar_top);
         let draw = ui.get_background_draw_list();
         // Round 22 (H2): the bearing eased (about 0.1 s) so a jittery read doesn't shake the arrow.
         let target = qh::bearing(&camera, player, goal);
@@ -841,6 +899,11 @@ impl Book {
         let entities = markers::steady(&camera, &game.entities(&markers::MODELS, &markers::entity_ids()));
         let player = qh::player_msb_from_npcs(&camera, &entities).or_else(|| game.position().and_then(qh::player_msb));
         let Some(player) = player else { return Err("hidden: player not on Unicorn Way's tile") };
+        // Round 25 (H7, Ryan: "No quest arrow inside the boss rooms/towers (Rattlebones etc.)"): the tower and boss
+        // rooms all sit under the street (questhelper::in_room); Wizard101 shows no helper arrow inside them.
+        if qh::in_room(player) {
+            return Err("hidden: player in a tower / boss room");
+        }
         let tracked = self.tracked_index().and_then(|i| self.active.get(i));
         let Some((active, goal)) = tracked.into_iter().chain(self.active.iter())
             .find_map(|a| qh::target(a, player).map(|g| (a, g)))
@@ -947,12 +1010,12 @@ impl Book {
 
     /// Whether Wizard101's dialogue box (talk.rs) is up.
     pub fn talking(&self) -> bool {
-        self.dialogue.is_some()
+        self.dialogue.is_some() || self.picker.is_some()
     }
 
     /// Whether the game's keyboard, mouse and controller input are blocked.
     pub fn blocking(&self) -> bool {
-        self.open || self.holding || self.dialogue.is_some()
+        self.open || self.holding || self.talking()
     }
 
     /// Handles input and the map round trip, then draws the book if it is open.
@@ -965,14 +1028,14 @@ impl Book {
         let dt = self.last_frame.elapsed().as_secs_f32().min(0.1);
         self.last_frame = Instant::now();
         self.hud_scale = cx.settings.scale;
-        input::set_gameplay(cx.gameplay && !self.open && self.dialogue.is_none());
+        input::set_gameplay(cx.gameplay && !self.open && !self.talking());
         // M1: the character still walks with the book open (WASD, left stick), except on the map page.
         // Not over Elden Ring's own menus, except the book's own live mirror (round 18 A1: the game keeps going under
         // it; live_preview logs whether the player really walks there).
         input::set_move_through(self.open && cx.gameplay && (cx.hud || crate::live_preview::walk_under_mirror())
-            && self.dialogue.is_none() && self.tab != Tab::Map);
+            && !self.talking() && self.tab != Tab::Map);
         // Round 17 B3: the hidden live mirror may stay up while the book is open off the map page.
-        crate::live_preview::note_book(self.open && self.dialogue.is_none() && self.tab != Tab::Map);
+        crate::live_preview::note_book(self.open && !self.talking() && self.tab != Tab::Map);
         // Before taking the presses, so that the press that closed ER's map doesn't close the reopened book.
         self.follow_map(cx);
         self.quit_follow(cx);
@@ -984,6 +1047,10 @@ impl Book {
         self.gear_step(cx);
         if self.dialogue.is_some() {
             self.dialogue_frame(ui, pressed, &pointer);
+            return;
+        }
+        if self.picker.is_some() {
+            self.picker_frame(ui, pressed, &pointer);
             return;
         }
         if !self.open {
@@ -1908,6 +1975,21 @@ impl Book {
             }
             return;
         }
+        // Round 25 (H2): rows withdrawn by their events leave the picker; with fewer than two left it closes (one
+        // left opens as a plain conversation on the next poll).
+        if self.picker.is_some() && self.picker_pinned {
+            return;
+        }
+        if let Some(p) = &mut self.picker {
+            let requests = &self.requests;
+            p.rows.retain(|r| on(requests[r.request].flag));
+            if p.rows.len() < 2 {
+                tracing::info!("quest picker: closed, {} conversation(s) still asked for", p.rows.len());
+                self.picker = None;
+                self.end_dialogue();
+            }
+            return;
+        }
         let Some(k) = self.requests.iter().position(|r| on(r.flag)) else { return };
         if first {
             // Left on in the save from a conversation cut short by quitting: its event no longer waits for it.
@@ -1919,6 +2001,31 @@ impl Book {
         if !cx.gameplay || self.open {
             return; // the box comes once the book or the game's menu is closed
         }
+        // Round 25 (H2): the same NPC's events asking for more than one quest conversation at once: Wizard101's
+        // quest picker first.
+        let speaker = self.requests[k].speaker.clone();
+        let rows: Vec<crate::picker::Row> = self.requests.iter().enumerate()
+            .filter(|(_, r)| on(r.flag) && r.speaker == speaker && r.quest != "-")
+            .map(|(i, r)| crate::picker::Row {
+                request: i,
+                icon: crate::picker::icon(&r.kind),
+                label: self.quests.quests.iter().find(|q| q.slug == r.quest).map_or(r.quest.clone(), |q| q.title.clone()),
+            })
+            .collect();
+        if rows.len() >= 2 {
+            tracing::info!("quest picker: {} offers {:?}", self.requests[k].name,
+                           rows.iter().map(|r| self.requests[r.request].key.as_str()).collect::<Vec<_>>());
+            crate::music::sfx("ui_chatbubble_popup");
+            self.picker = Some(crate::picker::Picker { speaker, name: self.requests[k].name.clone(),
+                portrait: self.requests[k].portrait.clone(), rows, focus: 0, opened: Instant::now() });
+            input::set_book_open(true);
+            return;
+        }
+        self.open_conversation(k);
+    }
+
+    /// Opens conversation `k` (its request flag is on), or answers it OK when it has no lines.
+    fn open_conversation(&mut self, k: usize) {
         match self.conversation(k) {
             Some(c) => {
                 tracing::info!("dialogue: {} ({} pages{})", self.requests[k].key, c.pages.len(),
@@ -2062,6 +2169,123 @@ impl Book {
         } else if d.page != before {
             crate::music::voice(Some((self.requests[d.request].key.as_str(), d.page)));
         }
+    }
+
+    /// Round 25 (H2): Wizard101's quest picker (picker.rs): the parchment of quests over DialogWindow's box. A row
+    /// (click, or Up / Down and A / Enter) opens its conversation; Cancel (btnRight, B / Esc) answers them all cancel.
+    fn picker_frame(&mut self, ui: &Ui, pressed: u16, pointer: &Pointer) {
+        input::set_book_open(true);
+        let (Some(window), Some(p)) = (self.layouts.get(talk::WINDOW), self.picker.as_ref()) else {
+            self.picker = None;
+            self.end_dialogue();
+            return;
+        };
+        let screen = ui.io().display_size;
+        let (s, origin) = talk::placement(window, screen, talk::xp_bar_top(screen, self.hud_scale));
+        let view = crate::picker::dialog_view(window, p);
+        let mut wanted = window.images();
+        wanted.extend(view.node_art.values().cloned());
+        wanted.extend(crate::picker::art());
+        wanted.push(CURSOR.into());
+        self.textures.want(wanted);
+        let draw = ui.get_foreground_draw_list();
+        let alpha = (p.opened.elapsed().as_secs_f32() / 0.15).min(1.0);
+        let moved = pointer.delta != [0.0, 0.0] || pointer.clicked;
+        let mouse = if moved || self.picker_mouse { pointer.pos } else { [-1.0e4; 2] };
+        let hover = crate::picker::draw(&draw, &self.textures, &self.fonts, screen, p, mouse, alpha);
+        let canvas = Canvas {
+            draw: &draw,
+            textures: &self.textures,
+            fonts: &self.fonts,
+            origin,
+            s,
+            mouse: [(pointer.pos[0] - origin[0]) / s, (pointer.pos[1] - origin[1]) / s],
+            mouse_down: pointer.down,
+            alpha,
+            hole: Cell::new(None),
+        };
+        let hits = layout::draw(window, &view, &canvas, |_| true);
+        draw_cursor(&draw, &self.textures, pointer.pos, screen[1]);
+        if moved {
+            self.picker_mouse = true;
+        }
+        if p.opened.elapsed() < Duration::from_millis(250) {
+            return;
+        }
+        let key = |k: Key| ui.is_key_pressed_no_repeat(k);
+        let button = hits.button.filter(|_| pointer.clicked).map(|b| window.nodes[b].name.as_str());
+        let rows = p.rows.len();
+        let mut pick = hover.filter(|_| pointer.clicked);
+        let mut cancel = matches!(button, Some("btnRight") | Some("btnExit"));
+        if pressed & (input::DPAD_UP | input::DPAD_DOWN) != 0 || key(Key::UpArrow) || key(Key::DownArrow) {
+            let down = pressed & input::DPAD_DOWN != 0 || key(Key::DownArrow);
+            let p = self.picker.as_mut().expect("checked");
+            p.focus = (p.focus + if down { 1 } else { rows - 1 }) % rows;
+            self.picker_mouse = false;
+            crate::music::sfx("HudSelect");
+        } else if pressed & input::A != 0 || key(Key::Enter) || key(Key::Space) || key(Key::E) {
+            pick = Some(hover.unwrap_or(p.focus));
+        } else if pressed & (input::B | input::BACK) != 0 || key(Key::Escape) {
+            cancel = true;
+        }
+        if let Some(i) = pick {
+            let Some(row) = self.picker.as_ref().and_then(|p| p.rows.get(i)).cloned() else { return };
+            tracing::info!("quest picker: picked {} ({})", row.label, self.requests[row.request].key);
+            crate::music::sfx("HudSelect");
+            self.picker = None;
+            self.picker_mouse = false;
+            self.open_conversation(row.request);
+            if self.dialogue.is_none() {
+                self.end_dialogue();
+            }
+        } else if cancel {
+            tracing::info!("quest picker: cancelled");
+            crate::music::sfx("HudCancel");
+            let p = self.picker.take().expect("checked");
+            for row in &p.rows {
+                Self::answer(&self.requests[row.request], talk::Answer::Cancel);
+            }
+            self.picker_mouse = false;
+            self.end_dialogue();
+        }
+    }
+
+    /// Round 25 (H3): Wizard101's interact prompt (prompt.rs) at the street NPC or Bone Cage the player stands at,
+    /// in normal play; remembers its top for the quest helper.
+    fn draw_prompt(&mut self, ui: &Ui, cx: &Context) {
+        self.prompt_top = None;
+        let Some(game) = cx.game else { return };
+        self.prompt.setup(game);
+        // The input used last decides the key's picture: a controller button or stick, else a key or the mouse.
+        let (held, _, _) = input::held();
+        if self.prompt.preview {
+        } else if held != 0 || input::sticks().iter().any(|v| v.abs() > 0.3) {
+            self.prompt.pad = true;
+        } else if ui.io().keys_down.iter().any(|k| *k) || ui.io().mouse_delta != [0.0, 0.0] {
+            self.prompt.pad = false;
+        }
+        if !cx.gameplay || self.blocking() || self.map != MapState::Idle || self.flags.is_empty() {
+            return;
+        }
+        let Some(camera) = game.camera() else { return };
+        let entities = markers::steady(&camera, &game.entities(&markers::MODELS, &markers::entity_ids()));
+        let spots = markers::locate(&camera, game.position(), &entities);
+        let player_msb = crate::questhelper::player_msb_from_npcs(&camera, &entities)
+            .or_else(|| game.position().and_then(crate::questhelper::player_msb));
+        let flags = &self.flags;
+        let target = match self.preview_prompt.clone() {
+            Some(t) => Some(t),
+            None => self.prompt.update(camera.player, game.player_yaw(), &spots, player_msb,
+                                       &|f| flags.get(&f) == Some(&true)),
+        };
+        let Some(target) = target else { return };
+        let mut art = self.prompt.art();
+        art.push(target.portrait.clone());
+        self.textures.want(art);
+        let screen = ui.io().display_size;
+        let draw = ui.get_background_draw_list();
+        self.prompt_top = Some(self.prompt.draw(&draw, &self.textures, &self.fonts, screen,
+                                                talk::xp_bar_top(screen, self.hud_scale), &target));
     }
 
     /// Changes row `row` of the Settings page's current tab by `step` (options.rs). The row's value shows the change;

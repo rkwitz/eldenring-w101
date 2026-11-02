@@ -90,14 +90,29 @@ const PLATE_RANGE: f32 = 40.0;
 /// place of the Wizard101 picture; Gamma (the intro) keeps Wizard101's owl.
 pub const ER_PORTRAITS: &str = "GUI/NpcPortraits/ER";
 
-/// Points the conversations of dialogue.tsv at the Elden Ring portraits that are installed under `book`/art.
-pub fn er_portraits(requests: &mut [crate::talk::Request], book: &std::path::Path) {
+/// Points the conversations of dialogue.tsv at the Elden Ring portraits. Round 25 (H9): always (round 24 only when
+/// the file was there at load, so a game started before the ER folder was deployed kept the W101 faces), also each
+/// page's own speaker, and Merle Ambrose / Gamma (quests::er_picture). A missing ER file shows no face (and is
+/// retried, layout::Textures), never a Wizard101 one.
+pub fn er_portraits(requests: &mut [crate::talk::Request], _book: &std::path::Path) {
+    let er = |slug: &str, path: &str| match NPCS.iter().find(|n| n.0 == slug) {
+        Some(n) => format!("{ER_PORTRAITS}/{}.png", n.0),
+        None => crate::quests::er_picture(path),
+    };
+    let mut left = Vec::new();
     for r in requests.iter_mut() {
-        let picture = format!("{ER_PORTRAITS}/{}.png", r.speaker);
-        if book.join("art").join(&picture).exists() {
-            r.portrait = picture;
+        r.portrait = er(&r.speaker, &r.portrait);
+        for (name, portrait) in r.speakers.iter_mut() {
+            if !portrait.is_empty() {
+                let slug = NPCS.iter().find(|n| n.1 == name.as_str()).map_or("", |n| n.0);
+                *portrait = er(slug, portrait);
+            }
+        }
+        if !r.portrait.starts_with(ER_PORTRAITS) {
+            left.push(format!("{} {}", r.key, r.portrait));
         }
     }
+    tracing::info!("dialogue portraits: {} conversations, not Elden Ring: {left:?}", requests.len());
 }
 
 /// Quests given by talking to their giver: (giver, assigned flag, the flag that makes it available).

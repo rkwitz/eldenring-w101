@@ -936,7 +936,7 @@ impl Game {
 
     /// Round 21 M3 (wisps.rs): adds `percent` of the main player's max HP (or FP) to its current value in the
     /// player's CSChrDataModule (the stat module: hp/max hp at 0x138, fp/max fp at 0x148, the eldenring crate's
-    /// layout, checked below), capped at the max. Nothing for a dead player. Returns (before, after).
+    /// layout, checked below), capped at the max. Nothing for a dead player or a full stat (round 25 H6). Returns (before, after).
     pub fn add_player_stat(&self, fp: bool, percent: f32) -> Option<(i32, i32)> {
         let player = read::<usize>(self.world_chr_man).and_then(|wcm| read::<usize>(wcm + PLAYER))?;
         let stat = read::<usize>(player + MODULES).and_then(|modules| read::<usize>(modules))?;
@@ -946,9 +946,54 @@ impl Game {
         if hp <= 0 || !(1..100_000).contains(&max) || !(0..=max).contains(&now) {
             return None;
         }
+        // Round 25 (H6, Ryan: "wisps can't be picked up when that stat is full"): Wizard101 leaves a wisp where it
+        // is when its stat is full (Ryan's 14:39 log: "picked up a Health wisp ... HP 1704 -> 1704").
+        if now >= max {
+            return None;
+        }
         let new = (now + ((max as f32 * percent / 100.0).round() as i32).max(1)).min(max);
         unsafe { (at as *mut i32).write_volatile(new) };
         Some((now, new))
+    }
+
+    /// Round 25 (H3): the main player's facing on the ground (radians, atan2 of its forward x, z in the camera's space),
+    /// from CSChrPhysicsModule's orientation quaternion (x, y, z, w; forward = local +z).
+    pub fn player_yaw(&self) -> Option<f32> {
+        use eldenring::cs::{CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
+        use std::mem::offset_of;
+        let chr = self.player()?;
+        let modules = read::<usize>(chr + offset_of!(ChrIns, modules))?;
+        let physics = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics))?;
+        let [x, y, z, w] = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, orientation))?;
+        if ![x, y, z, w].iter().all(|v| v.is_finite()) || ((x * x + y * y + z * z + w * w) - 1.0).abs() > 0.1 {
+            return None;
+        }
+        // The quaternion applied to (0, 0, 1).
+        let fx = 2.0 * (x * z + w * y);
+        let fz = 1.0 - 2.0 * (x * x + y * y);
+        Some(fx.atan2(fz))
+    }
+
+    /// Round 25 (H3): ActionButtonParam row `row`'s ER prompt shape (the vanilla regulation's values, read from the
+    /// game's param data).
+    pub fn action_button(&self, row: u32) -> Option<ActionButton> {
+        let at = param_row(b"ACTIONBUTTON_PARAM_ST", row)?;
+        let b = read_bytes(at, 0x38)?;
+        let f = |o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let i = |o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        Some(ActionButton { region: b[0], radius: f(0x0C), angle: i(0x10), height: f(0x1C), base: f(0x20),
+                            text_id: i(0x34) })
+    }
+
+    /// Round 25 (H3): writes ActionButtonParam row `row`'s textId (the text Elden Ring's own prompt shows).
+    pub fn set_action_button_text(&self, row: u32, text_id: i32) -> bool {
+        use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
+        let Some(at) = param_row(b"ACTIONBUTTON_PARAM_ST", row) else { return false };
+        let mut written = 0;
+        unsafe {
+            WriteProcessMemory(GetCurrentProcess(), (at + 0x34) as _, (&text_id as *const i32).cast(), 4, &mut written)
+                != 0 && written == 4
+        }
     }
 
     /// One byte of Elden Ring's GameSettings (options.rs has the offsets).
@@ -1087,4 +1132,66 @@ pub fn rebase(jump: [f32; 3], old: &[(usize, [f32; 3])], new: &[(usize, [f32; 3]
         }
     }
     seen > 0 && same * 2 > seen
+}
+
+/// Round 25 (H3): an ActionButtonParam row's prompt shape: region type (0 cylinder), radius, angle (degrees), height
+/// and base height offset (metres), and textId.
+#[derive(Clone, Copy, Debug)]
+pub struct ActionButton {
+    pub region: u8,
+    pub radius: f32,
+    pub angle: i32,
+    pub height: f32,
+    pub base: f32,
+    pub text_id: i32,
+}
+
+/// Round 25 (H3): the data address of row `row` of the param table named `name` (its PARAMDEF type), found through
+/// SoloParamRepository's holders as probe.rs finds MenuOffscrRendParam; tables are looked up once and kept.
+fn param_row(name: &[u8], row: u32) -> Option<usize> {
+    use eldenring::cs::{ParamResCap, SoloParamRepository};
+    use eldenring::fd4::FD4ParamResCap;
+    use std::mem::offset_of;
+    static FILES: std::sync::Mutex<Vec<(Vec<u8>, usize)>> = std::sync::Mutex::new(Vec::new());
+    let mut files = FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let file = match files.iter().find(|f| f.0 == name) {
+        Some(f) => f.1,
+        None => {
+            let repo = from_singleton::static_of::<SoloParamRepository>()?;
+            let repo = read::<usize>(repo.as_ptr() as usize)?;
+            let holders = repo + offset_of!(SoloParamRepository, solo_param_holders);
+            const HOLDER: usize = 72;
+            let file_of = |index: usize| -> Option<usize> {
+                let res_cap = read::<usize>(holders + index * HOLDER + 8)?;
+                let param = read::<usize>(res_cap + offset_of!(ParamResCap, param_res_cap))?;
+                read::<usize>(param + offset_of!(FD4ParamResCap, data))
+            };
+            let named = |file: usize| -> bool {
+                let Some(header) = read_bytes(file, 0x40) else { return false };
+                let got = if header[0x2D] & 0x80 != 0 {
+                    let offset = u32::from_le_bytes(header[0x10..0x14].try_into().unwrap()) as usize;
+                    read_bytes(file + offset, name.len() + 1)
+                } else {
+                    Some(header[0x0C..(0x0C + name.len() + 1).min(0x40)].to_vec())
+                };
+                got.is_some_and(|g| g.starts_with(name) && g.get(name.len()).is_none_or(|c| *c == 0))
+            };
+            let file = (0..200).find_map(|i| file_of(i).filter(|f| named(*f)))?;
+            files.push((name.to_vec(), file));
+            file
+        }
+    };
+    let header = read_bytes(file, 0x40)?;
+    let rows = u16::from_le_bytes(header[0x0A..0x0C].try_into().unwrap()) as usize;
+    let format = header[0x2D];
+    let wide = format & 0x04 != 0;
+    let extended = wide || (format & 0x01 != 0 && format & 0x02 != 0);
+    let first = 0x30 + if extended { 0x10 } else { 0 };
+    let entry = if wide { 24 } else { 12 };
+    let table = read_bytes(file + first, rows.min(20_000) * entry)?;
+    table.chunks_exact(entry).find(|d| u32::from_le_bytes(d[0..4].try_into().unwrap()) == row).map(|d| {
+        let offset = if wide { u64::from_le_bytes(d[8..16].try_into().unwrap()) as usize }
+                     else { u32::from_le_bytes(d[4..8].try_into().unwrap()) as usize };
+        file + offset
+    })
 }

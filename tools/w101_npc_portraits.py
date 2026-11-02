@@ -62,6 +62,11 @@ NPCS = [
     ("ceren_nightchant", "parts", "m", HIDE_23510, "112", "233,223,175", "1.6,0.45", ["hd_m_1240", "bd_m_1240", "lg_m_1240", "fg_a_2006"], None),
     ("olivia_dawnwillow", "c2170", "f", None, "-", "0,0,0", "1.86,0.7", ["c2170"], None),
     ("lady_oriel", "c5330", "f", None, "-", "0,0,0", "1.25,1.1", ["c5330"], (600, 206, 344)),
+    # Round 25 (H9): Merle Ambrose's stand-in Ranni the Witch c2050 (the intro's portrait) and Rattlebones' Giant
+    # Skeleton Torso c4960 (the Defeat Rattlebones goal picture), so no Wizard101 face is left.
+    ("merle_ambrose", "c2050", "f", None, "-", "0,0,0", "1.55,0.95", ["c2050"], None),
+    ("lady_blackhope", "c3300", "f", None, "-", "0,0,0", "2.1,0.75", ["c3300"], None),  # book map's T1 boss
+    ("rattlebones", "c4960", "f", None, "-", "0,0,0", "5.0,9.5", ["c4960"], (448, 181, 216)),
 ]
 PARTS = ["fc_m_0000", "fg_a_0100", "fg_a_1500", "bd_m_1331", "am_m_1330", "lg_m_1330", "bd_m_1652", "am_m_1650",
          "lg_m_1650", "hd_m_1240", "bd_m_1240", "lg_m_1240", "hr_a_0009", "hr_a_0005", "hr_a_0112", "fg_a_2003",
@@ -79,11 +84,32 @@ CHRS = {
         "Plant_Body_2": "Plant_Parts", "Plant_Body_Veil": "Petal_color", "Trina_Body": "Trina_Body",
         "stem": "Plant_Parts",
     },
+    # Round 25: Ranni without her spirit (Ghost) layers; the torso's ring uses the bone texture.
+    "c2050": {
+        "BD": "BD", "BD_Mant": "BD", "BD_Mant_Fur": "BD", "BD_Mant_Trim": "BD", "BD_Skin_Fiber": None,
+        "BD_Skin_SSS": "BD_Skin", "BD_cloth": "BD", "FC_Eye_Blue": "FC_Eye", "FC_Eye_Occulusion": None,
+        "FC_Face_SSS": "FC_Face", "FC_Ghost": None, "FC_Ghost_Eye": None, "FC_Ghost_Hair": None,
+        "FC_Ghost_Hair_Cloth": None, "FC_Ghost_Hair_Tip": None, "FC_Ghost_Hair_Tip_Cloth": None,
+        "FC_Ghost_Pattern": None, "FC_Mouth_SSS": "Mouth", "HD": "HD", "HD_Crystal": "HD", "HD_Fur_Shell": None,
+        "HD_Metal": "HD", "HR": "HR", "LG": "LG", "LG_cloth": "LG", "WP_A_1350": "WP_A_1350",
+        "WP_A_1350_Crystal": "WP_A_1350",
+    },
+    # Nox Swordstress (Lady Blackhope's stand-in, msb_add_boss.BOSSES): the base look, the FMA/FMB variants and
+    # the weapons left out.
+    "c3300": {"AM_fabric": "AM", "BD_fabric": "BD", "BD_fabric_cloth": "BD", "BD_leather": "BD", "BD_metal": "BD",
+              "BD_scale": "BD", "FC_Eye": "eye", "FC_Skin": "face", "HD_fabric": "HD", "HD_fabric_cloth": "HD",
+              "HD_metal": "HD", "LG_fabric": "LG", "LG_fabric_cloth": "LG", "LG_leather": "LG", "LG_metal": "LG",
+              "LG_scale": "LG", "belt": "BD",
+              **{k: None for k in ["FMA_BD_fabric", "FMA_BD_fabric_cloth", "FMA_BD_leather", "FMA_BD_metal",
+                                   "FMA_FC_Skin", "FMA_HD_fabric", "FMA_HD_fabric2", "FMA_HD_metal", "FMB_BD_fabric",
+                                   "FMB_BD_fabric_cloth", "FMB_HD_fabric", "FMB_HD_metal", "WP_A_0217",
+                                   "WP_A_0818", "WP_A_1323"]}},
+    "c4960": {"Skeleton": "skeleton", "ring": "skeleton"},
 }
 W101 = ["Human_WCGuard_A", "Human_WCGuard_B", "Art_Portrait_Boy_Life02", "Human_WCShopKeepF_A_NPC",
         "Portrait_Seraph_Aerial_B_NPC", "Portrait_Owl_Gamma_A_NPC"]
 YAW = "0.3"
-YAWS = {"olivia_dawnwillow": "0", "lady_oriel": "-0.6"}  # facing the camera
+YAWS = {"olivia_dawnwillow": "0", "lady_oriel": "-0.6", "merle_ambrose": "0.2"}  # facing the camera
 RENDER = 300
 SIDE = 256
 
