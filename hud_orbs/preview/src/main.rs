@@ -293,6 +293,7 @@ fn main() {
         ("7f_crafting_made", pages::Tab::Crafting, 1, [0.0, 0.0], "made:1"),
         // Round 16: the materials tabs' plain tooltip (ToolTip.gui; 7g: the recipe tabs').
         ("7h_crafting_materials_tab_tip", pages::Tab::Crafting, 1, [0.309, 0.203], "materials"),
+        ("7i_crafting_materials_card_hover", pages::Tab::Crafting, 0, [0.30, 0.40], "materials"),
         ("8_help", pages::Tab::Help, 1, [0.0, 0.0], ""),
         // Round 15 (book): badge hover, a memory slot's card, the help topics' added spreads.
         ("1d_badge_tip", pages::Tab::Character, 1, [0.63, 0.33], ""),

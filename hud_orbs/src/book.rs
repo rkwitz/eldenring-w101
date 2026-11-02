@@ -1101,18 +1101,21 @@ impl Book {
                 self.state.step_page(1);
             }
         }
-        if (pressed & input::A != 0 || ui.is_key_pressed_no_repeat(Key::Enter)) && self.tab == Tab::Settings {
-            // The Settings window's OK.
-            self.settings_ok(cx);
-            return;
-        }
         let mut pointer = pointer;
-        if pressed & input::A != 0 || ui.is_key_pressed_no_repeat(Key::Enter) {
-            // A / Enter clicks where the wand is (round 19 A5: the right stick moves it on every page).
+        let a_click = pressed & input::A != 0 || ui.is_key_pressed_no_repeat(Key::Enter);
+        if a_click {
+            // A / Enter clicks where the wand is (round 19 A5: the right stick moves it on every page). Round 22 B4:
+            // on Settings too; A used to be only the window's OK there, so Exit Game / Quit never got A's click.
             pointer.clicked = true;
         }
 
         let (tab_hit, page_hit, in_model, mouse) = self.draw(ui, cx, &pointer, dt, false);
+        if a_click && self.tab == Tab::Settings && tab_hit.is_none() && page_hit.is_none()
+            && !self.state.hits.iter().any(|(r, _)| layout::inside(mouse, *r)) {
+            // A / Enter with the wand over nothing on Settings: still the Settings window's OK.
+            self.settings_ok(cx);
+            return;
+        }
 
         // Turning the character picture: drag in its window.
         if pointer.clicked && in_model {

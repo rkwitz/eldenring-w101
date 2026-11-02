@@ -326,7 +326,7 @@ fn recipes(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         let colour = if known(recipe) || index == st.craft.recipe { LIGHT_YELLOW } else { LOCKED };
         let label = if recipe.set > 1 { format!("{name} x{}", recipe.set) } else { name.clone() };
         v.add([r[0] + 22.0, r[1], r[2] - 26.0, r[3]], label, TextStyle::new("WizardFancy", 0.42, colour).centred());
-        v.tip(r, recipe_tip(d, recipe));
+        // Round 22 B1: no hover on the recipe rows (the ingredients are on the left page).
     }
     if list.is_empty() {
         v.add([419.0, 120.0, 718.0, 160.0], "No recipes", TextStyle::new("WizardFancy", 0.55, BLACK).centred());
@@ -364,16 +364,13 @@ fn recipes(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             Some(&(m, need)) => {
                 let goods = 0x4000_0000 | m;
                 let have = held(d, goods);
-                let b = l.nodes[n].rect;
                 // Round 17 D1: the material in Wizard101's own square box (IngredientLayout's art), inside its
                 // gold border and above the have/need plaque; no round medallion.
                 if let Some(layout) = l.find("IngredientLayout") {
                     ingredient_picture(v, d.items, goods, l.nodes[layout].rect, slot);
                 }
                 v.set(num, centre(&format!("{have}/{need}")));
-                let mut tip = d.items.tooltip(goods, have.max(1), d.names, false);
-                tip.insert(1.min(tip.len()), format!("Needed: {need}, you have {have}"));
-                v.tip(b, tip);
+                // Round 22 B2: no hover on the reagents (have/need is on the plaque).
             }
             None => {
                 v.show(plaque, false);
@@ -412,13 +409,6 @@ fn recipes(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             v.set(l.find("createdItemText"), centre(&what));
         }
     }
-}
-
-/// A recipe's hover text on the right page.
-fn recipe_tip(d: &Data, r: &Recipe) -> Vec<String> {
-    let mut lines = vec![result_name(d, r)];
-    lines.extend(recipe_lines(d, r));
-    lines
 }
 
 fn recipe_lines(d: &Data, r: &Recipe) -> Vec<String> {

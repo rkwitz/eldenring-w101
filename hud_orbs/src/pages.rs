@@ -767,10 +767,11 @@ fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 let r = l.nodes[col].rect;
                 v.set(Some(col), centre(&values[i]));
                 v.style.insert(col, TextStyle::new("WizardNormal", 0.42, BLACK));
-                // The label under the box (this section has one row).
-                v.add([r[0], r[3] - 8.0, r[2], r[3] + 8.0], labels[i].to_string(),
+                // The label under the box (this section has one row); round 22 B3: below the box's bottom line,
+                // not on it.
+                v.add([r[0], r[3] + 1.0, r[2], r[3] + 17.0], labels[i].to_string(),
                       TextStyle::new("WizardNormal", 0.3, BLACK).centred());
-                v.plain_tip([r[0], r[1] - 26.0, r[2], r[3] + 8.0], vec![format!("{}: {}", about[i], values[i])]);
+                v.plain_tip([r[0], r[1] - 26.0, r[2], r[3] + 17.0], vec![format!("{}: {}", about[i], values[i])]);
             }
             let ratio = if st3.max_load > 0.0 { st3.load / st3.max_load } else { 0.0 };
             let roll = match ratio {
@@ -2500,9 +2501,7 @@ fn reagents(l: &Layout, d: &Data, st: &mut State, v: &mut View, list: &[(String,
         // The count on the sun (CardNumber, 128,171 .. 153,190).
         let (n0, n1) = (card(126.0, 171.0), card(155.0, 191.0));
         v.add([n0[0], n0[1], n1[0], n1[1]], count.to_string(), TextStyle::new("WizardFancy", 0.42, BLACK).centred());
-        let mut tip = d.items.tooltip(*id, *count, d.names, false);
-        tip.insert(1.min(tip.len()), format!("Rank {rank} {school} material"));
-        v.tip([x, y, x + w, y + h], tip);
+        // Round 22 B2: no hover on the reagent cards (name, rank, school and count are on the card).
     }
     if list.is_empty() {
         let text = if chosen == 0 { "No materials yet" } else { "None of these yet" };
