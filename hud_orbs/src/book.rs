@@ -179,6 +179,11 @@ pub struct Book {
     picker_mouse: bool,
     /// The preview's picker (no event flags behind it).
     picker_pinned: bool,
+    /// Round 27 (B2): Ugo's shop window (shop.rs), its stock (book/er/shop.tsv), and a buy or sale waiting for its
+    /// event (kept when the window closes, so its runes are still settled).
+    shop: Option<crate::shop::Shop>,
+    stock: crate::shop::Stock,
+    shop_trade: Option<crate::shop::Trade>,
     /// Round 25 (H3): Wizard101's interact prompt (prompt.rs) and its box's top this frame (screen pixels).
     pub prompt: crate::prompt::Prompt,
     prompt_top: Option<f32>,
@@ -408,6 +413,9 @@ impl Book {
             picker: None,
             picker_mouse: false,
             picker_pinned: false,
+            shop: None,
+            stock: crate::shop::Stock::default(),
+            shop_trade: None,
             prompt: Default::default(),
             prompt_top: None,
             preview_prompt: None,
@@ -488,7 +496,9 @@ impl Book {
             self.prompt.load(&orbs.join("w101_orbs.ini"));
         }
         self.quest_flags.extend(self.requests.iter().map(|r| r.flag));
-        for page in [talk::WINDOW, talk::IMAGE, crate::questhelper::LAYOUT] {
+        self.stock = crate::shop::load(&folder.join("er").join("shop.tsv"));
+        for page in [talk::WINDOW, talk::IMAGE, crate::questhelper::LAYOUT, crate::shop::WINDOW, crate::shop::BUY,
+                     crate::shop::SELL] {
             match Layout::load(&folder.join(format!("{page}.lay"))) {
                 Ok(l) => {
                     self.layouts.insert(page, l);
@@ -675,6 +685,7 @@ impl Book {
     pub fn preview_show(&mut self, tab: Tab, sub: usize) {
         self.dialogue = None;
         self.picker = None;
+        self.shop = None;
         self.map = MapState::Idle;
         self.set_open(true);
         self.opened_at = Instant::now() - Duration::from_secs(1);
@@ -1024,7 +1035,7 @@ impl Book {
 
     /// Whether Wizard101's dialogue box (talk.rs) is up.
     pub fn talking(&self) -> bool {
-        self.dialogue.is_some() || self.picker.is_some()
+        self.dialogue.is_some() || self.picker.is_some() || self.shop.is_some()
     }
 
     /// Whether the game's keyboard, mouse and controller input are blocked.
@@ -1059,6 +1070,11 @@ impl Book {
             self.poll_quests(cx);
         }
         self.gear_step(cx);
+        self.shop_poll(cx);
+        if self.shop.is_some() {
+            self.shop_frame(ui, pressed, &pointer);
+            return;
+        }
         if self.dialogue.is_some() {
             self.dialogue_frame(ui, pressed, &pointer);
             return;
@@ -2005,6 +2021,14 @@ impl Book {
                 }
             }
         }
+        // Round 27 (B2): Ugo's shop closes when his talk event withdraws the request (the player walked away).
+        if let Some(shop) = &self.shop {
+            if let Some(k) = shop.request.filter(|k| !on(self.requests[*k].flag)) {
+                tracing::info!("shop: {} withdrawn by its event", self.requests[k].key);
+                self.end_shop();
+            }
+            return;
+        }
         if let Some(d) = &self.dialogue {
             if !on(self.requests[d.request].flag) {
                 tracing::info!("dialogue: {} withdrawn by its event", self.requests[d.request].key);
@@ -2037,6 +2061,13 @@ impl Book {
         }
         if !cx.gameplay || self.open {
             return; // the box comes once the book or the game's menu is closed
+        }
+        // Round 27 (B2): Ugo has no dialogue: his talk request opens Wizard101's shop window.
+        if self.requests[k].flag == markers::SHOP_REQUEST {
+            if !self.open_shop(k, cx) {
+                self.open_conversation(k);
+            }
+            return;
         }
         // Round 25 (H2): the same NPC's events asking for more than one quest conversation at once: Wizard101's
         // quest picker first.
@@ -2210,6 +2241,200 @@ impl Book {
         } else if d.page != before {
             crate::music::voice(Some((self.requests[d.request].key.as_str(), d.page)));
         }
+    }
+
+    fn load_names(&mut self) {
+        if self.names.as_ref().is_none_or(|n| n.is_empty()) {
+            let path = self.folder.parent().unwrap_or(&self.folder).join("er_item_names.tsv");
+            self.names = Some(Names::load(&path));
+        }
+    }
+
+    /// Round 27 (B2): opens Ugo's shop for talk request `k`; false (the dialogue box instead) without its layouts or
+    /// book/er/shop.tsv.
+    fn open_shop(&mut self, k: usize, cx: &Context) -> bool {
+        let layouts = [crate::shop::WINDOW, crate::shop::BUY, crate::shop::SELL];
+        if self.stock.is_empty() || layouts.iter().any(|l| !self.layouts.contains_key(l)) {
+            tracing::warn!("shop: no shop.tsv or shop layouts; {} opens as a conversation", self.requests[k].key);
+            return false;
+        }
+        self.load_names();
+        let title = self.requests[k].pages.first().map(|p| p.trim().to_string()).filter(|p| !p.is_empty())
+            .unwrap_or_else(|| crate::shop::DEFAULT_TITLE.to_string());
+        let mut shop = crate::shop::Shop::new(Some(k), title);
+        if let Some(sheet) = cx.game.and_then(|g| g.sheet()) {
+            shop.read(&sheet, &self.stock);
+        }
+        tracing::info!("shop: open ({}; {} runes, {} sellable items held)", self.requests[k].key, shop.runes, shop.held.len());
+        crate::music::sfx("ui_chatbubble_popup");
+        self.shop = Some(shop);
+        input::set_book_open(true);
+        true
+    }
+
+    /// The shop window (the preview renderer): Buy or Sell, category `cat`, row `chosen` lit.
+    #[allow(dead_code)]
+    pub fn preview_shop(&mut self, selling: bool, cat: usize, chosen: usize, sheet: Option<Sheet>) {
+        self.load_names();
+        let mut shop = crate::shop::Shop::new(None, crate::shop::DEFAULT_TITLE.into());
+        if let Some(sheet) = sheet {
+            shop.read(&sheet, &self.stock);
+        }
+        shop.selling = selling;
+        shop.cat = cat.min(crate::shop::CATEGORIES.len() - 1);
+        shop.chosen = chosen;
+        shop.page = chosen / crate::shop::ROWS;
+        shop.opened = Instant::now() - Duration::from_secs(1);
+        self.shop = Some(shop);
+    }
+
+    /// Closes the shop, answering Ugo's talk OK (Wizard101's shops have no cancel).
+    fn end_shop(&mut self) {
+        if let Some(shop) = self.shop.take() {
+            if let Some(k) = shop.request.filter(|k| game::event_flag(self.requests[*k].flag) == Some(true)) {
+                Self::answer(&self.requests[k], talk::Answer::Ok);
+            }
+        }
+        self.holding = true;
+        self.closed_at = Some(Instant::now());
+        input::set_book_open(self.blocking());
+    }
+
+    /// A buy or sale waiting for its event (every frame, the window open or not), and the runes and items held
+    /// while the window is up.
+    fn shop_poll(&mut self, cx: &Context) {
+        if let Some(trade) = self.shop_trade.clone() {
+            self.load_names();
+            let names = self.names.as_ref().expect("loaded");
+            if let Some(result) = crate::shop::poll(&trade, cx.game, names) {
+                self.shop_trade = None;
+                crate::music::sfx(if result.is_ok() { "ui_reward_gold" } else { "HudCancel" });
+                if let Some(shop) = self.shop.as_mut() {
+                    shop.note = Some((result.unwrap_or_else(|e| e), Instant::now()));
+                    shop.read_at = None;
+                }
+            }
+        }
+        let Some(shop) = self.shop.as_mut() else { return };
+        if shop.request.is_some() && shop.read_at.is_none_or(|t| t.elapsed().as_secs_f32() > 1.0) {
+            match cx.game.and_then(|g| g.sheet()) {
+                Some(sheet) => shop.read(&sheet, &self.stock),
+                None => shop.read_at = Some(Instant::now()),
+            }
+        }
+    }
+
+    /// Round 27 (B2): Wizard101's shop window (shop.rs): ShoppingWindow with Buy/SellWindow in it. Mouse: tabs,
+    /// categories, rows, arrows, BUY / SELL, the X. Controller / keys: Up / Down rows, Left / Right pages, LB / RB
+    /// categories, Y (Tab) Buy / Sell, A (Enter) buys or sells, B (Esc) closes.
+    fn shop_frame(&mut self, ui: &Ui, pressed: u16, pointer: &Pointer) {
+        input::set_book_open(true);
+        let Some(mut shop) = self.shop.take() else { return };
+        let (Some(top), Some(buy), Some(sell)) = (self.layouts.get(crate::shop::WINDOW), self.layouts.get(crate::shop::BUY),
+                                                  self.layouts.get(crate::shop::SELL)) else {
+            self.shop = Some(shop);
+            self.end_shop();
+            return;
+        };
+        let page = if shop.selling { sell } else { buy };
+        let none = Names::default();
+        let names = self.names.as_ref().unwrap_or(&none);
+        let top_view = crate::shop::top_view(top, &shop);
+        let page_view = crate::shop::page_view(page, &mut shop, &self.stock, names, &self.items);
+        let screen = ui.io().display_size;
+        let (s, origin) = crate::shop::placement(screen);
+        let mut wanted = top.images();
+        wanted.extend(page.images());
+        wanted.extend(page_view.images.iter().map(|i| i.1.clone()));
+        wanted.extend(crate::itemdata::TIP_ICONS.iter().map(|i| i.to_string()));
+        wanted.push(CURSOR.into());
+        self.textures.want(wanted);
+        let draw = ui.get_foreground_draw_list();
+        let alpha = (shop.opened.elapsed().as_secs_f32() / 0.15).min(1.0);
+        let canvas_at = |at: [f32; 2]| Canvas {
+            draw: &draw,
+            textures: &self.textures,
+            fonts: &self.fonts,
+            origin: at,
+            s,
+            mouse: [(pointer.pos[0] - at[0]) / s, (pointer.pos[1] - at[1]) / s],
+            mouse_down: pointer.down,
+            alpha,
+            hole: Cell::new(None),
+        };
+        let outer = canvas_at(origin);
+        let inner = canvas_at([origin[0], origin[1] + crate::shop::INNER_Y * s]);
+        let top_hits = layout::draw(top, &top_view, &outer, |_| true);
+        layout::draw_extra(&top_view, &outer);
+        let page_hits = layout::draw(page, &page_view, &inner, |_| true);
+        layout::draw_extra(&page_view, &inner);
+        if let Some((_, text)) = top_view.bubbles.iter().rev().find(|(r, _)| layout::inside(outer.mouse, *r)) {
+            draw_bubble(&outer, text, outer.mouse, crate::shop::SIZE, 1.0);
+        }
+        if let Some((_, lines)) = page_view.tips.iter().rev().find(|(r, _)| layout::inside(inner.mouse, *r)) {
+            self.draw_tip(&inner, lines, inner.mouse, crate::shop::INNER_SIZE);
+        }
+        draw_cursor(&draw, &self.textures, pointer.pos, screen[1]);
+        if shop.opened.elapsed() < Duration::from_millis(250) {
+            self.shop = Some(shop);
+            return;
+        }
+        let key = |k: Key| ui.is_key_pressed_no_repeat(k);
+        let clicked = |hits: layout::Hits, l: &Layout, is_top: bool| {
+            hits.button.filter(|_| pointer.clicked).and_then(|b| crate::shop::click(&l.nodes[b].name, is_top))
+        };
+        let rows = shop.list(&self.stock).len();
+        let cats = crate::shop::CATEGORIES.len();
+        use crate::shop::Act;
+        let act = clicked(top_hits, top, true).or_else(|| clicked(page_hits, page, false)).or_else(|| {
+            if pressed & (input::B | input::BACK) != 0 || key(Key::Escape) {
+                Some(Act::Close)
+            } else if pressed & input::A != 0 || key(Key::Enter) || key(Key::Space) {
+                Some(Act::Trade)
+            } else if pressed & input::Y != 0 || key(Key::Tab) {
+                Some(Act::Tab(!shop.selling))
+            } else if pressed & input::LB != 0 || pressed & input::RB != 0 {
+                Some(Act::Category((shop.cat + if pressed & input::RB != 0 { 1 } else { cats - 1 }) % cats))
+            } else if pressed & input::DPAD_LEFT != 0 || key(Key::LeftArrow) {
+                Some(Act::Page(-1))
+            } else if pressed & input::DPAD_RIGHT != 0 || key(Key::RightArrow) {
+                Some(Act::Page(1))
+            } else if rows > 0 && (pressed & (input::DPAD_UP | input::DPAD_DOWN) != 0 || key(Key::UpArrow) || key(Key::DownArrow)) {
+                let down = pressed & input::DPAD_DOWN != 0 || key(Key::DownArrow);
+                let row = (shop.chosen + if down { 1 } else { rows - 1 }) % rows;
+                shop.page = row / crate::shop::ROWS;
+                Some(Act::Row(row % crate::shop::ROWS))
+            } else {
+                None
+            }
+        });
+        match act {
+            Some(Act::Close) => {
+                tracing::info!("shop: closed");
+                crate::music::sfx("HudCancel");
+                self.shop = Some(shop);
+                self.end_shop();
+                return;
+            }
+            Some(Act::Trade) if self.shop_trade.is_some() => shop.note = Some(("One moment...".into(), Instant::now())),
+            Some(Act::Trade) if shop.request.is_none() => {}
+            Some(Act::Trade) => match crate::shop::request(&shop, &self.stock, names) {
+                Ok(trade) => {
+                    crate::music::sfx("HudSelect");
+                    self.shop_trade = Some(trade);
+                }
+                Err(why) => {
+                    crate::music::sfx("HudCancel");
+                    shop.note = Some((why, Instant::now()));
+                }
+            },
+            Some(act) => {
+                crate::music::sfx("HudSelect");
+                crate::shop::apply(&mut shop, act, &self.stock);
+            }
+            None => {}
+        }
+        self.shop = Some(shop);
     }
 
     /// Round 25 (H2): Wizard101's quest picker (picker.rs): the parchment of quests over DialogWindow's box. A row

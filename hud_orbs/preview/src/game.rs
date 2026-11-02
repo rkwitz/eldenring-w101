@@ -60,6 +60,10 @@ impl Game {
         None
     }
 
+    pub fn spend_runes(&self, _runes: u32) -> Option<u32> {
+        None
+    }
+
     pub fn equip(&self, _slot: u32, _item_id: Option<u32>) -> Result<(), &'static str> {
         Ok(())
     }

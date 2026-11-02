@@ -26,6 +26,9 @@ python emevd.py --book-warps common.emevd out.emevd
   the HUD spellbook map page's warp buttons (see book_warps).
 python emevd.py --crafting common.emevd er_recipes.tsv out.emevd
   the HUD spellbook's crafting page: one event per recipe (see crafting; er_recipes.tsv from er_recipes.py).
+python emevd.py --shop common.emevd[.dcx] shop.tsv out.emevd[.dcx]
+  round 27 (B2): Ugo Kalahad's shop window (hud_orbs shop.rs): one event per item to buy or sell (see shop;
+  shop.tsv from w101_shop.py).
 python emevd.py --no-leaves common.emevd|m60.emevd out.emevd
   every falling-leaf source of those events off, in place (see no_leaves).
 python emevd.py --midday m60_42_36_00.emevd out.emevd [first_id second_id]
@@ -914,6 +917,78 @@ def crafting(d, recipes):
     return build(e, events)
 
 
+# Round 27 (B2): Ugo Kalahad's shop window (hud_orbs/src/shop.rs SHOP_*), free flags 1042362300-329 of the mod's
+# 1042362xxx block (no vanilla common/m60_42_36 emevd uses them; crafting's are 160-182 and 350-399). The window opens
+# on the street worker's markers::SHOP_REQUEST (1042362441, Ugo's talk) and answers that talk with 1042362620 on close.
+SHOP_REQUEST = 1042362300  # the window turns it on to buy or sell; the item's event turns it off
+SHOP_SELL = 1042362301  # on: sell, off: buy
+SHOP_INDEX = 1042362302  # the item's number (shop.tsv n), bit k in flag SHOP_INDEX + k (302-311)
+SHOP_INDEX_BITS = 10
+SHOP_DONE, SHOP_FAILED = 1042362312, 1042362313
+SHOP_GIVE = 1042362316  # event value (4 bits, 316-319): how many to give
+SHOP_GIVE_BITS = 4
+SHOP_COUNT = 1042362320  # event value (10 bits, 320-329): how many of the item are held
+SHOP_COUNT_BITS = 10
+SHOP_EVENT = 1042365200  # + n (crafting uses 1042365000 + recipe, < 200 recipes)
+
+
+def read_shop(path):
+    """shop.tsv (w101_shop.py): [(n, sell, item type 0 weapon / 1 armour, param id)]."""
+    out = []
+    for line in open(path, encoding="utf-8"):
+        f = line.rstrip("\n").split("\t")
+        if f[0] == "B" and len(f) >= 7:
+            item = int(f[6])
+        elif f[0] == "S" and len(f) >= 5:
+            item = int(f[3])
+        else:
+            continue
+        out.append((int(f[1]), f[0] == "S", item >> 28, item & 0x0FFFFFFF))
+    return out
+
+
+def shop(d, rows):
+    """common.emevd: one event per shop.tsv row, all started from the top of event 0 (rerunning replaces them), as
+    crafting's. Event SHOP_EVENT + n waits for SHOP_REQUEST with SHOP_SELL on (sell rows) or off (buy rows) and n in
+    the SHOP_INDEX flags (each tested on or off, so exactly one event answers); request, done and failed off; then
+    buy: SHOP_GIVE counted to 1 (2003[32] clear, 2003[31] increment), 2003[43] Directly Give Player Item, SHOP_DONE on
+    (the DLL checked the runes first and takes them once SHOP_DONE is on); sell: 2003[42] Store Item Amount Held into
+    SHOP_COUNT, IF it is >= 1 (3[12], group 2) else SHOP_FAILED on and restart; 2003[24] Remove Item From Player 1,
+    SHOP_DONE on (the DLL then pays the runes). Item type: 0 weapon, 1 armour (ItemType)."""
+    e = Emevd(d)
+    events = events_of(e)
+    for n, sell, kind, item in rows:
+        assert n < 1 << SHOP_INDEX_BITS
+        event_id = SHOP_EVENT + n
+        _start_once(events, event_id)
+        ins = [_i(3, 0, "<bBBxI", 1, 1, 0, SHOP_REQUEST), _i(3, 0, "<bBBxI", 1, int(sell), 0, SHOP_SELL)]
+        ins += [_i(3, 0, "<bBBxI", 1, n >> k & 1, 0, SHOP_INDEX + k) for k in range(SHOP_INDEX_BITS)]
+        ins += [
+            _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
+            _i(2003, 66, "<BxxxIBxxx", 0, SHOP_REQUEST, 0),
+            _i(2003, 66, "<BxxxIBxxx", 0, SHOP_DONE, 0),
+            _i(2003, 66, "<BxxxIBxxx", 0, SHOP_FAILED, 0),
+        ]
+        if sell:
+            ins += [
+                _i(2003, 42, "<BxxxiII", kind, item, SHOP_COUNT, SHOP_COUNT_BITS),  # Store Item Amount Held
+                _i(3, 12, "<bxxxIBBxxI", 2, SHOP_COUNT, SHOP_COUNT_BITS, 4, 1),  # IF held >= 1 (group 2)
+                _i(1000, 1, "<BBbx", 2, 1, 2),  # SKIP 2 IF condition group 2 true (uncompiled)
+                _i(2003, 66, "<BxxxIBxxx", 0, SHOP_FAILED, 1),
+                _i(1000, 4, "<Bxxx", 1),  # restart
+                _i(2003, 24, "<Bxxxii", kind, item, 1),  # Remove Item From Player
+            ]
+        else:
+            ins += [
+                _i(2003, 32, "<II", SHOP_GIVE, SHOP_GIVE_BITS),  # Clear Event Value
+                _i(2003, 31, "<III", SHOP_GIVE, SHOP_GIVE_BITS, 1),  # Increment Event Value
+                _i(2003, 43, "<BxxxiII", kind, item, SHOP_GIVE, SHOP_GIVE_BITS),  # Directly Give Player Item
+            ]
+        ins += [_i(2003, 66, "<BxxxIBxxx", 0, SHOP_DONE, 1), _i(1000, 4, "<Bxxx", 1)]  # done, restart
+        events.append({"id": event_id, "rest": 0, "pars": [], "ins": ins})
+    return build(e, events)
+
+
 def build(e, events):
     """EMEVD bytes from `events` [{id, rest, ins: [{bank, id, args, layer}], pars: [(index, target, source, size, unk)]}]
     with the header flags, linked files and strings of the parsed file `e` (no layers)."""
@@ -956,6 +1031,10 @@ if __name__ == "__main__":
     import sys
     if sys.argv[1] == "--book-warps":  # emevd.py --book-warps common.emevd out.emevd
         open(sys.argv[3], "wb").write(book_warps(open(sys.argv[2], "rb").read()))
+        sys.exit()
+    if sys.argv[1] == "--shop":  # emevd.py --shop common.emevd[.dcx] shop.tsv out.emevd[.dcx]
+        rows = read_shop(sys.argv[3])
+        _dcx_apply(sys.argv[2], sys.argv[4], lambda raw: shop(raw, rows))
         sys.exit()
     if sys.argv[1] == "--crafting":  # emevd.py --crafting common.emevd er_recipes.tsv out.emevd
         open(sys.argv[4], "wb").write(crafting(open(sys.argv[2], "rb").read(), read_recipes(sys.argv[3])))

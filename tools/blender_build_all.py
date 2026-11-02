@@ -12,6 +12,8 @@ from its file on disk, so an old copy open in Blender's text editor can't be run
   cage       blender_build_cage.py        Wizard101's Bone Cage, closed and open (aeg030_558 / 559)
   fog        blender_build_fog.py         the Commons gate's fog, seen from anywhere (aeg030_530)
   boss       blender_build_boss.py        Rattlebones (c4960) never fades out of sight (project chr/c4960.anibnd.dcx)
+  portraits  blender_npc_portraits.py     the NPCs' dialogue portraits, rendered from the game's models (orbs/w101_orbs/book/
+                                          art/GUI/NpcPortraits/ER; a few minutes; SKIP = {"portraits"} once they are made)
 
 SKIP leaves steps out (e.g. SKIP = {"street", "footprint"} when only a room changed). A failing step is reported and
 the rest still run. Map placement, events and the navmesh are not rebuilt here; they are already in the project.
@@ -36,6 +38,7 @@ STEPS = [
     ("cage", "blender_build_cage.py"),
     ("fog", "blender_build_fog.py"),
     ("boss", "blender_build_boss.py"),
+    ("portraits", "blender_npc_portraits.py"),
 ]
 
 results = []

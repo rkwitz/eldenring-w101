@@ -39,6 +39,7 @@ mod sheet;
 mod sidewalk;
 mod picker;
 mod prompt;
+mod shop;
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;

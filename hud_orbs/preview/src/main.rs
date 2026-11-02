@@ -55,6 +55,8 @@ mod goalpopup;
 mod picker;
 #[path = "../../src/prompt.rs"]
 mod prompt;
+#[path = "../../src/shop.rs"]
+mod shop;
 mod input;
 mod game;
 mod live_preview;
@@ -420,6 +422,11 @@ fn main() {
         ("26b_prompt_pad_y", pages::Tab::Character, 0, [0.0, 0.0], "prompt:private_connelly|Y"),
         ("26c_prompt_pad_a", pages::Tab::Character, 0, [0.0, 0.0], "prompt:diego|A"),
         ("26d_prompt_pad_rb", pages::Tab::Character, 0, [0.0, 0.0], "prompt:ugo_kalahad|RB"),
+        // Round 27 (B2): Ugo's shop: Buy (Hats, Wands with a row's tooltip), Sell (Wands, Robes).
+        ("27p_shop_buy_hats", pages::Tab::Character, 0, [0.0, 0.0], "shop:buy|0|0"),
+        ("27q_shop_buy_wands_tip", pages::Tab::Character, 0, [0.60, 0.42], "shop:buy|3|2"),
+        ("27r_shop_sell_wands", pages::Tab::Character, 0, [0.0, 0.0], "shop:sell|3|0"),
+        ("27s_shop_sell_robes", pages::Tab::Character, 0, [0.0, 0.0], "shop:sell|1|0"),
         ("23l_popup_goal_update", pages::Tab::Character, 0, [0.0, 0.0], "popup:0.5|Goal Update: Defeat Lost Souls 1 of 2"),
         ("23m_popup_goal_complete", pages::Tab::Character, 0, [0.0, 0.0], "popup:1.0|Goal Complete: Defeat Lost Souls"),
         ("23n_popup_quest_complete_fading", pages::Tab::Character, 0, [0.0, 0.0], "popup:3.5|Quest Complete: Ghost Hunters"),
@@ -486,6 +493,13 @@ fn main() {
         if let Some((focus, keys)) = show.strip_prefix("picker:").and_then(|p| p.split_once('|')) {
             book.preview_closed();
             book.preview_picker(&keys.split(',').collect::<Vec<_>>(), focus.parse().unwrap_or(0));
+        }
+        // Round 27 (B2): "shop:<buy|sell>|<category 0-3>|<row>": Ugo's shop window.
+        if let Some(rest) = show.strip_prefix("shop:") {
+            book.preview_closed();
+            let f: Vec<&str> = rest.split('|').collect();
+            let num = |i: usize| f.get(i).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+            book.preview_shop(f.first() == Some(&"sell"), num(1), num(2), game.sheet());
         }
         if let Some((who, pad)) = show.strip_prefix("prompt:").and_then(|p| p.split_once('|')) {
             book.preview_closed();

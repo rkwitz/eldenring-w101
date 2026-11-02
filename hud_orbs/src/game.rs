@@ -617,6 +617,22 @@ impl Game {
         Some(count)
     }
 
+    /// Round 27 (B2): takes `runes` from the runes held (the shop's buys; rune memory, the total ever gathered, is
+    /// left alone); None when fewer are held or the count can't be reached. Returns the runes held after.
+    pub fn spend_runes(&self, runes: u32) -> Option<u32> {
+        use eldenring::cs::PlayerGameData;
+        use std::mem::offset_of;
+        let pgd = read::<usize>(self.game_data_man).and_then(|gdm| read::<usize>(gdm + PLAYER_GAME_DATA))?;
+        let level = read::<u32>(pgd + offset_of!(PlayerGameData, level))?;
+        if !(1..=713).contains(&level) {
+            return None;
+        }
+        let count_at = pgd + offset_of!(PlayerGameData, rune_count);
+        let count = read::<u32>(count_at)?.checked_sub(runes)?;
+        unsafe { (count_at as *mut u32).write_volatile(count) };
+        Some(count)
+    }
+
     /// Puts `spell` (a magic param ID, -1 = none) in memory slot `index` (EquipMagicData's entries), as Elden
     /// Ring's own Memorize Spell menu does at a grace; false when the slot can't be reached.
     pub fn set_spell(&self, index: usize, spell: i32) -> bool {
