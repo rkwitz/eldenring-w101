@@ -81,7 +81,10 @@ FOG_WALLS = [("AEG099_001_9103", 9403, 1042361892, -2.0), ("AEG099_001_9104", 94
 FOG_WALL_Z, FOG_WALL_Y = -15.2, 0.02  # round 27 (street frame); round 28 places them by the door instead
 # Round 28 (W3): the real gate and the fog's place in its frame (metres out of the door, toward the street).
 DOOR = "AEG110_064_1000"
-DOOR_WALL_Z, DOOR_MIST_Z, DOOR_PHANTOM_Z, DOOR_Y = 0.35, 0.25, 0.15, 0.02
+# Round 29 (F2, Ryan: "move it back a very small amount; it clips slightly through the wall"): at +0.35 the fog stood
+# 0.04 m inside W101's archway mouth (street z -10.91 = door +0.39), so its sides showed on the wall's face; it is now
+# 0.25 m further back, in the gateway behind the wall face (round 28: 0.35, 0.25, 0.15).
+DOOR_WALL_Z, DOOR_MIST_Z, DOOR_PHANTOM_Z, DOOR_Y = 0.10, 0.0, -0.10, 0.02
 FOG_ENTITIES = {MIST_PART: 1042361894, WALL_PART: 1042361895}
 FOG_SIDE_REGION, FOG_SIDE_ENTITY, FOG_SIDE_REGION_ID = "W101_fog_street_side", 1042362702, 9270
 # Box in the door's frame: from FOG_SIDE_NEAR (behind the door plane, so standing in the gateway still counts) out

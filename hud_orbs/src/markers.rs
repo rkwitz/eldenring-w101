@@ -105,6 +105,54 @@ pub const NPCS: [(&str, &str, u32, u32, [f32; 3], f32, f32); 6] = [
     ("diego", "Diego the Duelmaster", 1042360825, 0, [5.0029, 94.1828, -44.0778], 1.9, 2.38),
     ("ugo_kalahad", "Ugo Kalahad", 1042360826, 3200, [-29.7745, 94.5018, -61.8978], 2.0, 2.6),
 ];
+/// Round 29 (NP1, Ryan: "NPCs knocked away by hits sometimes walk back to their spot and sometimes just stay"):
+/// proof of which NPCs go home. Each street NPC's first position after it is (re)loaded is its spot; the log says
+/// when one is pushed more than HOME_AWAY m off it, when it is back within HOME_BACK m (and after how long), and when
+/// it is still away HOME_STUCK s later. Their Think rows (regulation, NpcThinkParam) differ: Connelly / Ceren / Olivia
+/// / Diego run logic 10000 with backhomeDist 50 / 50 / 50 / 35 m, Ugo (Kale) his own logic 320000 with backhomeDist
+/// 30 and BackHomeLife_OnHitEneWal 5, Lady Oriel (Trina) 9999, so the log is what tells which of them return.
+const HOME_AWAY: f32 = 0.5;
+const HOME_BACK: f32 = 0.3;
+const HOME_STUCK: f32 = 20.0;
+struct Home {
+    id: u32,
+    spot: [f32; 3],
+    seen: std::time::Instant,
+    away: Option<(std::time::Instant, bool)>,
+}
+static HOMES: std::sync::Mutex<Vec<Home>> = std::sync::Mutex::new(Vec::new());
+
+pub fn track_homes(entities: &[(u32, [f32; 3])]) {
+    let now = std::time::Instant::now();
+    let mut homes = HOMES.lock().unwrap_or_else(|e| e.into_inner());
+    // An NPC unseen for 3 s (map load, warp, out of range) takes its spot afresh when it is back.
+    homes.retain(|h| now.duration_since(h.seen).as_secs_f32() < 3.0);
+    for (id, p) in entities {
+        let name = NPCS.iter().find(|n| n.2 == *id).map_or("?", |n| n.1);
+        let Some(h) = homes.iter_mut().find(|h| h.id == *id) else {
+            homes.push(Home { id: *id, spot: *p, seen: now, away: None });
+            continue;
+        };
+        h.seen = now;
+        let d = ((p[0] - h.spot[0]).powi(2) + (p[2] - h.spot[2]).powi(2)).sqrt();
+        match h.away {
+            None if d > HOME_AWAY => {
+                tracing::info!("npc home: {name} ({id}) pushed {d:.2} m off its spot");
+                h.away = Some((now, false));
+            }
+            Some((since, _)) if d < HOME_BACK => {
+                tracing::info!("npc home: {name} ({id}) back on its spot after {:.1} s", now.duration_since(since).as_secs_f32());
+                h.away = None;
+            }
+            Some((since, false)) if now.duration_since(since).as_secs_f32() > HOME_STUCK => {
+                tracing::info!("npc home: {name} ({id}) still {d:.2} m off its spot after {HOME_STUCK} s: its AI is not taking it home");
+                h.away = Some((since, true));
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Round 26 (N7): street NPCs the game has loaded dead (Game::entities). They get no spot at all, so no marker, name
 /// plate or talk prompt; the talk events END for a dead character too (tools/emevd_quests.py npc_event).
 static DEAD: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());

@@ -139,7 +139,7 @@ pub fn frame(game: Option<&crate::game::Game>, camera: Option<crate::markers::Ca
         if !s.stale_logged {
             s.stale_logged = true;
             tracing::info!("depth: no copy for {} frames in play (mode {}); the CPU sight tests stand in",
-                           info.age, if info.present_mode { "PRESENT" } else { "END" });
+                           info.age, if info.present_mode { "BOUNDARY" } else { "END" });
         }
     } else if on {
         s.stale_logged = false;
@@ -166,6 +166,10 @@ fn read_probe(s: &mut State, depth_values: &[f32], tags: &[(String, f32)], playe
             }
             let good = if s.validated { ok[s.reversed as usize ^ 1] } else { ok[0] || ok[1] };
             s.mode_checks[info.present_mode as usize][(!good) as usize] += 1;
+            // Round 29 (W1): every check also scores the copy point on trial or in use (depth::report_check).
+            if info.age <= 1 {
+                depth::report_check(good);
+            }
             if !ok[0] && !ok[1] {
                 s.fails += 1;
                 if d > 0.0 && d < 1.0 {
@@ -203,18 +207,12 @@ fn read_probe(s: &mut State, depth_values: &[f32], tags: &[(String, f32)], playe
             if s.last_summary.is_none_or(|t| t.elapsed().as_secs() >= 15) {
                 s.last_summary = Some(Instant::now());
                 tracing::info!("depth: player check {} (passes reversed {} / normal {}, fails {}): {line}; {} copies \
-                                in {} frames ({} at Present); since the last summary: END-copy checks ok/missed {}/{}, \
-                                PRESENT-copy checks ok/missed {}/{}, tag state changes {}; copy mode now {}, {} frames old",
+                                in {} frames ({} at a boundary); since the last summary: END-copy checks ok/missed {}/{}, \
+                                BOUNDARY-copy checks ok/missed {}/{}, tag state changes {}; copy mode now {}, {} frames old",
                                if ok[0] || ok[1] { "ok" } else { "MISSED" }, s.passes[0], s.passes[1],
                                s.fails, info.copies, info.frames, info.present_copies, s.mode_checks[0][0],
                                s.mode_checks[0][1], s.mode_checks[1][0], s.mode_checks[1][1], s.flips,
-                               if info.present_mode { "PRESENT" } else { "END" }, info.age);
-                // The Present copy is the frame's final depth; when it misses the player most of the time it is not
-                // the scene (something drawn after it), and the END copy comes back.
-                let [ok_p, miss_p] = s.mode_checks[1];
-                if ok_p + miss_p >= 20 && ok_p < miss_p {
-                    depth::reject_present();
-                }
+                               if info.present_mode { "BOUNDARY" } else { "END" }, info.age);
                 s.mode_checks = [[0; 2]; 2];
                 s.flips = 0;
             }
@@ -233,7 +231,7 @@ fn read_probe(s: &mut State, depth_values: &[f32], tags: &[(String, f32)], playe
         let hidden = scene < limit;
         if s.shown.insert(name.clone(), !hidden) != Some(!hidden) {
             s.flips += 1;
-            let mode = if info.present_mode { "PRESENT" } else { "END" };
+            let mode = if info.present_mode { "BOUNDARY" } else { "END" };
             if hidden {
                 tracing::info!("depth: tag '{name}' occluded (scene {scene:.1} m in front of the tag at {z:.1} m; \
                                 {mode} copy)");

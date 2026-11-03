@@ -106,6 +106,20 @@ pub struct Plate {
 /// heights + 0.35 above.
 const BOX_GAP: f32 = 0.35;
 
+/// Round 29 (N1): a posed box top higher than this many times the creature's known height is not its mesh.
+const BOX_CAP: f32 = 2.5;
+
+fn log_box_rejected(model: u32, over: f32, known: f32) {
+    use std::sync::Mutex;
+    static SEEN: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if !seen.contains(&model) {
+        seen.push(model);
+        tracing::info!("tags: c{model} model box top {over:.2} m over its feet is more than {BOX_CAP} x its height \
+                        {known:.2} m: not its mesh, plate from the capsule / fixed height");
+    }
+}
+
 /// The plates for the enemies (model, physics position, hit capsule height or 0, top of the posed model box) in view,
 /// farthest first (nearer ones over them).
 ///
@@ -118,6 +132,18 @@ pub fn plates(camera: &Camera, enemies: &[(u32, [f32; 3], f32, Option<[f32; 3]>)
     for &(model, p, height, top) in enemies {
         let Some(&(_, name, rank, school, title, tall, seen, colour)) = CREATURES.iter().find(|c| c.0 == model) else { continue };
         let lift = seen.unwrap_or(if height > 0.0 { height } else { tall } + GAP);
+        // Round 29 (N1, Ryan: Skeleton Pirates' names way too high): the round 29 log reads c3500's posed box top
+        // 8.36-8.38 m over its physics position, for a 2.16 m mesh (er_chr_height.py), so that box is not the posed
+        // mesh. A box top more than BOX_CAP x the creature's known height over its feet is not used (Rattlebones
+        // 10.3 m of 5.95, Fear of Fire 7.5 of 3.2 and Blackhope 2.56 of 2.8 stay under it).
+        let known = seen.unwrap_or(tall);
+        let top = top.filter(|t| {
+            let ok = t[1] - p[1] <= BOX_CAP * known;
+            if !ok {
+                log_box_rejected(model, t[1] - p[1], known);
+            }
+            ok
+        });
         let anchor = match top {
             Some(t) => [t[0], t[1] + BOX_GAP, t[2]],
             None => [p[0], p[1] + lift, p[2]],

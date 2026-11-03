@@ -286,6 +286,27 @@ impl Game {
         local.then_some(([at[0], at[1] + max[1], at[2]], false))
     }
 
+    /// Round 29 (T1): Torrent (character c8000 in WorldChrMan's summon/buddy ChrSet, which holds spirit ashes and
+    /// Torrent) fading out (`out`) or back in, through his ChrIns base_transparency_modifier (negative fades the base
+    /// transparency to 0, positive back to 1; the game's own fade flags set -1 / 1). Returns his ChrIns.
+    pub fn fade_torrent(&self, out: bool) -> Option<usize> {
+        use eldenring::cs::{ChrIns, ChrSet, ChrSetEntry, WorldChrMan};
+        use std::mem::{offset_of, size_of};
+        let wcm = read::<usize>(self.world_chr_man)?;
+        let set = wcm + offset_of!(WorldChrMan, summon_buddy_chr_set);
+        let capacity = read::<u32>(set + offset_of!(ChrSet<ChrIns>, capacity))? as usize;
+        let entries = read::<usize>(set + offset_of!(ChrSet<ChrIns>, entries))?;
+        let entry = size_of::<ChrSetEntry<ChrIns>>();
+        let bytes = read_bytes(entries, capacity.min(256) * entry)?;
+        let chr = bytes.chunks_exact(entry).map(|e| usize::from_le_bytes(e[..8].try_into().unwrap()))
+            .filter(|c| *c >= 0x10000 && *c % 8 == 0)
+            .find(|c| read::<u32>(c + offset_of!(ChrIns, character_id)) == Some(8000))?;
+        let at = chr + offset_of!(ChrIns, base_transparency_modifier);
+        read::<f32>(at)?;
+        unsafe { (at as *mut f32).write_volatile(if out { -1.0 } else { 1.0 }) };
+        Some(chr)
+    }
+
     /// The camera as CSCam holds it right now (see `camera`).
     fn camera_now(&self) -> Option<crate::markers::Camera> {
         use eldenring::cs::{CSCam, CSCamera, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};

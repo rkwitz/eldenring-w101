@@ -900,6 +900,8 @@ unsafe extern "system" fn d3d12_command_queue_execute_command_lists_impl(
     } else {
         std::slice::from_raw_parts(command_lists as *const usize, num_command_lists as usize).to_vec()
     };
+    crate::depth::ECL_TRAMPOLINE
+        .store(*d3d12_command_queue_execute_command_lists as usize, std::sync::atomic::Ordering::Relaxed);
     let _order = crate::depth::queue_guard();
     d3d12_command_queue_execute_command_lists(command_queue, num_command_lists, command_lists);
     crate::depth::executed(queue_raw, &lists);

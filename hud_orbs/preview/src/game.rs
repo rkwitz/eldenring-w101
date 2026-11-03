@@ -25,6 +25,11 @@ pub fn set_event_flag(_flag: u32, _on: bool) {}
 static SPELLS: std::sync::Mutex<[i32; 14]> = std::sync::Mutex::new([4010, 4200, 4361, 4430, 4301, 6600, -1, -1, -1, -1, -1, -1, -1, -1]);
 
 impl Game {
+    /// Round 29 (T1): no Torrent in the preview.
+    pub fn fade_torrent(&self, _out: bool) -> Option<usize> {
+        None
+    }
+
     /// A Lost Soul and Rattlebones up the street, a Dark Sprite nearer.
     pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3], f32, Option<[f32; 3]>)> {
         [(4180, [-23.0, 93.5, -100.0], 1.6), (4960, [-5.0, 93.5, -86.0], 0.0), (3450, [-17.5, 94.0, -106.0], 1.4),

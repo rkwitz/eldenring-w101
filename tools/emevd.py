@@ -182,7 +182,7 @@ CAMERA_PITCH = 5.0  # as common event 950 after its warp
 LOAD_SCREEN_LEAD = 0.75  # seconds between LOAD_SCREEN_FLAG on and the warp, so the HUD's load screen is up first
 FADE = 0.5  # seconds of 2004[77] fade to black before the warp
 ARRIVAL_SETTLE = 1.0  # seconds after the warp before the door listens again
-WELCOME_REARM = 5.0  # round 23 H3: further seconds before an on-foot door's warp turns the welcome message back on
+WELCOME_REARM = 5.0  # unused since round 29 H1 (welcome_cards re-arms on the street); round 23 H3: further seconds before an on-foot door's warp turns the welcome message back on
 
 
 MOUNTED_EVENT_OFFSET = 20  # door event id + this = its mounted twin (1042362830-839)
@@ -255,16 +255,16 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS, on_foot=False):
             else:
                 # Round 23 (H3, Ryan: "When you go into the hedge maze, it shouldn't say Unicorn Way again"): the short
                 # warp also announces the arrival's MapNameOverride box (the garden's W101_name_maze, 610900), so the
-                # welcome message is off over the warp, as on the riding branch, and armed again WELCOME_REARM s later.
+                # welcome message is off over the warp, as on the riding branch, welcome_cards arms it again on the street (round 29).
                 body.append(_i(2012, 8, "<Bxxx", 0))  # area welcome message off: no title card at the arrival
                 body.append(_i(2004, 41, "<IIIi", 10000, 1, arrival, -1))  # short warp to region
                 if arrival in ARRIVAL_YAW:  # camera looking where the arrival faces
                     body.append(_i(2008, 4, "<ff", CAMERA_PITCH, (ARRIVAL_YAW[arrival] + 180.0) % 360.0 - 180.0))
             body.append(_i(2004, 77, "<ffBxxxf", 0.0, 0.0, 0, 0.0))  # lift the fade and the freeze
             body.append(_i(1001, 0, "<f", ARRIVAL_SETTLE))
-            if not riding:
-                body.append(_i(1001, 0, "<f", WELCOME_REARM))
-                body.append(_i(2012, 8, "<Bxxx", 1))  # welcome message on again (graces, the graveyard door card)
+            # Round 29 (H1, 3rd report of the maze title): no re-arm here any more. It ran WELCOME_REARM s after the
+            # arrival, i.e. while the player stood in the hedge maze, and the maze's title card is what Ryan keeps
+            # seeing; welcome_cards now arms the message only once the player is back on the street (FOG_SIDE box).
             body.append(_i(1000, 4, "<Bxxx", 1))  # End Unconditionally: restart
             events.append({"id": this, "rest": 0, "pars": [], "ins": body})
     return build(e, events)
@@ -560,7 +560,15 @@ FOG_PLANES = (1042361894, 1042361895)  # msb_fog_gate.FOG_ENTITIES: our mist pla
 FOG_SIDE = 1042362702  # msb_fog_gate.FOG_SIDE_ENTITY: box over the street side of the graveyard exit door
 
 
-def fog_wall(d, event_id=FOG_WALL_EVENT, walls=FOG_WALLS, planes=FOG_PLANES, side=FOG_SIDE):
+# Round 29 (F1, Ryan: "our fog is yellow, Elden Ring's own fog gate is white"): our plane aeg030_530 is drawn with
+# the street's lit M_AMSN_V material (flver_textures.blend_material), so the warm Limgrave sun tints its near-white
+# texture (236, 238, 242); Elden Ring's fog gate (AEG099_001 + SFX 3) is a self-lit effect. The planes are now kept
+# off and only Elden Ring's own fog gates show at the gate. (An unlit alpha-blended plane is untested.)
+FOG_PLANES_SHOWN = False
+
+
+def fog_wall(d, event_id=FOG_WALL_EVENT, walls=FOG_WALLS, planes=FOG_PLANES, side=FOG_SIDE,
+             planes_shown=FOG_PLANES_SHOWN):
     """Round 27 (A6): Elden Ring's own fog gate look on the Commons gate. Vanilla shows a fog wall (AEG099_001, a
     mesh-less asset) with common_func 9005811: 2005[3] Change Asset Enable State (asset, 1) and 2006[4] Create
     Asset-following SFX (asset, dummypoly 101, SFX 3) (m18 event 18000870 for the Stranded Graveyard's own fog walls
@@ -589,7 +597,8 @@ def fog_wall(d, event_id=FOG_WALL_EVENT, walls=FOG_WALLS, planes=FOG_PLANES, sid
         ins += [_i(2005, 3, "<IBxxx", wall, 1),
                 _i(2006, 5, "<IBxxx", wall, 1),
                 _i(2006, 4, "<Iii", wall, FOG_WALL_DUMMY, FOG_WALL_SFX)]
-    ins += [_i(2005, 3, "<IBxxx", plane, 1) for plane in planes]
+    if planes_shown:
+        ins += [_i(2005, 3, "<IBxxx", plane, 1) for plane in planes]
     ins.append(_i(3, 2, "<bBxxIIi", 0, 0, 10000, side, 1))  # IF the player has left it (behind the gate)
     ins += off()
     ins.append(_i(1000, 4, "<Bxxx", 1))  # restart
@@ -633,20 +642,28 @@ WELCOME_EVENT = 1042362989
 WELCOME_DELAY = 10.0  # seconds into a map before the welcome message is armed again (the card shows in the first few)
 
 
-def welcome_cards(d, event_id=WELCOME_EVENT, delay=WELCOME_DELAY):
+def welcome_cards(d, event_id=WELCOME_EVENT, delay=WELCOME_DELAY, street=FOG_SIDE):
     """Event `event_id` (started from the top of event 0, rest 0): wait `delay` s, then 2012[8] 1 (area welcome
     message on). The riding doors turn it off before their map warp and the state survives the load (vanilla relies
     on that in common event 910), so something has to arm it again or no title card would ever show. Waiting past
     the card's own moment leaves the door's arrival silent while fast travel to the grace, and the card on walking
     out of the graveyard door (title_on_door_exit, 2007[14], which the same state gates), still work. Rerunning
-    replaces it."""
+    replaces it.
+
+    Round 29 (H1): the message is armed only while the player is inside the street box `street` (FOG_SIDE,
+    1042362702, which holds every street door's arrival but not the hedge maze, the garden doors' regions or the boss
+    rooms), then the event waits for him to leave the box and starts over. Before, both this event (10 s into the
+    map) and the on-foot doors (6 s after the warp) armed it while the player could be standing in the maze, so the
+    maze still got its "Unicorn Way" card; with the message off everywhere off the street that cannot happen."""
     e = Emevd(d)
     events = events_of(e)
     _start_once(events, event_id)
     events.append({"id": event_id, "rest": 0, "pars": [], "ins": [
         _i(1001, 0, "<f", delay),
-        _i(2012, 8, "<Bxxx", 1),
-        _i(1000, 4, "<Bxxx", 0),  # End
+        _i(3, 2, "<bBxxIIi", 0, 1, 10000, street, 1),  # IF the player is on the street (main group)
+        _i(2012, 8, "<Bxxx", 1),  # welcome message on
+        _i(3, 2, "<bBxxIIi", 0, 0, 10000, street, 1),  # IF he has left the street box
+        _i(1000, 4, "<Bxxx", 1),  # restart
     ]})
     return build(e, events)
 
@@ -1108,6 +1125,9 @@ if __name__ == "__main__":
         sys.exit()
     if sys.argv[1] == "--quest-window":  # emevd.py --quest-window in.emevd[.dcx] out.emevd[.dcx] (round 26 W2)
         _dcx_apply(sys.argv[2], sys.argv[3], quest_window)
+        sys.exit()
+    if sys.argv[1] == "--welcome":  # emevd.py --welcome in.emevd[.dcx] out.emevd[.dcx] (round 29 H1)
+        _dcx_apply(sys.argv[2], sys.argv[3], welcome_cards)
         sys.exit()
     if sys.argv[1] == "--fog-wall":  # emevd.py --fog-wall in.emevd[.dcx] out.emevd[.dcx] (round 27 A6)
         _dcx_apply(sys.argv[2], sys.argv[3], fog_wall)

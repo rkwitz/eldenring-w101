@@ -63,4 +63,5 @@ pub mod depth {
     }
     pub fn reject_current() {}
     pub fn reject_present() {}
+    pub fn report_check(_ok: bool) {}
 }

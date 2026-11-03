@@ -84,7 +84,17 @@ pub struct Teleport {
     missing_logged: bool,
     /// FX_Disappear.nif's body mesh and spark path (book\art\teleport\fx_disappear.tsv).
     shape: Shape,
+    /// Round 29 (T1): Torrent faded out with the player (book warp): 0 not yet, 1 faded, 2 faded back.
+    torrent: u8,
 }
+
+/// Round 29 (T1, Ryan: "when you teleport and your character fades out, Torrent must fade out too"): the book-warp
+/// events hide the player with SpEffect 9910 at POOF_HIDE_AT s (tools/emevd.py); Torrent gets no SpEffect from
+/// EMEVD (no entity id), so the overlay fades him with his own ChrIns base transparency at the same moment
+/// (Game::fade_torrent), and back in after TORRENT_BACK s in case the warp did not happen (a warp's map load
+/// removes him anyway; he comes back whole when called again).
+const POOF_HIDE_AT: f32 = 0.35;
+const TORRENT_BACK: f32 = 8.0;
 
 impl Teleport {
     /// Reads the effect's body mesh and spark path from the art folder (book\art); a stand-in shape without it.
@@ -135,12 +145,28 @@ impl Teleport {
         if game.is_some() && crate::game::event_flag(POOF_FLAG) == Some(true) {
             crate::game::set_event_flag(POOF_FLAG, false);
             self.book_at = Some(Instant::now());
+            self.torrent = 0;
             match (ready, game.and_then(|g| g.camera())) {
                 (true, Some(camera)) => {
                     tracing::info!("teleport: book warp poof at {:?}", camera.player);
                     self.poof = Some(Poof::new(camera.player, None, POOF_LIVE));
                 }
                 _ => self.log_missing(ready),
+            }
+        }
+        if let (Some(g), Some(at)) = (game, self.book_at) {
+            let t = at.elapsed().as_secs_f32();
+            if self.torrent == 0 && t >= POOF_HIDE_AT {
+                self.torrent = 1;
+                match g.fade_torrent(true) {
+                    Some(chr) => tracing::info!("teleport: Torrent ({chr:#x}) fading out with the player"),
+                    None => tracing::info!("teleport: no Torrent loaded to fade out"),
+                }
+            } else if self.torrent == 1 && t >= TORRENT_BACK && !loading {
+                self.torrent = 2;
+                if let Some(chr) = g.fade_torrent(false) {
+                    tracing::info!("teleport: Torrent ({chr:#x}) faded back in");
+                }
             }
         }
         let mut out = loading;

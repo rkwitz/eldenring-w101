@@ -140,6 +140,7 @@ pub fn player_msb_from_npcs(camera: &Camera, entities: &[(u32, [f32; 3])]) -> Op
 pub fn player_msb_now(game: &crate::game::Game) -> Option<[f32; 3]> {
     let camera = game.camera()?;
     let entities = game.entities(&crate::markers::MODELS, &crate::markers::entity_ids());
+    crate::markers::track_homes(&entities);
     player_msb_from_npcs(&camera, &entities).filter(|p| p[0].abs() < TILE_RANGE && p[2].abs() < TILE_RANGE)
 }
 
