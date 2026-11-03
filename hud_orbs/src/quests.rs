@@ -24,7 +24,7 @@ pub struct Goal {
 pub enum Counter {
     #[default]
     None,
-    /// A 4-bit event value on four flags, the first the most significant.
+    /// A 4-bit event value on four flags (2003[31] IncrementEventValue), the first the LEAST significant (event_value).
     Bits(u32),
     /// How many of these flags are on.
     Flags(Vec<u32>),
@@ -48,6 +48,15 @@ pub struct Quest {
     pub text: Vec<String>,
 }
 
+/// Round 29 (Q3): one open goal as its quest card page shows it.
+#[derive(Clone, Debug)]
+pub struct GoalPage {
+    pub goal: String,
+    pub place: String,
+    pub progress: Option<(u32, u32)>,
+    pub picture: String,
+}
+
 /// A quest in progress as the Quests page shows it.
 #[derive(Clone, Debug)]
 pub struct Active {
@@ -56,7 +65,9 @@ pub struct Active {
     /// The current goal's text, and its count (done, needed) for counted goals.
     pub goal: String,
     pub progress: Option<(u32, u32)>,
-    pub other_goals: Vec<String>,
+    /// Round 29 (Q3): every goal open now, one card page each (Wizard101's btnPrevGoal / btnNextGoal flip them);
+    /// the first is `goal` above. Empty once ready (the turn-in is the only page).
+    pub pages: Vec<GoalPage>,
     pub place: String,
     pub ready: bool,
     pub turn_in: String,
@@ -71,8 +82,9 @@ pub struct Active {
 
 /// Round 20 (Q3): each quest's reward in runes (tools/w101_quests.py REWARDS, keep in step): Wizard101's quest
 /// rewards are server-side, so these are Wizard City-sized gold amounts given as the same number of runes.
+/// Round 29 (Q1): Unicorn Way 0: it is handed over done at Connelly's first talk, so it gives nothing.
 pub const REWARDS: &[(&str, u32)] = &[
-    ("unicorn_way", 25), ("ghost_hunters", 35), ("skeleton_crew", 45), ("monsters_and_mazes", 55),
+    ("unicorn_way", 0), ("ghost_hunters", 35), ("skeleton_crew", 45), ("monsters_and_mazes", 55),
     ("finding_out_why", 75), ("who_could_it_be_now", 60), ("sinister_skeleton", 150),
 ];
 /// Quest base + 7 (w101_quests.REWARD_OFFSET): on once the reward has been given (book.rs sets it).
@@ -127,6 +139,15 @@ fn fill_pictures(quest: &mut Quest) {
             quest.goals[i].picture = next.unwrap_or_default();
         }
     }
+}
+
+/// Round 28 (Q2, Ryan: "one Lost Soul counted as two: 2 of 2, but the quest went on"): Elden Ring's event value
+/// (2003[31] IncrementEventValue base, 4 bits) keeps its lowest bit on the base flag. Ryan's round 29 log: after the
+/// first kill only 1042360500 was on ("Goal Update ... 2 of 2" at 03:28:45), after the second only 1042360501
+/// (03:29:17, and the event's own 3[12] count >= 2 then finished the goal). Rounds 15-28 read the base flag as the
+/// most significant bit, so 1 read as 8 (shown min(8, 2) = 2 of 2).
+pub fn event_value(base: u32, flag: &dyn Fn(u32) -> bool) -> u32 {
+    (0..4).fold(0, |v, b| v | (flag(base + b) as u32) << b)
 }
 
 #[derive(Default)]
@@ -253,7 +274,7 @@ impl Quests {
                 }
                 let progress = match &g.counter {
                     Counter::None => None,
-                    Counter::Bits(base) => Some((0..4).fold(0, |v, b| v << 1 | flag(base + b) as u32)),
+                    Counter::Bits(base) => Some(event_value(*base, flag)),
                     Counter::Flags(list) => Some(list.iter().filter(|f| flag(**f)).count() as u32),
                 };
                 let progress = progress.filter(|_| g.count > 1).map(|n| (n.min(g.count), g.count));
@@ -270,7 +291,16 @@ impl Quests {
                 main: q.main,
                 goal,
                 progress,
-                other_goals: if flag(q.ready) { Vec::new() } else { current.iter().skip(1).map(|c| c.1.clone()).collect() },
+                pages: if flag(q.ready) {
+                    Vec::new()
+                } else {
+                    current.iter().map(|(i, text, place, progress)| GoalPage {
+                        goal: text.clone(),
+                        place: if place.is_empty() { "Unicorn Way".into() } else { place.clone() },
+                        progress: *progress,
+                        picture: q.goals[*i].picture.clone(),
+                    }).collect()
+                },
                 place: if place.is_empty() { "Unicorn Way".into() } else { place },
                 ready,
                 turn_in: q.turn_in.clone(),

@@ -420,6 +420,8 @@ fn main() {
         // Round 26 (N5/N6): own glyphs: the key cap without the black outline, Xbox face buttons, a shoulder button.
         ("26a_prompt_key_e", pages::Tab::Character, 0, [0.0, 0.0], "prompt:ceren_nightchant|0"),
         ("26b_prompt_pad_y", pages::Tab::Character, 0, [0.0, 0.0], "prompt:private_connelly|Y"),
+        // Round 29 (P1): the name's size and place against Ryan's Wizard101 screenshot (round25/ref/4_w101_press_to_talk.png).
+        ("29p1_prompt_cage", pages::Tab::Character, 0, [0.0, 0.0], "prompt:cage|0"),
         ("26c_prompt_pad_a", pages::Tab::Character, 0, [0.0, 0.0], "prompt:diego|A"),
         ("26d_prompt_pad_rb", pages::Tab::Character, 0, [0.0, 0.0], "prompt:ugo_kalahad|RB"),
         // Round 27 (B2): Ugo's shop: Buy (Hats, Wands with a row's tooltip), Sell (Wands, Robes).
@@ -428,6 +430,8 @@ fn main() {
         ("27r_shop_sell_wands", pages::Tab::Character, 0, [0.0, 0.0], "shop:sell|3|0"),
         ("27s_shop_sell_robes", pages::Tab::Character, 0, [0.0, 0.0], "shop:sell|1|0"),
         // Round 28 (S1): Ugo's purse a fixed size and gap over his plate's top, 5.5, 12 and 25 m away.
+        // Round 29 (M1): the purse at its world size: 3 m, 5 m, 12 m, 25 m from Ugo.
+        ("29m1a_ugo_purse_3m", pages::Tab::Character, 0, [0.0, 0.0], "markers:-29.7745,94.5018,-59.8978"),
         ("28e_ugo_purse_5m", pages::Tab::Character, 0, [0.0, 0.0], "markers:-29.7745,94.5018,-61.8978"),
         ("28f_ugo_purse_12m", pages::Tab::Character, 0, [0.0, 0.0], "markers:-29.7745,94.5018,-68.3978"),
         ("28g_ugo_purse_25m", pages::Tab::Character, 0, [0.0, 0.0], "markers:-29.7745,94.5018,-81.3978"),
@@ -436,6 +440,9 @@ fn main() {
         ("28b_shop_buy_robes_tab_hover", pages::Tab::Character, 0, [0.30, 0.245], "shop:buy|1|0"),
         ("28c_shop_buy_wands_tip", pages::Tab::Character, 0, [0.60, 0.42], "shop:buy|3|2"),
         ("28d_shop_sell_wands_tip", pages::Tab::Character, 0, [0.62, 0.36], "shop:sell|3|0"),
+        // Round 29 (Q3): Finding Out Why's two open goals, one per card page, flipped by the card's red arrows.
+        ("29q3a_quests_goal_page1", pages::Tab::Quests, 0, [0.0, 0.0], "goalpage:0"),
+        ("29q3b_quests_goal_page2", pages::Tab::Quests, 0, [0.0, 0.0], "goalpage:1"),
         ("23l_popup_goal_update", pages::Tab::Character, 0, [0.0, 0.0], "popup:0.5|Goal Update: Defeat Lost Souls 1 of 2"),
         ("23m_popup_goal_complete", pages::Tab::Character, 0, [0.0, 0.0], "popup:1.0|Goal Complete: Defeat Lost Souls"),
         ("23n_popup_quest_complete_fading", pages::Tab::Character, 0, [0.0, 0.0], "popup:3.5|Quest Complete: Ghost Hunters"),
@@ -567,6 +574,10 @@ fn main() {
         }
         // A few frames: the first ones queue the art, which loads between frames.
         for frame in 0..4 {
+            // Round 29 (Q3): once the first frame has read the quests in progress.
+            if let Some(page) = show.strip_prefix("goalpage:").filter(|_| frame > 0) {
+                book.preview_goal_page(page.parse().unwrap());
+            }
             if let Some(talk) = show.strip_prefix("talk:") {
                 if frame == 2 {
                     let (key, page) = talk.rsplit_once(':').unwrap_or((talk, "0"));

@@ -99,9 +99,14 @@ const BOX: [f32; 2] = [420.0, 103.0];
 const PORTRAIT: f32 = 88.0;
 const PORTRAIT_TOP: f32 = 19.0;
 /// Name: left at NAME_X from the box's left, its middle NAME_Y under the box's top.
-const NAME_X: f32 = 63.0;
+/// Round 29 (P1, Ryan: "left-justified, not centred, and never behind the portrait"): measured again on Ryan's
+/// Wizard101 screenshot (round25/ref/4_w101_press_to_talk.png, 0.893 screenshot px per layout px from the box's
+/// 375 px width): "MERLE AMBROSE" starts 61 from the box's left, its capitals 5..14 under the box's top (9.2 high),
+/// all above the portrait's ring (top 19): left-justified on the title scroll, over the portrait's right part but
+/// never under it. Ours had the capitals 11.2 high (0.42), their bottom 3 px from the ring; now 0.345 (9.2 high).
+const NAME_X: f32 = 61.0;
 const NAME_Y: f32 = 11.0;
-const NAME_SCALE: f32 = 0.42;
+const NAME_SCALE: f32 = 0.345;
 /// The line: centred between the portrait and the box's right edge (less TEXT_RIGHT), its middle TEXT_Y down.
 const TEXT_Y: f32 = 55.0;
 const TEXT_RIGHT: f32 = 10.0;
@@ -451,10 +456,12 @@ impl Prompt {
             draw.add_image(t, [left, y], [left + PORTRAIT * s, y + PORTRAIT * s]).build();
         }
         let black = ImColor32::from_rgba(0, 0, 0, 255);
+        let mut name_span = [NAME_X, NAME_X];
         if let Some(fancy) = fonts.get("WizardFancy") {
             let k = NAME_SCALE * s;
             fancy.draw_at(draw, &target.name, [left + NAME_X * s, top + NAME_Y * s - fancy.line_height * k / 2.0], k,
                           black);
+            name_span[1] = NAME_X + fancy.width(&target.name) * NAME_SCALE;
         }
         let Some(normal) = fonts.get("WizardNormal") else { return top };
         let k = TEXT_SCALE * s;
@@ -500,9 +507,12 @@ impl Prompt {
             }
         }
         if !self.drawn_log.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            tracing::info!("prompt: drawn for {}: portrait {} {}, glyph {} {}", target.name, target.portrait,
+            tracing::info!("prompt: drawn for {}: portrait {} {}, glyph {} {}; name left-justified at x {:.0}..{:.0} of \
+                            the {:.0}-wide box, middle y {NAME_Y} (portrait 0..{PORTRAIT:.0} from y {PORTRAIT_TOP})",
+                           target.name, target.portrait,
                            if portrait.is_some() { "shown" } else { "NOT loaded (line centred in the box)" }, picture,
-                           if glyph.is_some() { "shown" } else { "NOT loaded (drawn disc / cap)" });
+                           if glyph.is_some() { "shown" } else { "NOT loaded (drawn disc / cap)" },
+                           name_span[0], name_span[1], BOX[0]);
         }
         let letter = letter.or(if glyph.is_none() { face_letter } else { None });
         if let Some(letter) = letter {

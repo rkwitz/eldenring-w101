@@ -477,7 +477,8 @@ GOAL_PICTURES.update({c[0]: f"{ER_PICTURES}/{c[0]}.png" for c in CHARACTERS})
 # Round 20 (Q3): each quest's reward in runes, shown on its card and given once on completion by the HUD DLL
 # (quests.rs REWARDS, keep in step). Wizard101's quest rewards are server-side, not in the client's files, and its
 # wiki could not be reached, so these are Wizard City-sized gold amounts given as the same number of runes.
-REWARDS = {"unicorn_way": 25, "ghost_hunters": 35, "skeleton_crew": 45, "monsters_and_mazes": 55,
+REWARDS = {"unicorn_way": 0,  # round 29 (Q1): handed over done, gives nothing
+           "ghost_hunters": 35, "skeleton_crew": 45, "monsters_and_mazes": 55,
            "finding_out_why": 75, "who_could_it_be_now": 60, "sinister_skeleton": 150}  # round 23 (Q3): side quests removed
 REWARD_OFFSET = 7  # quest base + 7: its reward was given (set by the DLL; the reset clears it with the rest)
 

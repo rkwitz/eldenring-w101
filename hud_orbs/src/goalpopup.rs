@@ -78,7 +78,7 @@ pub struct GoalPopups {
 fn progress(counter: &Counter, flag: &dyn Fn(u32) -> bool) -> Option<u32> {
     match counter {
         Counter::None => None,
-        Counter::Bits(base) => Some((0..4).fold(0, |v, b| v << 1 | flag(base + b) as u32)),
+        Counter::Bits(base) => Some(crate::quests::event_value(*base, flag)),
         Counter::Flags(list) => Some(list.iter().filter(|f| flag(**f)).count() as u32),
     }
 }
@@ -91,6 +91,13 @@ pub fn messages(quests: &Quests, old: &dyn Fn(u32) -> bool, new: &dyn Fn(u32) ->
             continue;
         }
         let fresh = !old(q.assigned);
+        // Round 29 (Q1): a quest assigned and completed in one change was handed over already done (Unicorn Way's
+        // "greet" at Private Connelly, w101_quests.py): Ryan never had it from Merle, so it pops nothing and his
+        // first talk reads as Connelly's own fresh quest (log 03:27:57: flags 300, 301, 308, 309 on at once, then
+        // "Goal Complete: Talk to Private Connelly" and "Quest Complete: Unicorn Way").
+        if fresh && new(q.complete) {
+            continue;
+        }
         if fresh && !new(q.complete) {
             out.push(format!("New Quest: {}", q.title));
         }

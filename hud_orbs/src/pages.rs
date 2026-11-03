@@ -110,6 +110,8 @@ pub struct State {
     pub gear_view: bool,
     /// The chosen equipment set (row) there.
     pub gear_chosen: usize,
+    /// Round 29 (Q3): each quest card's goal page (by quest slug; wrapped to its open goals when drawn).
+    pub goal_page: std::collections::HashMap<String, usize>,
 }
 
 /// Something on a page that a click (or double click) acts on, besides its layout buttons.
@@ -131,6 +133,8 @@ pub enum Hit {
     GearSet(usize),
     /// Round 20 (Q7): a quest card on the Quests page (index into Data::quests): track it.
     Quest(usize),
+    /// Round 29 (Q3): a quest card's goal arrow (index into Data::quests, -1 back / +1 on).
+    Goal(usize, i32),
 }
 
 pub enum Action {
@@ -1985,7 +1989,15 @@ fn quests(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             break;
         }
         if let Some(w) = l.find(&format!("wndQuestInfo{i}")) {
-            st.hits.push((l.nodes[w].rect, Hit::Quest(k)));
+            let r = l.nodes[w].rect;
+            st.hits.push((r, Hit::Quest(k)));
+            // Round 29 (Q3): the goal arrows on a card with more than one open goal (after the card: hits are
+            // looked up last first).
+            if d.quests[k].pages.len() > 1 {
+                for (a, step) in GOAL_ARROWS.iter().zip([-1, 1]) {
+                    st.hits.push(([r[0] + a[0], r[1] + a[1], r[0] + a[2], r[1] + a[3]], Hit::Goal(k, step)));
+                }
+            }
         }
     }
     if d.quests.is_empty() {
@@ -2039,8 +2051,12 @@ fn singular(name: &str) -> String {
     }
 }
 
-/// Fills quest card `q` (QuestInfoWindow.gui).
-pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
+/// Round 29 (Q3): QuestInfoWindow.gui's goal arrows (btnPrevGoal 15,83..35,123 and btnNextGoal 235,83..255,123,
+/// Wizard101's red Button_Left / Button_Right, hidden in the .gui until the client shows them), card coordinates.
+pub const GOAL_ARROWS: [[f32; 4]; 2] = [[15.0, 83.0, 35.0, 123.0], [235.0, 83.0, 255.0, 123.0]];
+
+/// Fills quest card `q` (QuestInfoWindow.gui) showing goal page `page` (Round 29 Q3, wrapped to its open goals).
+pub fn quest_card(card: &Layout, q: &Active, page: usize, v: &mut View) {
     for n in ["wndReward1", "wndReward2", "wndReward3", "wndReward4", "wndReward5", "btnHideQuest", "btnUnhideQuest"] {
         v.show(card.find(n), false);
     }
@@ -2059,19 +2075,31 @@ pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
     // Round 28 (Q4, Ryan: "verb above the picture, the target's name under it"): QuestInfoWindow.gui's own goal
     // fields, txtGoal (26,48..246,67) over imgGoalObjective1 and txtGoalObjective1 (18,134..) under it; the place is
     // already on the scroll (txtZone), so " in Unicorn Way" is not repeated.
-    let (verb, target) = goal_parts(&q.goal, &q.place, q.progress);
+    // Round 29 (Q3, Ryan: "W101 shows one objective per page with red left/right arrows"): a quest with more than
+    // one goal open (Finding Out Why: the Bone Cages and the Dark Fairies) shows one per page; QuestInfoWindow's own
+    // btnPrevGoal / btnNextGoal flip them and wrap round, so every open goal can be reached from any page. A done
+    // goal leaves the card (its "Goal Complete" popup), as Wizard101's card lists the goals still to do.
+    let shown = (!q.pages.is_empty()).then(|| &q.pages[page % q.pages.len()]);
+    let (goal, place, progress, picture) = match shown {
+        Some(g) => (&g.goal, &g.place, g.progress, &g.picture),
+        None => (&q.goal, &q.place, q.progress, &q.picture),
+    };
+    let arrows = q.pages.len() > 1;
+    for name in ["btnPrevGoal", "btnNextGoal"] {
+        v.show(card.find(name), arrows);
+    }
+    let (verb, target) = goal_parts(goal, place, progress);
     set(v, "txtGoal", verb);
     // Round 18 (quests F3): the goal's picture in Wizard101's goal square (imgGoalObjective1, hidden in the .gui
     // until the client fills it): the creature to defeat, the NPC to talk to, the Bone Cage.
     // Round 21 (Q3, Ryan): centred across the card (272 wide: 103..169), not in the left goal box.
-    if !q.picture.is_empty() {
+    if !picture.is_empty() {
         if let Some(id) = card.find("imgGoalObjective1") {
-            v.node_art.insert(id, q.picture.clone());
+            v.node_art.insert(id, picture.clone());
             v.show(Some(id), true);
             v.rect.insert(id, GOAL_PICTURE);
         }
     }
-    // The other goals open now, across both objective boxes.
     hide(card, v, &["txtGoalObjective2"]);
     match card.find("txtGoalObjective1") {
         Some(id) if !target.is_empty() => {
@@ -2081,17 +2109,13 @@ pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
         }
         id => v.show(id, false),
     }
-    if !q.other_goals.is_empty() {
-        v.add([18.0, 155.0, 255.0, 169.0], format!("Also: {}", q.other_goals.join("; ")),
-              TextStyle::new("WizardNormal", 0.3, BLACK).centred());
-    }
-    match q.progress {
+    match progress {
         Some((n, of)) => {
             set(v, "txtGoalCounter", format!("{n}/{of}"));
             // Round 20 (Q5, Ryan): the count sits over the bottom of the goal's picture (imgGoalObjective1,
             // 40,67..106,133), not to its right: the counter scroll (110 x 28 at 142,107, its text 17,9 in) made 90
             // wide and centred under the picture's middle, overlapping its lower edge.
-            if !q.picture.is_empty() {
+            if !picture.is_empty() {
                 if let (Some(scroll), Some(text)) = (card.find("imgGoalCounter"), card.find("txtGoalCounter")) {
                     // Round 21 (Q3): centred with the picture (card middle x 136).
                     v.rect.insert(scroll, [91.0, 115.0, 181.0, 138.0]);
@@ -2104,7 +2128,7 @@ pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
             v.show(card.find("txtGoalCounter"), false);
         }
     }
-    set(v, "txtZone", q.place.clone());
+    set(v, "txtZone", place.clone());
     let world = if q.ready { format!("Ready: return to {}", q.turn_in) } else { "Wizard City".to_string() };
     set(v, "txtWorld", world);
     v.show(card.find("LeftMainline"), q.main);

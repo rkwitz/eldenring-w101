@@ -30,13 +30,17 @@ pub const SPIRAL: &str = "Wizbang/Quest_Spiral.png";
 pub const SHOP: &str = "Wizbang/Quest_Shopping.png";
 const SIGN_SHOP: f32 = 0.5816;
 /// Round 28 (S1, Ryan: "slightly smaller; constant screen size, Wizard101 doesn't scale it; always a fixed pixel gap
-/// above the TOP of the name tag at any distance"). The purse is drawn SHOP_PX layout pixels (768-high screen)
+/// above the TOP of the name tag at any distance"). The purse was drawn 44 layout pixels (768-high screen)
 /// square, its picture's visible bottom (Quest_Shopping.png alpha box 17..249 of 256: SHOP_BOTTOM of the half side
 /// under its centre) SHOP_GAP pixels over the top of Ugo's name plate (the plate's own anchor and scale, npc_plates,
 /// and its drawn height: the name and the "Merchant" line, `plate_h` font units from book.rs). Round 27 hung it at a
 /// world height (ChatNode) and scaled it with distance: far away it sank into the name, close up it floated high.
-const SHOP_PX: f32 = 44.0;
+/// Round 29 (M1, Ryan: "scale it WITH distance, the same size relative to Ugo as in W101; bigger up close, much
+/// smaller far away; still just above the name"): the purse is drawn at its Wizard101 world size again (SIGN_SHOP,
+/// 58.16 units = cm, beside an NPC of Ugo's height, as the quest signs are), never under SHOP_MIN of the screen's
+/// height far away, and its visible bottom stays SHOP_GAP over the top of the name plate as in round 28.
 const SHOP_GAP: f32 = 4.0;
+const SHOP_MIN: f32 = 0.015;
 const SHOP_BOTTOM: f32 = (249.0 - 128.0) / 128.0;
 /// Round 27 (A9): the merchant, his plate's title, and the request flag his talk event raises. Ugo has no
 /// dialogue: emevd_quests' "ugo_kalahad|idle" talk raises SHOP_REQUEST (DIALOGUE_FLAG + its key, dialogue.tsv) and
@@ -433,12 +437,13 @@ pub fn draw(
             continue;
         }
         if kind == Marker::Shop {
-            // Round 28 (S1): fixed screen size, a fixed gap over the top of the name plate (npc_plates' anchor and
-            // scale k).
+            // Round 28 (S1): a fixed gap over the top of the name plate (npc_plates' anchor and scale k).
+            // Round 29 (M1): its world size (SIGN_SHOP) at this depth, as the quest signs below.
             let Some(([x, y], z)) = camera.project([at[0], at[1] + plate_lift, at[2]], screen) else { continue };
             let s = screen[1] / 768.0;
             let k = s * (8.0 / z.max(1.0)).clamp(0.7, 1.15);
-            let half = SHOP_PX * s / 2.0;
+            let metre = camera.scale(z, screen[1]).max(screen[1] * SHOP_MIN / SIGN_SHOP);
+            let half = SIGN_SHOP * metre / 2.0;
             let centre = [x, y - plate_h * k - SHOP_GAP * s - half * SHOP_BOTTOM];
             drawn.push((z, centre, half, half * SPIRAL_SIDE / SIGN_SHOP, alpha, SHOP));
             continue;

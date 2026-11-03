@@ -242,7 +242,10 @@ pub fn top_view(l: &Layout, shop: &Shop) -> View {
 
 /// Round 28 (B4): Elden Ring's own rune symbol (01_common.tpf SB_FE_01 MENU_FL_Runes, the icon beside the HUD's rune
 /// count, 52x50), deployed to book/er/menu; it replaces Wizard101's gold bag (goldBagIcon) beside the runes held.
+#[allow(dead_code)]
 pub const ER_RUNE: &str = "@er/menu/MENU_FL_Runes.png";
+/// Round 29 (S1): the middle of the rune amount's digits (totalCoinsControlText 368,412..507,443), window pixels.
+const RUNES_MIDDLE: f32 = 427.5;
 /// Round 28 (B3): the part of Background_Buying with Wizard101's backpack-space bar (the blue backpack badge and the
 /// red box, 120..288 x 298..358 of the 800x453 window), covered with Background_Selling's plain parchment at the same
 /// spot, so only the BUY button and its own background stay.
@@ -307,14 +310,13 @@ pub fn page_view(l: &Layout, shop: &mut Shop, stock: &Stock, names: &Names, item
                 v.image([cx - side / 2.0, cy - side / 2.0, cx + side / 2.0, cy + side / 2.0], icon);
             }
         }
-        // The price beside the rune icon, both inside the cost box (its right end at x ~289 in Background_Buying,
-        // ~280 in Background_Selling), in the Sell window's font on both (B2).
+        // The price inside the cost box (its right end at x ~289 in Background_Buying, ~280 in Background_Selling),
+        // in the Sell window's font on both (B2). Round 29 (S1, Ryan): no rune symbol in the cost box any more.
         if let Some(i) = l.find("priceControlText") {
             let r = l.nodes[i].rect;
             let right = r[2].min(288.0) - 2.0;
             let left = if shop.selling { r[0] } else { 200.0 };
-            v.rect.insert(i, [left, r[1], right - 27.0, r[3]]);
-            v.image([right - 26.0, r[1] + 1.0, right, r[1] + 27.0], ER_RUNE);
+            v.rect.insert(i, [left, r[1], right, r[3]]);
         }
         for name in ["labelCost", "priceControlText"] {
             if let Some(i) = l.find(name) {
@@ -330,12 +332,16 @@ pub fn page_view(l: &Layout, shop: &mut Shop, stock: &Stock, names: &Names, item
         v.set(l.find("priceControlText"), "");
         v.set(l.find("labelCost"), "");
     }
-    // Round 28 (B4): Elden Ring's rune symbol in place of Wizard101's gold bag.
+    // Round 28 (B4): Elden Ring's rune symbol in place of Wizard101's gold bag. Round 29 (S1, Ryan: "it looks
+    // see-through; it must be solid with its background"): Elden Ring's bare rune is half transparent (961 of its
+    // 2600 pixels), so it is now the solid gold rune piece of the quest cards' reward (Wizard101's gold disc and ring
+    // round Elden Ring's rune, the same family as the gold bag's Art_Quest_Max_Gold), at the bag's 50 square, moved
+    // down from the bag's spot (390..440) to sit centred on the rune amount's line (RUNES_MIDDLE).
     if let Some(i) = l.find("goldBagIcon") {
         v.no_back.insert(i);
         let r = l.nodes[i].rect;
-        let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
-        v.image([cx - 21.0, cy - 20.0, cx + 21.0, cy + 20.0], ER_RUNE);
+        let (cx, half) = ((r[0] + r[2]) / 2.0, (r[3] - r[1]) / 2.0);
+        v.image([cx - half, RUNES_MIDDLE - half, cx + half, RUNES_MIDDLE + half], crate::pages::REWARD_RUNES);
     }
     let action = l.find(if shop.selling { "sellAction" } else { "buyAction" });
     let can = chosen.is_some_and(|(line, _)| shop.selling || shop.runes >= line.runes);

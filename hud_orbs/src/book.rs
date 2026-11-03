@@ -723,6 +723,14 @@ impl Book {
         self.state.page = page;
     }
 
+    /// Round 29 (Q3): turns every quest card to goal page `page` (the preview renderer).
+    #[allow(dead_code)]
+    pub fn preview_goal_page(&mut self, page: usize) {
+        for a in &self.active {
+            self.state.goal_page.insert(a.slug.clone(), page);
+        }
+    }
+
     /// Shows the book around Elden Ring's open map (the preview renderer).
     #[allow(dead_code)]
     pub fn preview_map(&mut self) {
@@ -1281,6 +1289,17 @@ impl Book {
             self.set_open(false);
             return;
         }
+        if let Some(pages::Hit::Goal(k, step)) = hit {
+            // Round 29 (Q3): flip the card to its previous / next open goal (wrapping round).
+            if let Some(a) = self.active.get(k) {
+                let n = a.pages.len().max(1);
+                let at = self.state.goal_page.entry(a.slug.clone()).or_insert(0);
+                *at = (*at % n + n).wrapping_add_signed(step as isize) % n;
+                tracing::info!("quests page: {} goal page {}/{n}", a.slug, *at + 1);
+                crate::music::sfx("HudSelect");
+            }
+            return;
+        }
         if let Some(pages::Hit::Quest(k)) = hit {
             // Round 20 (Q7): track this quest (its card glows, Wizard101's tracker arrow at its top left).
             if let Some(a) = self.active.get(k) {
@@ -1402,7 +1421,7 @@ impl Book {
                     self.gear_equip(i, cx);
                 }
             }
-            Hit::Setting(..) | Hit::Warp(_) | Hit::Quest(_) => {} // handled before (book::frame)
+            Hit::Setting(..) | Hit::Warp(_) | Hit::Quest(_) | Hit::Goal(..) => {} // handled before (book::frame)
         }
     }
 
@@ -1699,6 +1718,8 @@ impl Book {
             }
             // Round 20: the art the cards set themselves (goal pictures, reward, tracker, glow; draw_quest_cards).
             wanted.extend(self.active.iter().map(|a| a.picture.clone()).filter(|p| !p.is_empty()));
+            // Round 29 (Q3): every goal page's picture, so flipping a card shows it at once.
+            wanted.extend(self.active.iter().flat_map(|a| a.pages.iter().map(|g| g.picture.clone())).filter(|p| !p.is_empty()));
             wanted.extend([pages::REWARD_RUNES, pages::REWARD_SCROLL, pages::QUEST_TRACKER, pages::QUEST_PAPER_LIT].map(String::from));
         }
         wanted.extend(view.images.iter().map(|i| i.1.clone()));
@@ -1931,7 +1952,8 @@ impl Book {
             let Some(quest) = self.active.get(k) else { break };
             let Some(window) = page.find(&format!("wndQuestInfo{i}")) else { continue };
             let mut view = View::default();
-            pages::quest_card(card, quest, &mut view);
+            let goal_page = self.state.goal_page.get(&quest.slug).copied().unwrap_or(0);
+            pages::quest_card(card, quest, goal_page, &mut view);
             let r = page.nodes[window].rect;
             if tracked == Some(k) {
                 pages::quest_tracked(card, &mut view);
@@ -2201,7 +2223,7 @@ impl Book {
                 let b = window.nodes.first().map(|n| n.rect).unwrap_or([0.0, 0.0, 802.0, 180.0]);
                 let at = [origin[0] + (b[2] - OFFER_CARD_RIGHT) * s - cw * k, origin[1] + OFFER_CARD_SINK * s - ch * k];
                 let mut view = View::default();
-                pages::quest_card(card, &active, &mut view);
+                pages::quest_card(card, &active, 0, &mut view);
                 let inner = Canvas {
                     draw: &draw,
                     textures: &self.textures,

@@ -8,6 +8,9 @@ changed, so deleting the copies undoes it. The hidden placements get a colour tr
 script still updates them but they are drawn invisibly:
 - 01_000_fe.gfx, PlayerHUD > Gauge: HP, MP (FP), HPRegain (the recoverable-HP sliver) and SP (stamina). Enemy and
   ally tags also have placements named HP, so only the sprite that places SP is touched.
+  Gauge's Equip is the row of buff / equipment-effect icons under the bars (top left); hidden for now (round 29 E1).
+- 01_000_fe.gfx, PlayerHUD > ItemPanel > Arts > Fade > Text: the weapon skill name above the right-hand slot
+  ("Blood Boon Ritual"); hidden for now (round 29 E2). The sprite is found by its MpShortage placement.
 - 01_001_fe_soul.gfx: the root's Soul clip (rune counter).
 The quick slots are PlayerHUD's ItemPanel and ItemPanel2 (pouch); in the 1920x1080 movie the slot cross reaches down
 to about y 1045, and the globes' tops (Wizard101 y 570 of 768 at hud_orbs scale 1, bottom 723) are at y 865, so both
@@ -25,7 +28,8 @@ ITEM_RAISE = 200.0  # movie pixels; the cross then ends at about y 845, just abo
 # an edit is HIDE or (dx, dy) in movie pixels.
 TARGETS = {
     "01_000_fe.gfx": [
-        (b"SP", {b"HP": HIDE, b"MP": HIDE, b"HPRegain": HIDE, b"SP": HIDE}, 4),
+        (b"SP", {b"HP": HIDE, b"MP": HIDE, b"HPRegain": HIDE, b"SP": HIDE, b"Equip": HIDE}, 5),
+        (b"MpShortage", {b"Text": HIDE}, 1),  # Arts > Fade: the skill (Ash of War) name; Item/weapon Fades place no MpShortage+Text pair
         (b"ItemPanel", {b"ItemPanel": (0.0, -ITEM_RAISE), b"ItemPanel2": (0.0, -ITEM_RAISE)}, 2),
     ],
     "01_001_fe_soul.gfx": [(b"Soul", {b"Soul": HIDE}, 2)],  # root Soul and the Soul inside it
