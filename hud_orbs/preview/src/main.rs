@@ -49,6 +49,8 @@ mod loadscreen;
 mod teleport;
 #[path = "../../src/wisps.rs"]
 mod wisps;
+#[path = "../../src/fairies.rs"]
+mod fairies;
 #[path = "../../src/goalpopup.rs"]
 mod goalpopup;
 #[path = "../../src/floaters.rs"]
@@ -406,6 +408,9 @@ fn main() {
         ("22h_markers", pages::Tab::Character, 0, [0.0, 0.0], "markers"),
         // Round 23 (hud H4, H6): a wisp up close (fuller), and the pickup spiral round the player at these seconds.
         ("23f_wisp_idle", pages::Tab::Character, 0, [0.0, 0.0], "wisp:"),
+        // Round 30 (FA1): the hedge maze fairies from tools/blender_fairy_sheet.py, as ref 6 frames them.
+        ("30_fairies_0.0", pages::Tab::Character, 0, [0.0, 0.0], "fairy:0.0"),
+        ("30_fairies_0.7", pages::Tab::Character, 0, [0.0, 0.0], "fairy:0.7"),
         // Round 23 (hud H7): Wizard101's quest popups (WizardPopupText.gui, Quest.lang), shown and fading.
         // Round 25 (H1): the stacked yellow popups as in Ryan's ref/3_w101_stacked_popups.png and ref/1.
         ("25a_popups_stacked", pages::Tab::Character, 0, [0.0, 0.0], "popup:5.1|Quest Complete: Who could it be now?;;1.0|New Quest: Sinister Skeleton;;0.5|New Goal: Search for Rattlebones (The Archives)"),
@@ -602,7 +607,7 @@ fn main() {
             book.preview_recipe(r.parse().unwrap(), true);
         }
         let load = show.strip_prefix("load:");
-        if load.is_some() || show.starts_with("poof") || show.starts_with("wisp:") {
+        if load.is_some() || show.starts_with("poof") || show.starts_with("wisp:") || show.starts_with("fairy:") {
             book.preview_closed();
         }
         if let Some(tab) = show.strip_prefix("settings:") {
@@ -683,6 +688,16 @@ fn main() {
                 let camera = markers::Camera { matrix: [[r[0], r[1], r[2], 0.0], [u[0], u[1], u[2], 0.0], [f[0], f[1], f[2], 0.0],
                                                         [pos[0], pos[1], pos[2], 1.0]], fov: 48f32.to_radians(), player: [0.0; 3] };
                 wisps::preview(ui, &mut book.textures, &camera, [0.0; 3], [0.9, 0.9, 0.3], t.parse::<f32>().ok(), 2.0);
+            }
+            if let Some(t) = show.strip_prefix("fairy:").and_then(|t| t.parse::<f32>().ok()) {
+                // Round 30 (FA1): the camera 1.6 m up looking level along +z; fairies 3-9 m ahead flying
+                // left, right, towards and away (ref 6 shows them about this far off, round the arena).
+                let camera = markers::Camera { matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0],
+                                                        [0.0, 1.6, 0.0, 1.0]], fov: 48f32.to_radians(), player: [0.0; 3] };
+                let looks = [([-2.6, 1.2, 4.0], [1.0, 0.0], t), ([2.4, 0.9, 5.5], [0.0, -1.0], t + 0.4),
+                             ([-1.5, 1.5, 8.0], [0.0, 1.0], t + 1.1), ([3.0, 1.6, 9.0], [-1.0, 0.0], t + 1.7),
+                             ([0.6, 0.8, 3.2], [0.7071, -0.7071], t + 0.9)];
+                fairies::preview(ui, &mut book.textures, &camera, &looks);
             }
             if let Some(t) = show.strip_prefix("poof:").and_then(|t| t.parse::<f32>().ok()) {
                 // The camera of tools/w101_poof_reference.py: at (0, 1.55, -3.4)

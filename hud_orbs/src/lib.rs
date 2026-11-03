@@ -20,6 +20,7 @@ mod loadscreen;
 mod markers;
 mod music;
 mod wisps;
+mod fairies;
 mod goalpopup;
 mod floaters;
 mod nameplates;
@@ -147,6 +148,7 @@ struct Orbs {
     music: music::Music,
     /// Wizard101's health and mana wisps (round 21 M3, wisps.rs).
     wisps: wisps::Wisps,
+    fairies: fairies::Fairies,
     /// Round 24 M1: enemies don't see the player off the road (sidewalk.rs).
     sidewalk: sidewalk::Sidewalk,
 }
@@ -206,10 +208,12 @@ impl Orbs {
         let probe = settings.scene_probe.then(probe::Probe::new);
         let music = music::Music::new(&folder);
         let wisps = wisps::Wisps::new(&folder);
+        let fairies = fairies::Fairies::new(&folder);
         let sidewalk = sidewalk::Sidewalk::load(&folder.join("w101_orbs").join("road_mask.tsv"));
         Orbs {
             music,
             wisps,
+            fairies,
             sidewalk,
             settings,
             probe,
@@ -388,6 +392,7 @@ impl ImguiRenderLoop for Orbs {
             self.book.draw_floaters(ui, &cx);
             let wisp_play = cx.gameplay && !self.book.blocking();
             self.wisps.frame(ui, &mut self.book.textures, game, wisp_play, street, &self.book.nav);
+            self.fairies.frame(ui, &mut self.book.textures, game, wisp_play, street);
         }
         // Polled every frame: the screen goes up on the first frame the door flag is on, or Elden Ring starts a
         // loading screen of its own. The flag is cleared when the screen starts to fade (or right away when the
@@ -412,6 +417,7 @@ impl ImguiRenderLoop for Orbs {
         // in its default state then).
         let busy = game.is_none() || faded > 0.3 || stats.is_none() || !hud;
         self.loadscreen.draw(ui, &self.book.textures, busy, stats.is_some());
+        self.teleport.arrival(self.loadscreen.holding());
         if let Some(probe) = &mut self.probe {
             probe.tick(self.game.as_ref().and_then(|g| g.as_ref()), self.settings.scene_probe_nudge);
         }

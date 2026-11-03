@@ -86,7 +86,20 @@ pub struct Teleport {
     shape: Shape,
     /// Round 29 (T1): Torrent faded out with the player (book warp): 0 not yet, 1 faded, 2 faded back.
     torrent: u8,
+    /// Round 30 (SND1): a teleport's poof started at this time; Some(true) once the loading screen has come up.
+    arrive: Option<(Instant, bool)>,
 }
+
+/// Round 30 (SND1, Ryan: "play W101's teleport-out and teleport-in sounds with the poof"): Wizard101 plays
+/// Sound/GUI/ui_homebutton_select.wav (_Shared-WorldData.wad) with its teleport effects. WizardGraphicalClient.exe
+/// names it next to Character/FX_Disappear.nif for the Go Home teleport (our poof), next to the arrival effect
+/// "Character/FX_Spawner_" + school in the teleport-effect preview, and next to MSG_UPDATETELEPORTEFFECT. Only the
+/// bought teleport effects (Sound/PlayerEmotes/Teleports/*_IN / *_OUT.ogg) have separate in and out sounds; the
+/// default one has this single sound, so it plays at the poof (out) and again as the loading screen lifts (in).
+/// tools/w101_sfx.py copies it to w101_orbs\sfx.
+pub const TELEPORT_SOUND: &str = "ui_homebutton_select";
+/// A teleport not arrived (loading screen up and lifting) this long after its poof makes no arrival sound.
+const ARRIVE_WINDOW: f32 = 90.0;
 
 /// Round 29 (T1, Ryan: "when you teleport and your character fades out, Torrent must fade out too"): the book-warp
 /// events hide the player with SpEffect 9910 at POOF_HIDE_AT s (tools/emevd.py); Torrent gets no SpEffect from
@@ -148,8 +161,10 @@ impl Teleport {
             self.torrent = 0;
             match (ready, game.and_then(|g| g.camera())) {
                 (true, Some(camera)) => {
-                    tracing::info!("teleport: book warp poof at {:?}", camera.player);
+                    tracing::info!("teleport: book warp poof at {:?}, sound {TELEPORT_SOUND} (out)", camera.player);
                     self.poof = Some(Poof::new(camera.player, None, POOF_LIVE));
+                    crate::music::sfx(TELEPORT_SOUND);
+                    self.arrive = Some((Instant::now(), false));
                 }
                 _ => self.log_missing(ready),
             }
@@ -186,6 +201,9 @@ impl Teleport {
                     tracing::info!("teleport: Elden Ring warp, poof on the world copy from {:.1} s ago",
                                    at.elapsed().as_secs_f32());
                     self.poof = Some(Poof::new(camera.player, Some(camera), POOF_FROZEN));
+                    tracing::info!("teleport: sound {TELEPORT_SOUND} (out)");
+                    crate::music::sfx(TELEPORT_SOUND);
+                    self.arrive = Some((Instant::now(), false));
                     self.held = true;
                     out = false;
                 }
@@ -219,6 +237,25 @@ impl Teleport {
             }
         }
         out
+    }
+
+    /// Round 30 (SND1): after the loading screen is drawn each frame. `holding`: the Wizard101 loading screen is up
+    /// and not yet fading. The arrival sound plays on the frame it starts to lift after a teleport's poof.
+    pub fn arrival(&mut self, holding: bool) {
+        match self.arrive {
+            Some((at, _)) if at.elapsed().as_secs_f32() > ARRIVE_WINDOW => {
+                tracing::info!("teleport: no loading screen lifted {ARRIVE_WINDOW} s after the poof; no arrival sound");
+                self.arrive = None;
+            }
+            Some((at, false)) if holding => self.arrive = Some((at, true)),
+            Some((at, true)) if !holding => {
+                tracing::info!("teleport: arrived {:.1} s after the poof, sound {TELEPORT_SOUND} (in)",
+                               at.elapsed().as_secs_f32());
+                crate::music::sfx(TELEPORT_SOUND);
+                self.arrive = None;
+            }
+            _ => {}
+        }
     }
 
     fn log_missing(&mut self, ready: bool) {

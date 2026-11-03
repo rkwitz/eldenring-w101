@@ -20,7 +20,7 @@ SOUNDS = {
                               "ui_hudspellbook_close", "ui_hudspellbook_schoolswitch", "ui_hudmainbutton_click",
                               "ui_hudmainbutton_hover", "ui_quest_accepted", "ui_quest_decline", "ui_quest_updated",
                               "ui_reward_gold", "ui_reward_xp", "ui_reward_item", "ui_button_press",
-                              "ui_button_highlight", "ui_teleport_marker", "ui_chatbubble_female",
+                              "ui_button_highlight", "ui_teleport_marker", "ui_homebutton_select", "ui_chatbubble_female",
                               "ui_chatbubble_male"],
 }
 
