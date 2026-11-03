@@ -22,6 +22,7 @@ pub const BLEND_KEY: usize = 0x5710_1AE7;
 pub mod depth {
     pub const DEPTH_TAG_HI: usize = 0x5710_D0E9;
     pub const DEPTH_OFF: usize = 0x5710_D0FF;
+    pub const STALE_FRAMES: u64 = 30;
     pub fn tag(z: f32) -> usize {
         (DEPTH_TAG_HI << 32) | z.to_bits() as usize
     }
@@ -44,6 +45,9 @@ pub mod depth {
         pub depth_ends: u64,
         pub candidates: usize,
         pub after_state: u32,
+        pub age: u64,
+        pub present_mode: bool,
+        pub present_copies: u64,
     }
     pub fn info() -> Info {
         Info::default()
@@ -58,4 +62,5 @@ pub mod depth {
         None
     }
     pub fn reject_current() {}
+    pub fn reject_present() {}
 }
