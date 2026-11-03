@@ -367,6 +367,11 @@ impl RenderEngine for D3D12RenderEngine {
             let bb = render_target.GetDesc();
             crate::depth::BACK_BUFFER.store((bb.Width << 32) | bb.Height as u64, std::sync::atomic::Ordering::Relaxed);
             crate::depth::tick();
+            // w101_orbs (round 28, W2): the copy of the scene depth as the game's whole frame left it, recorded
+            // first on the overlay's list (run on the game's queue right before Present). Held until the list is
+            // submitted so no game list can change the depth's state in between.
+            let order = crate::depth::queue_guard();
+            crate::depth::present_copy(&self.command_list, self.command_queue.as_raw() as usize);
             self.finish_depth_probe();
             let depth = self.prepare_depth(bb.Width, bb.Height);
             if let Some(texture) = &depth {
@@ -411,6 +416,7 @@ impl RenderEngine for D3D12RenderEngine {
             self.command_list.ResourceBarrier(&rtv_to_present_barriers);
             self.command_list.Close()?;
             self.command_queue.ExecuteCommandLists(&[Some(self.command_list.cast()?)]);
+            drop(order);
 
             let new_fence_value = self.fence.incr() + 1;
             self.command_queue.Signal(self.fence.fence(), new_fence_value)?;
@@ -558,7 +564,9 @@ impl D3D12RenderEngine {
     unsafe fn prepare_depth(&mut self, bb_width: u64, bb_height: u32) -> Option<ID3D12Resource> {
         self.depth_bind = None;
         let (texture, srv_format, width, height, generation) = crate::depth::current_copy()?;
-        if !crate::depth::fresh(3) {
+        // Round 28 (W2): a copy up to half a second old is still used (the test was dropped for single frames
+        // without a fresh copy, showing tags through walls for that frame).
+        if !crate::depth::fresh(crate::depth::STALE_FRAMES) {
             return None;
         }
         if self.depth_srv.as_ref().is_none_or(|d| d.0 != generation) {

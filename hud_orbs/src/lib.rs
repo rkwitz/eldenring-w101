@@ -374,6 +374,7 @@ impl ImguiRenderLoop for Orbs {
         };
         self.book.frame(ui, &mut cx);
         // Round 26 (O1): the game's scene depth for the tags, markers and wisps (occlusion.rs).
+        hudhook::depth::set_copy_at_end(cx.settings.depth_copy_at_end);
         occlusion::frame(game, game.and_then(|g| g.camera()), ui.io().display_size,
                          cx.gameplay && !self.book.blocking() && !self.loadscreen.holding(), cx.settings.depth_occlusion);
         if !self.loadscreen.holding() {

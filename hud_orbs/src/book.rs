@@ -958,6 +958,7 @@ impl Book {
         let Some(game) = cx.game else { return };
         let Some(camera) = game.camera() else { return };
         let enemies = game.enemies(&nameplates::models());
+        nameplates::log_spacing(&enemies);
         let screen = ui.io().display_size;
         let mut plates = nameplates::plates(&camera, &enemies, screen);
         // w101_quests: the street NPCs' names (markers.rs), as the creature plates without the rank line
@@ -990,7 +991,7 @@ impl Book {
             let h = name_h + line_h;
             let origin = [plate.at[0] - w / 2.0 * plate.k, plate.at[1] - h * plate.k];
             // Round 26 (O1): hidden wherever the game's scene is in front of it (occlusion.rs).
-            crate::occlusion::begin(plate.z, 0.0, plate.name, [plate.at[0], plate.at[1] - 8.0 * plate.k]);
+            crate::occlusion::begin(plate.z, crate::occlusion::OWN_BODY, plate.name, [plate.at[0], plate.at[1] - 8.0 * plate.k]);
             let canvas = Canvas {
                 draw: &draw,
                 textures: &self.textures,

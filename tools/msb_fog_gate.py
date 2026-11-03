@@ -35,6 +35,20 @@ co-op-only. So FOG_WALLS are two AEG099_001 copies (entities 1042361892 / 893) s
 8.4 m wide and nearly opaque (blender_build_fog.py / fog_texture.py), behind them.
 Not proven: the SFX's own draw distance (vanilla fog gates are seen from a corridor's length, not across a map).
 
+Round 28 (W3, Ryan: "the Commons fog wall is too far back; it must stand at the gate itself, the real Elden Ring
+gate, seen from the street side; you go through the gate into the fog; not visible from behind"). The real gate is
+the graveyard's lift-up exit door AEG110_064_1000 (ObjAct 1042363540) in this map, at street frame z -11.30 (its
+local +z points out of the graveyard: msb_name_region.DOOR). The round 27 fog stood 3.9-4.4 m behind it, on the
+graveyard side: the plane and phantom-wall copy on m18's phantom-wall spot (street z -15.70) and the two AEG099_001
+fog gates at street z -15.2. All four now stand in the door's own frame (its position and yaw), on its street side:
+the fog gates DOOR_WALL_Z, the plane DOOR_MIST_Z, the phantom-wall copy DOOR_PHANTOM_Z metres out of the door
+(W101's archway mouth is at street z -10.91, 0.39 m out), so the fog fills the gateway and walking through the gate
+is walking into the fog. The plane and the phantom-wall copy get entity ids (FOG_ENTITIES) and a box region
+FOG_SIDE_REGION (entity FOG_SIDE_ENTITY, Other type, a copy of UnicornWay_title_door) covers the street side of the
+door from FOG_SIDE_NEAR (just behind the door) outwards, like the Unicorn Way name box: emevd.py --fog-wall shows the
+fog only while the player is inside it, so from the graveyard side (behind) there is no fog. AEG099_230_9100 (the
+empty co-op border copy, already at the gate) is not moved.
+
 Usage: python msb_fog_gate.py map.msb.dcx out.msb.dcx   (DFLT DCX as Smithbox saves; rerunning moves it in place)
 """
 import math
@@ -64,7 +78,18 @@ MIST_PART_ID = 9402
 # own frame at depth FOG_WALL_Z (the plane is at z -15.7, the archway's mouth at -10.91), turned with the street.
 FOG_WALL_MODEL = "AEG099_001"
 FOG_WALLS = [("AEG099_001_9103", 9403, 1042361892, -2.0), ("AEG099_001_9104", 9404, 1042361893, 2.0)]
-FOG_WALL_Z, FOG_WALL_Y = -15.2, 0.02
+FOG_WALL_Z, FOG_WALL_Y = -15.2, 0.02  # round 27 (street frame); round 28 places them by the door instead
+# Round 28 (W3): the real gate and the fog's place in its frame (metres out of the door, toward the street).
+DOOR = "AEG110_064_1000"
+DOOR_WALL_Z, DOOR_MIST_Z, DOOR_PHANTOM_Z, DOOR_Y = 0.35, 0.25, 0.15, 0.02
+FOG_ENTITIES = {MIST_PART: 1042361894, WALL_PART: 1042361895}
+FOG_SIDE_REGION, FOG_SIDE_ENTITY, FOG_SIDE_REGION_ID = "W101_fog_street_side", 1042362702, 9270
+# Box in the door's frame: from FOG_SIDE_NEAR (behind the door plane, so standing in the gateway still counts) out
+# over the whole street (as msb_name_region's name box: street ground spans x -320..160, z -11..255 in its frame).
+FOG_SIDE_NEAR, FOG_SIDE_FAR, FOG_SIDE_LEFT, FOG_SIDE_RIGHT, FOG_SIDE_BELOW, FOG_SIDE_HEIGHT = (
+    -0.5, 276.0, -330.0, 170.0, 10.0, 160.0)
+TEMPLATE_REGION = "UnicornWay_title_door"  # msb_name_region.TRIGGER: an Other-type box with an entity id
+OTHER = 0xFFFFFFFF
 
 
 def put_copy(lists, name, model, part_id, m18_position, m18_rotation):
@@ -88,18 +113,56 @@ def put_copy(lists, name, model, part_id, m18_position, m18_rotation):
     print(f"{name}: world {tuple(round(v, 3) for v in world)}, rotation y {ry}")
 
 
+def fog_side_region(lists, door_position, door_yaw):
+    """Add (or move) FOG_SIDE_REGION, the street-side box (see the module doc)."""
+    from msb_add_indoor import insert_region
+    from msb_floor import _set_name
+    regions = _list(lists, "POINT_PARAM_ST").entries
+    c, s = math.cos(math.radians(door_yaw)), math.sin(math.radians(door_yaw))
+    lx, lz = (FOG_SIDE_LEFT + FOG_SIDE_RIGHT) / 2, (FOG_SIDE_NEAR + FOG_SIDE_FAR) / 2
+    px, py, pz = door_position
+    centre = (px + lx * c + lz * s, py - FOG_SIDE_BELOW, pz - lx * s + lz * c)
+    size = (FOG_SIDE_RIGHT - FOG_SIDE_LEFT, FOG_SIDE_FAR - FOG_SIDE_NEAR, FOG_SIDE_HEIGHT)
+    k = next((k for k, e in enumerate(regions) if entry_name(e) == FOG_SIDE_REGION), None)
+    if k is None:
+        template = next(e for e in regions if entry_name(e) == TEMPLATE_REGION)
+        assert struct.unpack_from("<I", template, 0x08)[0] == OTHER and struct.unpack_from("<I", template, 0x10)[0] == 5
+        e = bytearray(template)
+        name_at, after = struct.unpack_from("<q", e, 0)[0], struct.unpack_from("<q", e, 0x30)[0]
+        assert name_at + 2 * (len(FOG_SIDE_REGION) + 1) <= after, "name does not fit the template's name slot"
+        _set_name(e, FOG_SIDE_REGION)
+        struct.pack_into("<i", e, 0x0C, sum(struct.unpack_from("<I", r, 0x08)[0] == OTHER for r in regions))
+        assert FOG_SIDE_REGION_ID not in {struct.unpack_from("<i", r, 0x2C)[0] for r in regions}
+        struct.pack_into("<i", e, 0x2C, FOG_SIDE_REGION_ID)
+        struct.pack_into("<i", e, struct.unpack_from("<q", e, 0x50)[0] + 4, FOG_SIDE_ENTITY)
+    else:
+        e = bytearray(regions[k])
+    struct.pack_into("<3f", e, 0x14, *centre)
+    struct.pack_into("<3f", e, 0x20, 0.0, door_yaw, 0.0)
+    struct.pack_into("<3f", e, struct.unpack_from("<q", e, 0x48)[0], *size)
+    if k is None:
+        k = insert_region(lists, bytes(e), OTHER)
+    else:
+        regions[k] = bytes(e)
+    print(f"{FOG_SIDE_REGION} (region {k}, entity {FOG_SIDE_ENTITY}): bottom centre "
+          f"{tuple(round(v, 2) for v in centre)} rot {door_yaw:.2f} box {size}")
+
+
 def place_fog(raw):
     header, lists = read_msb(raw)
     put_copy(lists, FOG_PART, FOG_MODEL, FOG_PART_ID, M18_POSITION, M18_ROTATION)
-    put_copy(lists, WALL_PART, WALL_MODEL, WALL_PART_ID, WALL_M18_POSITION, WALL_M18_ROTATION)
-    put_copy(lists, MIST_PART, MIST_MODEL, MIST_PART_ID, WALL_M18_POSITION, WALL_M18_ROTATION)
     parts = _list(lists, "PARTS_PARAM_ST")
-    street = parts.entries[find(parts, STREET)]
-    position, yaw = struct.unpack_from("<3f", street, 0x20), struct.unpack_from("<3f", street, 0x2C)[1]
-    for name, part_id, entity, x in FOG_WALLS:
+    door = parts.entries[find(parts, DOOR)]
+    position, yaw = struct.unpack_from("<3f", door, 0x20), struct.unpack_from("<3f", door, 0x2C)[1]
+    placed = [(WALL_PART, WALL_MODEL, WALL_PART_ID, FOG_ENTITIES[WALL_PART], (0.0, DOOR_Y, DOOR_PHANTOM_Z)),
+              (MIST_PART, MIST_MODEL, MIST_PART_ID, FOG_ENTITIES[MIST_PART], (0.0, DOOR_Y, DOOR_MIST_Z))]
+    placed += [(name, FOG_WALL_MODEL, part_id, entity, (x, DOOR_Y, DOOR_WALL_Z)) for name, part_id, entity, x in FOG_WALLS]
+    for name, model, part_id, entity, local in placed:
         assert all(struct.unpack_from("<i", e, 0x08)[0] != part_id or entry_name(e) == name for e in parts.entries)
-        put_asset(lists, name, FOG_WALL_MODEL, position, yaw, (x, FOG_WALL_Y, FOG_WALL_Z), part_id=part_id,
-                  entity_id=entity)
+        world = put_asset(lists, name, model, position, yaw, local, part_id=part_id, entity_id=entity)
+        print(f"{name}: door frame {local}, world {tuple(round(v, 3) for v in world)}, rotation y {yaw:.2f}, "
+              f"entity {entity}")
+    fog_side_region(lists, position, yaw)
     return write_msb(header, lists)
 
 

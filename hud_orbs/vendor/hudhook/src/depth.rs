@@ -22,7 +22,9 @@ use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use parking_lot::Mutex;
+use std::collections::HashMap;
+
+use parking_lot::{const_reentrant_mutex, Mutex, ReentrantMutex, ReentrantMutexGuard};
 use tracing::{error, info};
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -45,9 +47,29 @@ static NEAR: AtomicU32 = AtomicU32::new(0);
 static FAR: AtomicU32 = AtomicU32::new(0);
 static REVERSED: AtomicBool = AtomicBool::new(true);
 static WANTED: AtomicBool = AtomicBool::new(true);
+/// Round 28 (W2): the chosen scene depth (raw pointer) for the lock-free check in the barrier hook.
+static MAIN_RAW: AtomicUsize = AtomicUsize::new(0);
+/// Round 28 (W2): the copy is made once a frame at Present, on the overlay's own list, from the depth as the GPU
+/// left it after the game's whole frame (see `present_copy`). False: the older copy after a depth-pass end.
+static PRESENT_MODE: AtomicBool = AtomicBool::new(false);
+/// ini depth_copy_at_end=1: never use the Present copy (for comparing the two in a log).
+static FORCE_END: AtomicBool = AtomicBool::new(false);
+/// The app found the Present copy does not hold the player (player checks): END copies for the rest of the session.
+static PRESENT_REJECTED: AtomicBool = AtomicBool::new(false);
+/// The overlay's queue (the swap chain's), set by the renderer each frame.
+static PRESENT_QUEUE: AtomicUsize = AtomicUsize::new(0);
+static PRESENT_COPIES: AtomicU64 = AtomicU64::new(0);
+/// A new scene depth was chosen: the tracked states belong to the old one (cleared at the next TRACK use; adopt
+/// holds STATE and must not take TRACK).
+static TRACK_RESET: AtomicBool = AtomicBool::new(false);
+/// ExecuteCommandLists calls and the overlay's Present copy are kept in one order with this (the state the copy's
+/// barrier assumes must be the state the GPU has the depth in when the copy runs).
+static QUEUE_ORDER: ReentrantMutex<()> = const_reentrant_mutex(());
 
 const DEPTH_WRITE: u32 = 0x10;
 const COPY_SOURCE: u32 = 0x800;
+/// Frames a copy stays in use when no newer one was made (round 28, W2: the test used to drop for single frames).
+pub const STALE_FRAMES: u64 = 30;
 /// Frames per choosing window.
 const WINDOW: u64 = 120;
 
@@ -128,6 +150,12 @@ pub struct Info {
     pub candidates: usize,
     /// The state the game leaves it in after its depth writes end.
     pub after_state: u32,
+    /// Frames since the last copy (u64::MAX: none yet).
+    pub age: u64,
+    /// The copy is the Present copy (the GPU's final depth of the frame) rather than one after a depth-pass end.
+    pub present_mode: bool,
+    /// Present copies made so far.
+    pub present_copies: u64,
 }
 
 struct Candidate {
@@ -187,11 +215,35 @@ pub(crate) fn fresh(frames: u64) -> bool {
     last > 0 && FRAME.load(Ordering::Relaxed).saturating_sub(last) <= frames
 }
 
+/// Frames since the last copy (u64::MAX: none yet).
+pub(crate) fn age() -> u64 {
+    let last = LAST_COPY_FRAME.load(Ordering::Relaxed);
+    if last == 0 {
+        return u64::MAX;
+    }
+    FRAME.load(Ordering::Relaxed).saturating_sub(last)
+}
+
+/// ini depth_copy_at_end: true keeps the old copy after a depth-pass end (no Present copy).
+pub fn set_copy_at_end(on: bool) {
+    FORCE_END.store(on, Ordering::Relaxed);
+}
+
+/// The app's player checks say the Present copy is not the scene: back to END copies for this session.
+pub fn reject_present() {
+    if !PRESENT_REJECTED.swap(true, Ordering::Relaxed) {
+        info!("depth: Present copy rejected by the player checks; copies after a depth-pass end from now on");
+    }
+}
+
 /// What the capture is doing.
 pub fn info() -> Info {
     let s = STATE.lock();
     let mut out = Info {
         fresh: fresh(3),
+        age: age(),
+        present_mode: PRESENT_MODE.load(Ordering::Relaxed),
+        present_copies: PRESENT_COPIES.load(Ordering::Relaxed),
         copies: COPIES.load(Ordering::Relaxed),
         frames: FRAME.load(Ordering::Relaxed),
         barrier_calls: BARRIER_CALLS.load(Ordering::Relaxed),
@@ -231,6 +283,7 @@ fn drop_main(s: &mut State) {
         s.retired.push(m);
     }
     s.main_raw = 0;
+    MAIN_RAW.store(0, Ordering::Relaxed);
 }
 
 /// The renderer's frame tick: the choosing window.
@@ -338,19 +391,30 @@ pub(crate) unsafe extern "system" fn resource_barrier_impl(
         }
         let t = &b.Anonymous.Transition;
         let (before, after) = (t.StateBefore.0 as u32, t.StateAfter.0 as u32);
-        if before & DEPTH_WRITE == 0 || after & DEPTH_WRITE != 0 {
-            continue;
-        }
         let raw: usize = std::mem::transmute_copy(&t.pResource);
         if raw == 0 {
             continue;
         }
+        let end = before & DEPTH_WRITE != 0 && after & DEPTH_WRITE == 0;
+        // Round 28 (W2): every state change of the scene depth's plane 0, per command list, so the state the GPU
+        // has it in is known at Present (applied in ExecuteCommandLists order: `executed`).
+        let main = raw == MAIN_RAW.load(Ordering::Relaxed)
+            && (t.Subresource == D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES || t.Subresource == 0);
+        if main {
+            track_transition(this as usize, before, after, end);
+        }
+        if !end {
+            continue;
+        }
         DEPTH_ENDS.fetch_add(1, Ordering::Relaxed);
-        depth_write_ended(this, raw, t.Subresource, after, original);
+        if depth_write_ended(this, raw, t.Subresource, after, original) {
+            track_copied(this as usize);
+        }
     }
 }
 
-unsafe fn depth_write_ended(list: *mut c_void, raw: usize, subresource: u32, after: u32, original: ResourceBarrierFn) {
+/// Returns whether a copy was recorded after this end.
+unsafe fn depth_write_ended(list: *mut c_void, raw: usize, subresource: u32, after: u32, original: ResourceBarrierFn) -> bool {
     let job = {
         let mut guard = STATE.lock();
         let s = guard.get_or_insert_with(State::default);
@@ -385,7 +449,7 @@ unsafe fn depth_write_ended(list: *mut c_void, raw: usize, subresource: u32, aft
             s.frame_ends += 1;
             // Copy once, at the end that was last in the previous frame (a frame with fewer ends keeps the
             // older copy, and the next frame adjusts).
-            if index + 1 >= s.prev_frame_ends.max(1) && s.copied_frame != frame {
+            if index + 1 >= s.prev_frame_ends.max(1) && s.copied_frame != frame && !PRESENT_MODE.load(Ordering::Relaxed) {
                 s.copy.clone().zip(s.main.clone()).map(|j| (j, frame))
             } else {
                 None
@@ -399,8 +463,10 @@ unsafe fn depth_write_ended(list: *mut c_void, raw: usize, subresource: u32, aft
             if let Some(s) = STATE.lock().as_mut() {
                 s.copied_frame = frame;
             }
+            return true;
         }
     }
+    false
 }
 
 /// A resource whose depth writes ended: its description (alive now, inside the barrier call).
@@ -483,6 +549,9 @@ unsafe fn adopt(s: &mut State, raw: usize) {
     drop_main(s);
     s.main = Some(resource);
     s.main_raw = raw;
+    MAIN_RAW.store(raw, Ordering::Relaxed);
+    TRACK_RESET.store(true, Ordering::Relaxed);
+    PRESENT_MODE.store(false, Ordering::Relaxed);
     s.copy = Some(copy);
     s.copy_format = copy_format.0 as u32;
     s.srv_format = srv_format.0 as u32;
@@ -591,4 +660,258 @@ pub(crate) fn take_probe_request() -> Option<(u64, Vec<[f32; 2]>)> {
 
 pub(crate) fn put_probe(p: Probe) {
     *PROBE_RESULT.lock() = Some(p);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Round 28 (W2): the copy at Present, and the proof of which depth pass the old copy took.
+//
+// Round 28 input log (Ryan, 02:30-02:42 UTC Nov 3): the old copy is recorded after the main buffer's depth-pass end
+// whose index in the frame equals the previous frame's count of ends (counted as the game RECORDS its command lists,
+// on several threads, with frames cut at our Present). 38232 copies in 42986 frames: 11 % of frames had fewer ends
+// than the frame before (no copy), so the count changes from frame to frame and with it the pass that is copied.
+// The same unmoving tag read 3.9 m / 7.6 m / 4.0 m / 7.6 m every 0.25 s (Diego at 5.1 m) and Ugo's 6.9 m / 15.8 m
+// at a 7.5 m tag: copies with and without the characters. The player check read 0.0 (nothing drawn) and 17-104 m
+// at a player 3-6 m away (fails 424). Recording order is not the GPU's order: the GPU runs lists in
+// ExecuteCommandLists order. So the copy is now made once a frame at Present (the GPU has run the whole frame by
+// then), from the state the depth is in at that point in the queue, worked out from every barrier on it applied in
+// ExecuteCommandLists order and checked against the game's own next barrier (its StateBefore must equal ours).
+// ---------------------------------------------------------------------------------------------------------------
+
+/// One command list's changes of the scene depth since it was last executed.
+struct ListRec {
+    first_before: u32,
+    last_after: u32,
+    ends: u32,
+    /// The old copy was recorded after this list's n-th end (1-based).
+    copied_at: Option<u32>,
+    frame: u64,
+}
+
+#[derive(Default)]
+struct Track {
+    lists: HashMap<usize, ListRec>,
+    /// The scene depth's state at the end of each queue's submitted work (None: unknown).
+    queue_state: HashMap<usize, u32>,
+    // This frame (between two Presents, in GPU order).
+    frame_ends: u32,
+    frame_lists: u32,
+    frame_ecls: u32,
+    frame_copied_rank: Option<u32>,
+    frame_bad: bool,
+    // The log window.
+    win_frames: u32,
+    win_scene_frames: u32,
+    win_ends: (u32, u32, u64),
+    win_lists: u64,
+    win_ecls: u64,
+    win_end_copies: u32,
+    win_end_copy_last: u32,
+    win_end_copy_back: [u32; 4],
+    win_present_copies: u32,
+    win_no_copy: u32,
+    mismatches: u32,
+    mismatches_total: u64,
+    other_queue: u32,
+    last_mismatch: Option<String>,
+    clean_frames: u32,
+}
+
+static TRACK: Mutex<Option<Track>> = Mutex::new(None);
+/// Clean frames (state tracked with no mismatch, all on the overlay's queue) before the Present copy is used.
+const CLEAN_FRAMES: u32 = 120;
+const LOG_EVERY: u32 = 900;
+
+fn track_transition(list: usize, before: u32, after: u32, end: bool) {
+    let mut g = TRACK.lock();
+    let t = g.get_or_insert_with(Track::default);
+    let frame = FRAME.load(Ordering::Relaxed);
+    let rec = t.lists.entry(list).or_insert(ListRec { first_before: before, last_after: after, ends: 0, copied_at: None, frame });
+    rec.last_after = after;
+    rec.ends += end as u32;
+    if t.lists.len() > 512 {
+        // Lists recorded and never executed (reset and dropped): forget old ones.
+        t.lists.retain(|_, r| frame.saturating_sub(r.frame) < 600);
+    }
+}
+
+fn track_copied(list: usize) {
+    let mut g = TRACK.lock();
+    let Some(t) = g.as_mut() else { return };
+    if let Some(rec) = t.lists.get_mut(&list) {
+        rec.copied_at = Some(rec.ends.max(1));
+    }
+}
+
+/// Held by the ExecuteCommandLists hook around the game's submission and by the renderer from its Present copy
+/// to its own submission, so no game list lands between the state read and the overlay's copy.
+pub(crate) fn queue_guard() -> ReentrantMutexGuard<'static, ()> {
+    QUEUE_ORDER.lock()
+}
+
+/// ExecuteCommandLists hook (after the call): the lists in the order the GPU will run them.
+pub(crate) fn executed(queue: usize, lists: &[usize]) {
+    if MAIN_RAW.load(Ordering::Relaxed) == 0 {
+        return;
+    }
+    let mut g = TRACK.lock();
+    let Some(t) = g.as_mut() else { return };
+    if TRACK_RESET.swap(false, Ordering::Relaxed) {
+        *t = Track::default();
+    }
+    let present_queue = PRESENT_QUEUE.load(Ordering::Relaxed);
+    let mut any = false;
+    for l in lists {
+        let Some(rec) = t.lists.remove(l) else { continue };
+        any = true;
+        if present_queue != 0 && queue != present_queue {
+            t.other_queue += 1;
+            t.frame_bad = true;
+        }
+        let state = t.queue_state.get(&queue).copied();
+        if let Some(state) = state {
+            if state != rec.first_before {
+                t.mismatches += 1;
+                t.mismatches_total += 1;
+                t.frame_bad = true;
+                if t.last_mismatch.is_none() {
+                    t.last_mismatch = Some(format!(
+                        "tracked {state:#x}, the game's barrier says {:#x} (frame {})",
+                        rec.first_before,
+                        FRAME.load(Ordering::Relaxed)
+                    ));
+                }
+            }
+        }
+        t.queue_state.insert(queue, rec.last_after);
+        if let Some(n) = rec.copied_at {
+            t.frame_copied_rank = Some(t.frame_ends + n);
+        }
+        t.frame_ends += rec.ends;
+        t.frame_lists += 1;
+    }
+    t.frame_ecls += any as u32;
+}
+
+/// The renderer, once a frame before it draws (after `tick`): closes the frame's GPU-order record, decides the copy
+/// mode and, in Present mode, records on the overlay's list (run on `queue` before Present) the copy of the depth
+/// as the game's frame left it. The caller holds `queue_guard` until it has submitted the list.
+pub(crate) unsafe fn present_copy(list: &ID3D12GraphicsCommandList, queue: usize) {
+    PRESENT_QUEUE.store(queue, Ordering::Relaxed);
+    let job = {
+        let mut g = TRACK.lock();
+        let t = g.get_or_insert_with(Track::default);
+        if TRACK_RESET.swap(false, Ordering::Relaxed) {
+            *t = Track::default();
+        }
+        let scene = t.frame_ends > 0;
+        // The window's figures.
+        t.win_frames += 1;
+        if scene {
+            t.win_scene_frames += 1;
+            let e = t.frame_ends;
+            t.win_ends = if t.win_scene_frames == 1 { (e, e, e as u64) } else { (t.win_ends.0.min(e), t.win_ends.1.max(e), t.win_ends.2 + e as u64) };
+            t.win_lists += t.frame_lists as u64;
+            t.win_ecls += t.frame_ecls as u64;
+            match t.frame_copied_rank {
+                Some(r) => {
+                    t.win_end_copies += 1;
+                    let back = e.saturating_sub(r) as usize;
+                    if back == 0 {
+                        t.win_end_copy_last += 1;
+                    } else {
+                        t.win_end_copy_back[(back - 1).min(3)] += 1;
+                    }
+                },
+                None if !PRESENT_MODE.load(Ordering::Relaxed) => t.win_no_copy += 1,
+                None => {},
+            }
+        }
+        if t.frame_bad {
+            t.clean_frames = 0;
+        } else if scene && t.queue_state.contains_key(&queue) {
+            t.clean_frames = t.clean_frames.saturating_add(1);
+        }
+        let want = !FORCE_END.load(Ordering::Relaxed) && !PRESENT_REJECTED.load(Ordering::Relaxed)
+            && t.clean_frames >= CLEAN_FRAMES;
+        if PRESENT_MODE.swap(want, Ordering::Relaxed) != want {
+            if want {
+                info!(
+                    "depth: copy mode PRESENT (the GPU's final depth of each frame): {} frames with every barrier on \
+                     the scene depth matching the tracked state, all on the overlay's queue; state now {:#x}",
+                    t.clean_frames,
+                    t.queue_state.get(&queue).copied().unwrap_or(0)
+                );
+            } else {
+                info!(
+                    "depth: copy mode END (after a depth-pass end){}; mismatches {} (last: {}), lists on another \
+                     queue {}",
+                    if FORCE_END.load(Ordering::Relaxed) {
+                        " forced by ini depth_copy_at_end"
+                    } else if PRESENT_REJECTED.load(Ordering::Relaxed) {
+                        " (Present copy rejected by the player checks)"
+                    } else {
+                        ""
+                    },
+                    t.mismatches,
+                    t.last_mismatch.as_deref().unwrap_or("none"),
+                    t.other_queue
+                );
+            }
+        }
+        let state = t.queue_state.get(&queue).copied();
+        let copy_now = want && scene && !t.frame_bad;
+        if t.win_frames >= LOG_EVERY {
+            let n = t.win_scene_frames.max(1);
+            info!(
+                "depth: GPU order, last {} frames ({} with scene depth passes): scene depth pass ends a frame \
+                 min/avg/max {}/{:.1}/{} in {:.1} lists over {:.1} ExecuteCommandLists; copy mode {}; copies after an \
+                 end {} (on the frame's LAST end in GPU order {}, 1/2/3/4+ ends before the last {:?}, frames without \
+                 one {}); Present copies {}; state mismatches {} (total {}, last: {}); lists on another queue {}",
+                t.win_frames,
+                t.win_scene_frames,
+                t.win_ends.0,
+                t.win_ends.2 as f64 / n as f64,
+                t.win_ends.1,
+                t.win_lists as f64 / n as f64,
+                t.win_ecls as f64 / n as f64,
+                if PRESENT_MODE.load(Ordering::Relaxed) { "PRESENT" } else { "END" },
+                t.win_end_copies,
+                t.win_end_copy_last,
+                t.win_end_copy_back,
+                t.win_no_copy,
+                t.win_present_copies,
+                t.mismatches,
+                t.mismatches_total,
+                t.last_mismatch.as_deref().unwrap_or("none"),
+                t.other_queue
+            );
+            let (mt, qs) = (t.mismatches_total, std::mem::take(&mut t.queue_state));
+            let lists = std::mem::take(&mut t.lists);
+            *t = Track { mismatches_total: mt, queue_state: qs, lists, clean_frames: t.clean_frames, ..Default::default() };
+        }
+        t.frame_ends = 0;
+        t.frame_lists = 0;
+        t.frame_ecls = 0;
+        t.frame_copied_rank = None;
+        t.frame_bad = false;
+        if copy_now {
+            t.win_present_copies += 1;
+        }
+        match (copy_now, state) {
+            (true, Some(state)) => {
+                let s = STATE.lock();
+                s.as_ref().and_then(|s| s.copy.clone().zip(s.main.clone())).map(|j| (j, state))
+            },
+            _ => None,
+        }
+    };
+    let Some(((copy, source), state)) = job else { return };
+    let trampoline = BARRIER_TRAMPOLINE.load(Ordering::Relaxed);
+    if trampoline == 0 {
+        return;
+    }
+    let original: ResourceBarrierFn = std::mem::transmute(trampoline);
+    if record_copy(list.as_raw(), &copy, &source, state, original) {
+        PRESENT_COPIES.fetch_add(1, Ordering::Relaxed);
+    }
 }

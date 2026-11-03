@@ -29,6 +29,10 @@ const PROBE_EVERY: f32 = 0.25;
 /// agreed is rejected.
 const PASSES: u32 = 3;
 const MAX_FAILS: u32 = 120;
+/// Round 28 (W2): extra leeway for a character's own name plate. Round 28 input log: Ugo's tag at 7.5 m read his
+/// own body at 6.9 m (0.6 m in front, exactly the 0.45 + 0.02 x 7.5 margin) in the copies that had him drawn, so
+/// his own head hid his name. A wall still hides a plate when it is more than ~1.1 m in front of it.
+pub const OWN_BODY: f32 = 0.5;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -53,6 +57,11 @@ struct State {
     last_summary: Option<Instant>,
     last_check: Option<String>,
     no_depth_logged: bool,
+    /// Round 28 (W2): player checks per copy mode since the last summary ([end, present] x [ok, missed]) and tag
+    /// state changes since then.
+    mode_checks: [[u32; 2]; 2],
+    flips: u32,
+    stale_logged: bool,
 }
 
 /// Whether the game's depth test is in use this frame (the CPU sight tests stand down).
@@ -122,7 +131,19 @@ pub fn frame(game: Option<&crate::game::Game>, camera: Option<crate::markers::Ca
             s.last_probe = Some(Instant::now());
         }
     }
-    let on = enabled && info.fresh && s.validated;
+    // Round 28 (W2): the test stays on while the last copy is under half a second old. It used to drop for single
+    // frames with no fresh copy (round 28 input log: "occlusion test off (CPU sight tests)" then ON 17 ms later,
+    // 5 times), which put every wisp out ("wisps: 0 of 15 in sight") and showed tags through walls for that frame.
+    let on = enabled && s.validated && info.age <= depth::STALE_FRAMES;
+    if s.validated && enabled && gameplay && info.age > depth::STALE_FRAMES && info.age != u64::MAX {
+        if !s.stale_logged {
+            s.stale_logged = true;
+            tracing::info!("depth: no copy for {} frames in play (mode {}); the CPU sight tests stand in",
+                           info.age, if info.present_mode { "PRESENT" } else { "END" });
+        }
+    } else if on {
+        s.stale_logged = false;
+    }
     if ACTIVE.swap(on, Ordering::Relaxed) != on {
         tracing::info!("depth: occlusion test {}", if on { "ON (game depth)" } else { "off (CPU sight tests)" });
     }
@@ -143,6 +164,8 @@ fn read_probe(s: &mut State, depth_values: &[f32], tags: &[(String, f32)], playe
             for k in 0..2 {
                 s.passes[k] += ok[k] as u32;
             }
+            let good = if s.validated { ok[s.reversed as usize ^ 1] } else { ok[0] || ok[1] };
+            s.mode_checks[info.present_mode as usize][(!good) as usize] += 1;
             if !ok[0] && !ok[1] {
                 s.fails += 1;
                 if d > 0.0 && d < 1.0 {
@@ -180,8 +203,20 @@ fn read_probe(s: &mut State, depth_values: &[f32], tags: &[(String, f32)], playe
             if s.last_summary.is_none_or(|t| t.elapsed().as_secs() >= 15) {
                 s.last_summary = Some(Instant::now());
                 tracing::info!("depth: player check {} (passes reversed {} / normal {}, fails {}): {line}; {} copies \
-                                in {} frames", if ok[0] || ok[1] { "ok" } else { "MISSED" }, s.passes[0], s.passes[1],
-                               s.fails, info.copies, info.frames);
+                                in {} frames ({} at Present); since the last summary: END-copy checks ok/missed {}/{}, \
+                                PRESENT-copy checks ok/missed {}/{}, tag state changes {}; copy mode now {}, {} frames old",
+                               if ok[0] || ok[1] { "ok" } else { "MISSED" }, s.passes[0], s.passes[1],
+                               s.fails, info.copies, info.frames, info.present_copies, s.mode_checks[0][0],
+                               s.mode_checks[0][1], s.mode_checks[1][0], s.mode_checks[1][1], s.flips,
+                               if info.present_mode { "PRESENT" } else { "END" }, info.age);
+                // The Present copy is the frame's final depth; when it misses the player most of the time it is not
+                // the scene (something drawn after it), and the END copy comes back.
+                let [ok_p, miss_p] = s.mode_checks[1];
+                if ok_p + miss_p >= 20 && ok_p < miss_p {
+                    depth::reject_present();
+                }
+                s.mode_checks = [[0; 2]; 2];
+                s.flips = 0;
             }
             s.last_check = Some(line);
         }
@@ -194,13 +229,16 @@ fn read_probe(s: &mut State, depth_values: &[f32], tags: &[(String, f32)], playe
             continue;
         }
         let scene = depth::linear_with(d, near, far, s.reversed);
-        let limit = z - margin(*z, 0.0);
+        let limit = z - margin(*z, OWN_BODY);
         let hidden = scene < limit;
         if s.shown.insert(name.clone(), !hidden) != Some(!hidden) {
+            s.flips += 1;
+            let mode = if info.present_mode { "PRESENT" } else { "END" };
             if hidden {
-                tracing::info!("depth: tag '{name}' occluded (scene {scene:.1} m in front of the tag at {z:.1} m)");
+                tracing::info!("depth: tag '{name}' occluded (scene {scene:.1} m in front of the tag at {z:.1} m; \
+                                {mode} copy)");
             } else {
-                tracing::info!("depth: tag '{name}' visible (scene {scene:.1} m behind the tag at {z:.1} m)");
+                tracing::info!("depth: tag '{name}' visible (scene {scene:.1} m behind the tag at {z:.1} m; {mode} copy)");
             }
         }
     }

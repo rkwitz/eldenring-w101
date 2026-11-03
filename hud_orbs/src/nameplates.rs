@@ -55,6 +55,34 @@ const RANGE: f32 = 40.0;
 /// name clearly over the head.
 const GAP: f32 = 0.55;
 
+/// Round 28 (W1, Ryan: "Lost Souls overlap each other"): every 10 s in play, how close the loaded Lost Souls stand
+/// to each other (each one's nearest other Lost Soul), so a log shows whether the evenly spaced starts
+/// (tools/msb_more_mobs.even_spacing: 9-12.7 m apart along each loop) hold while they walk.
+pub fn log_spacing(enemies: &[(u32, [f32; 3], f32, Option<[f32; 3]>)]) {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if last.is_some_and(|t| t.elapsed().as_secs() < 10) {
+        return;
+    }
+    let souls: Vec<[f32; 3]> = enemies.iter().filter(|e| e.0 == 4180).map(|e| e.1).collect();
+    if souls.len() < 2 {
+        return;
+    }
+    *last = Some(Instant::now());
+    let mut nearest: Vec<f32> = souls.iter().enumerate().map(|(i, a)| {
+        souls.iter().enumerate().filter(|(j, _)| *j != i)
+            .map(|(_, b)| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt())
+            .fold(f32::MAX, f32::min)
+    }).collect();
+    nearest.sort_by(f32::total_cmp);
+    let close = nearest.iter().filter(|d| **d < 3.0).count();
+    tracing::info!("lost souls: {} loaded, nearest other Lost Soul min/median/max {:.1}/{:.1}/{:.1} m, {} within 3 m \
+                    (they start 9-12.7 m apart on each loop)", souls.len(), nearest[0], nearest[nearest.len() / 2],
+                   nearest[nearest.len() - 1], close);
+}
+
 pub fn models() -> Vec<u32> {
     CREATURES.iter().map(|c| c.0).collect()
 }

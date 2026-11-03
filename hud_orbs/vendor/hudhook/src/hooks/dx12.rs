@@ -893,7 +893,16 @@ unsafe extern "system" fn d3d12_command_queue_execute_command_lists_impl(
     let Trampolines { d3d12_command_queue_execute_command_lists, .. } =
         TRAMPOLINES.get().expect("DirectX 12 trampolines uninitialized");
 
+    // w101_orbs (round 28, W2): the lists in GPU order, for the scene depth's state at Present (crate::depth).
+    let queue_raw = command_queue.as_raw() as usize;
+    let lists: Vec<usize> = if command_lists.is_null() {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(command_lists as *const usize, num_command_lists as usize).to_vec()
+    };
+    let _order = crate::depth::queue_guard();
     d3d12_command_queue_execute_command_lists(command_queue, num_command_lists, command_lists);
+    crate::depth::executed(queue_raw, &lists);
 }
 
 unsafe extern "system" fn dxgi_factory_create_swap_chain_impl(

@@ -554,25 +554,45 @@ def quest_window(d, event_id=QUEST_WINDOW_EVENT, window=WINDOW_ENTITY, assigned=
 
 
 FOG_WALL_EVENT = 1042362860
-FOG_WALLS = (1042361892, 1042361893)  # msb_fog_gate.FOG_WALLS: AEG099_001 copies across the Commons archway
+FOG_WALLS = (1042361892, 1042361893)  # msb_fog_gate.FOG_WALLS: AEG099_001 copies across the Commons gateway
 FOG_WALL_DUMMY, FOG_WALL_SFX = 101, 3  # as vanilla m18 event 18000870 -> common_func 9005811 (18001850, SFX 3)
+FOG_PLANES = (1042361894, 1042361895)  # msb_fog_gate.FOG_ENTITIES: our mist plane aeg030_530 and the phantom-wall copy
+FOG_SIDE = 1042362702  # msb_fog_gate.FOG_SIDE_ENTITY: box over the street side of the graveyard exit door
 
 
-def fog_wall(d, event_id=FOG_WALL_EVENT, walls=FOG_WALLS):
-    """Round 27 (A6): Elden Ring's own fog gate look on the Commons archway. Vanilla shows a fog wall (AEG099_001, a
+def fog_wall(d, event_id=FOG_WALL_EVENT, walls=FOG_WALLS, planes=FOG_PLANES, side=FOG_SIDE):
+    """Round 27 (A6): Elden Ring's own fog gate look on the Commons gate. Vanilla shows a fog wall (AEG099_001, a
     mesh-less asset) with common_func 9005811: 2005[3] Change Asset Enable State (asset, 1) and 2006[4] Create
     Asset-following SFX (asset, dummypoly 101, SFX 3) (m18 event 18000870 for the Stranded Graveyard's own fog walls
-    18001850 / 18001851, SFX 3 / 4). New event `event_id` (rest 1, started from the top of event 0) does the same for
-    each of `walls` at every load and rest, deleting the SFX first (2006[5], as 9005811 does) so a restart never
-    stacks two. Rerunning replaces the event."""
+    18001850 / 18001851, SFX 3 / 4).
+
+    Round 28 (W3, Ryan: "not visible from behind"): the fog walls' SFX and our planes show from both sides, so the
+    event (rest 1, started from the top of event 0) now shows them only while the player is on the street side of the
+    gate (region `side`, msb_fog_gate.FOG_SIDE_REGION; 3[2] IfInoutsideArea packed as in boss_bar):
+      everything off (SFX deleted with 2006[5] first, as 9005811 does, so a restart never stacks two)
+      wait until the player is inside `side`: walls on + their SFX, planes on
+      wait until the player is outside `side`: SFX deleted, walls and planes off; restart.
+    Rerunning replaces the event."""
     e = Emevd(d)
     events = events_of(e)
     _start_once(events, event_id)
-    ins = []
+
+    def off():
+        out = []
+        for wall in walls:
+            out += [_i(2006, 5, "<IBxxx", wall, 1), _i(2005, 3, "<IBxxx", wall, 0)]
+        return out + [_i(2005, 3, "<IBxxx", plane, 0) for plane in planes]
+
+    ins = off()
+    ins.append(_i(3, 2, "<bBxxIIi", 0, 1, 10000, side, 1))  # IF the player is on the street side (main group)
     for wall in walls:
         ins += [_i(2005, 3, "<IBxxx", wall, 1),
                 _i(2006, 5, "<IBxxx", wall, 1),
                 _i(2006, 4, "<Iii", wall, FOG_WALL_DUMMY, FOG_WALL_SFX)]
+    ins += [_i(2005, 3, "<IBxxx", plane, 1) for plane in planes]
+    ins.append(_i(3, 2, "<bBxxIIi", 0, 0, 10000, side, 1))  # IF the player has left it (behind the gate)
+    ins += off()
+    ins.append(_i(1000, 4, "<Bxxx", 1))  # restart
     events.append({"id": event_id, "rest": 1, "pars": [], "ins": ins})
     return build(e, events)
 
