@@ -23,6 +23,12 @@ use crate::layout::Textures;
 pub const OFFER: &str = "Wizbang/Quest_Start.png";
 pub const TALK: &str = "Wizbang/Quest_Complete.png";
 pub const SPIRAL: &str = "Wizbang/Quest_Spiral.png";
+/// Round 31 (QM2, Ryan: "an NPC whose quest you have and haven't finished shows a grey ? with the red swirl"):
+/// WizBangs.xml UnfinishedQuest -> Wizbang/Quest_Marker_Unfinished.nif (_Shared-WorldData.wad): the same billboard
+/// as Quest_Marker_Start (76.2-unit sign quad, Quest_Spiral__9549b9f2 behind it, same turn), its sign the grey "?"
+/// Quest_Unfinished__d57fb319.nif (DXT5 256x256, alpha box 51..208 x 6..250, as Quest_Complete's). WizBangPriority.xml
+/// orders CompleteQuestGoal, StartQuest, UnfinishedQuest, ..., Shopping: `marker` keeps that order.
+pub const UNFINISHED: &str = "Wizbang/Quest_Unfinished.png";
 /// Round 27 (A9, Ryan: "Ugo gets W101's shop marker, the purse with the red swirl turning behind it"): WizBangs.xml
 /// Shopping -> Wizbang/Quest_Marker_Shopping.nif (_Shared-WorldData.wad): the same billboard and Quest_Spiral
 /// (59 units, same turn) as Quest_Marker_Start, with the sign Quest_Shopping__e71b1435.nif (the coin purse, 256x256)
@@ -264,12 +270,15 @@ const TALKS: &[(&str, u32, u32, u32, &[u32])] = &[
     ("ceren_nightchant", 1042360360, 1042360369, 1042360364, &[1042360363]),
 ];
 
-/// Quest_Marker_*.nif: the billboard's height over the marker's origin, the sign's and the spiral's quad sides (W101
-/// units = cm), and the spiral's turn (its z rotation keys: -2 pi over 6.67 s).
-const CENTRE: f32 = 0.3871;
+/// Quest_Marker_*.nif: the sign's and the spiral's quad sides (W101 units = cm), and the spiral's turn (its z
+/// rotation keys: -2 pi over 6.67 s). (The billboard's 38.71-unit height over the marker's origin is not used since
+/// round 31: the signs sit over the name plate.)
 const SIGN: f32 = 0.762;
 const SPIRAL_SIDE: f32 = 0.59;
 const SPIRAL_TURN: f32 = 6.6667;
+/// Round 31 (QM1): the "!" / "?" pictures' visible bottom (alpha boxes end at row 250 of 256), in half sides under
+/// the centre.
+const SIGN_BOTTOM: f32 = (250.0 - 128.0) / 128.0;
 
 /// The game camera: rows right, up, forward, position; vertical field of view in radians; and the player's physics
 /// position (the camera's space).
@@ -307,6 +316,8 @@ impl Camera {
 pub enum Marker {
     Offer,
     Talk,
+    /// Round 31 (QM2): the grey "?": the NPC's quest is under way.
+    Unfinished,
     /// Round 27 (A9): the merchant's purse.
     Shop,
 }
@@ -342,6 +353,10 @@ pub fn marker(npc: &str, flag: &dyn Fn(u32) -> bool) -> Option<Marker> {
     }
     if OFFERS.iter().any(offer) {
         return Some(Marker::Offer);
+    }
+    // Round 31 (QM2): a quest this NPC gave is under way (assigned, its complete flag = assigned + 9 not yet on).
+    if OFFERS.iter().any(|(giver, assigned, _)| *giver == npc && flag(*assigned) && !flag(*assigned + 9)) {
+        return Some(Marker::Unfinished);
     }
     (npc == SHOP_NPC).then_some(Marker::Shop)
 }
@@ -481,7 +496,7 @@ pub fn draw(
     sight: &Sight,
     time: f32,
     screen: [f32; 2],
-    plate_h: f32,
+    plate_h: [f32; 2],
 ) {
     let flag = |f: u32| flags.get(&f) == Some(&true);
     log_state(camera, position, entities, spots, render, &flag);
@@ -489,7 +504,7 @@ pub fn draw(
     // (depth, centre, sign half side, spiral half side, alpha, picture)
     let mut drawn: Vec<(f32, [f32; 2], f32, f32, u8, &str)> = Vec::new();
     for &(i, at, _) in spots {
-        let (slug, _, _, _, _, plate_lift, lift) = NPCS[i];
+        let (slug, _, _, _, _, plate_lift, _) = NPCS[i];
         let Some(kind) = marker(slug, &flag) else { continue };
         // Round 22 (H6, Ryan: "the name fades away at a certain distance; make those symbols also fade"): faded with
         // distance exactly as the names are (PLATE_RANGE, 3D distance), and out of sight behind walls (`sight`).
@@ -499,23 +514,26 @@ pub fn draw(
         if alpha == 0 {
             continue;
         }
-        if kind == Marker::Shop {
-            // Round 28 (S1): a fixed gap over the top of the name plate (npc_plates' anchor and scale k).
-            // Round 29 (M1): its world size (SIGN_SHOP) at this depth, as the quest signs below.
-            let Some(([x, y], z)) = camera.project([at[0], at[1] + plate_lift, at[2]], screen) else { continue };
-            let s = screen[1] / 768.0;
-            let k = s * (8.0 / z.max(1.0)).clamp(0.7, 1.15);
-            let metre = camera.scale(z, screen[1]).max(screen[1] * SHOP_MIN / SIGN_SHOP);
-            let half = SIGN_SHOP * metre / 2.0;
-            let centre = [x, y - plate_h * k - SHOP_GAP * s - half * SHOP_BOTTOM];
-            drawn.push((z, centre, half, half * SPIRAL_SIDE / SIGN_SHOP, alpha, SHOP));
-            continue;
-        }
-        let Some((on_screen, z)) = camera.project([at[0], at[1] + lift + CENTRE, at[2]], screen) else { continue };
-        // Wizard101 draws it at its world size; far away it is kept to a still readable 1.5 % of the screen.
-        let metre = camera.scale(z, screen[1]).max(screen[1] * 0.015 / SIGN);
-        let sign = match kind { Marker::Offer => OFFER, Marker::Talk => TALK, Marker::Shop => SHOP };
-        drawn.push((z, on_screen, SIGN * metre / 2.0, SPIRAL_SIDE * metre / 2.0, alpha, sign));
+        // Round 28 (S1): a fixed gap over the top of the name plate (npc_plates' anchor and scale k).
+        // Round 29 (M1): its world size (SIGN_SHOP) at this depth, never under SHOP_MIN of the screen's height.
+        // Round 31 (QM1, Ryan: "the ! and ? scale with distance the same way as Ugo's purse"): every sign now goes
+        // the purse's way, each at its own Wizard101 size (SIGN / SIGN_SHOP), its picture's visible bottom SHOP_GAP
+        // over the top of this NPC's plate (the name, plus the title line when it has one). They used to hang at a
+        // world height, so far away they sank into the name and with a title line they covered it.
+        let Some(([x, y], z)) = camera.project([at[0], at[1] + plate_lift, at[2]], screen) else { continue };
+        let s = screen[1] / 768.0;
+        let k = s * (8.0 / z.max(1.0)).clamp(0.7, 1.15);
+        let (side, bottom, sign) = match kind {
+            Marker::Offer => (SIGN, SIGN_BOTTOM, OFFER),
+            Marker::Talk => (SIGN, SIGN_BOTTOM, TALK),
+            Marker::Unfinished => (SIGN, SIGN_BOTTOM, UNFINISHED),
+            Marker::Shop => (SIGN_SHOP, SHOP_BOTTOM, SHOP),
+        };
+        let metre = camera.scale(z, screen[1]).max(screen[1] * SHOP_MIN / side);
+        let half = side * metre / 2.0;
+        let plate = plate_h[0] + if title(slug).is_empty() { 0.0 } else { plate_h[1] };
+        let centre = [x, y - plate * k - SHOP_GAP * s - half * bottom];
+        drawn.push((z, centre, half, half * SPIRAL_SIDE / side, alpha, sign));
     }
     // Far ones first, so near ones cover them.
     drawn.sort_by(|a, b| b.0.total_cmp(&a.0));

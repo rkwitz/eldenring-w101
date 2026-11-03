@@ -819,7 +819,7 @@ impl Book {
     /// Draws the quest markers over the quest givers (markers.rs) in normal play, from the last quest flags read.
     pub fn draw_markers(&mut self, ui: &Ui, cx: &Context) {
         self.draw_prompt(ui, cx);
-        self.textures.want([markers::OFFER, markers::TALK, markers::SPIRAL, markers::SHOP].map(String::from));
+        self.textures.want([markers::OFFER, markers::TALK, markers::SPIRAL, markers::SHOP, markers::UNFINISHED].map(String::from));
         if !cx.gameplay || self.blocking() || self.map != MapState::Idle || self.flags.is_empty() {
             return;
         }
@@ -837,7 +837,8 @@ impl Book {
             .or_else(|| position.and_then(crate::questhelper::player_msb));
         self.sight.update(&self.nav, player, ui.time() as f32);
         // Round 28 (S1): the drawn height of a plate with a title line (draw_nameplates), for the shop purse over it.
-        let plate_h = self.fonts.get("WizardFancy").map_or(40.0, |f| f.line_height * (NAME_SCALE + RANK_SCALE));
+        // Round 31 (QM1): [name, title line] heights, for every sign over a plate.
+        let plate_h = self.fonts.get("WizardFancy").map_or([24.0, 16.0], |f| [f.line_height * NAME_SCALE, f.line_height * RANK_SCALE]);
         markers::draw(&draw, &self.textures, &camera, position, &entities, &spots, &render, &self.flags, &self.sight,
                       ui.time() as f32, ui.io().display_size, plate_h);
     }
@@ -858,11 +859,12 @@ impl Book {
         let Some(camera) = game.camera() else { return };
         let creatures = game.combatants(&nameplates::models());
         let enemies = game.enemies(&nameplates::models());
-        // A living creature's plate anchor: the enemies entry at its position (both read the physics position).
+        // A living creature's head top (round 31 FT6; round 30 used the plate anchor): the enemies entry at its
+        // position (both read the physics position), with its own capsule height and posed box.
         let anchor = |model: u32, p: [f32; 3]| enemies.iter()
             .find(|e| e.0 == model && (e.1[0] - p[0]).abs() + (e.1[1] - p[1]).abs() + (e.1[2] - p[2]).abs() < 0.05)
-            .and_then(|e| nameplates::anchor(e.0, e.1, e.2, e.3))
-            .or_else(|| nameplates::anchor(model, p, 0.0, None));
+            .and_then(|e| nameplates::head(e.0, e.1, e.2, e.3))
+            .or_else(|| nameplates::head(model, p, 0.0, None));
         let stats = cx.stats.filter(|_| cx.gameplay);
         self.floaters.observe(stats.map(|s| (s.hp, s.max_hp)), stats.and_then(|s| s.level).map(|l| l.1), &creatures,
                               &anchor, camera.player);
@@ -1650,12 +1652,14 @@ impl Book {
         if valid {
             self.last_os = os;
         }
-        if self.open && (self.tab != Tab::Map || self.map == MapState::Idle) {
+        // Round 31 (SH3): the shop window's cursor moves on the right stick as the book's wand does.
+        let shop = self.shop.is_some();
+        if shop || (self.open && (self.tab != Tab::Map || self.map == MapState::Idle)) {
             // The map page: either stick moves the cursor over the map (the map itself stays still). Round 19 A5:
             // every other page: the right stick moves the wand (the camera is locked while the book is open; the
             // left stick still walks).
             let [lx, ly, rx, ry] = input::sticks();
-            let (lx, ly) = if self.tab == Tab::Map { (lx, ly) } else { (0.0, 0.0) };
+            let (lx, ly) = if self.tab == Tab::Map && !shop { (lx, ly) } else { (0.0, 0.0) };
             let live = |v: f32| if v.abs() < MAP_STICK_DEAD { 0.0 } else { (v.abs() - MAP_STICK_DEAD) / (1.0 - MAP_STICK_DEAD) * v.signum() };
             let (x, y) = ((live(lx) + live(rx)).clamp(-1.0, 1.0), (live(ly) + live(ry)).clamp(-1.0, 1.0));
             let step = height * MAP_STICK_SPEED * dt;
@@ -1677,7 +1681,7 @@ impl Book {
             pos: self.cursor,
             delta: [self.cursor[0] - before[0], self.cursor[1] - before[1]],
             // Round 19 A5: the controller's A held drags like the mouse button (turning the picture with the wand).
-            down: io.mouse_down[0] || di_down || (self.open && input::held().0 & input::A != 0),
+            down: io.mouse_down[0] || di_down || ((self.open || shop) && input::held().0 & input::A != 0),
             clicked,
             wheel: if io.mouse_wheel != 0.0 { io.mouse_wheel } else { wheel as f32 / 120.0 },
         }
@@ -2383,10 +2387,15 @@ impl Book {
                 self.shop_trade = None;
                 crate::music::sfx(if result.is_ok() { "ui_reward_gold" } else { "HudCancel" });
                 if let Some(shop) = self.shop.as_mut() {
-                    // Round 30 (SH1, ref 4): a buy shows SOLD in the picture box, no line under BUY.
+                    // Round 30 (SH1, ref 4): a buy shows SOLD in the picture box, no line under BUY. Round 31 (SH7):
+                    // a sale shows nothing either; the item just leaves the list.
                     match result {
                         Ok(_) if !trade.sell => {
                             shop.sold.push(trade.line.item);
+                            shop.note = None;
+                        }
+                        Ok(_) => {
+                            shop.sold_one(trade.line.item);
                             shop.note = None;
                         }
                         r => shop.note = Some((r.unwrap_or_else(|e| e), Instant::now())),
@@ -2466,8 +2475,11 @@ impl Book {
             return;
         }
         let key = |k: Key| ui.is_key_pressed_no_repeat(k);
+        // Round 31 (SH3): A / Enter clicks what the cursor is on, as in the book; over nothing it still buys or
+        // sells the lit row (below).
+        let a_press = pressed & input::A != 0 || key(Key::Enter);
         let clicked = |hits: layout::Hits, l: &Layout, is_top: bool| {
-            hits.button.filter(|_| pointer.clicked).and_then(|b| crate::shop::click(&l.nodes[b].name, is_top))
+            hits.button.filter(|_| pointer.clicked || a_press).and_then(|b| crate::shop::click(&l.nodes[b].name, is_top))
         };
         let rows = shop.list(&self.stock).len();
         let cats = crate::shop::CATEGORIES.len();

@@ -122,6 +122,19 @@ fn log_box_rejected(model: u32, over: f32, known: f32) {
 
 /// Round 30 (floaters.rs): the point (physics space) the plate of creature `model` at `p` (capsule height, posed box
 /// top as for plates) hangs its bottom on.
+/// Round 31 (FT6, Ryan: "start closer to the head, from each character's real height"): the top of creature `model`
+/// (arguments as `anchor`), where its floating numbers start: the posed box top when it is the mesh's (BOX_CAP),
+/// else its seen top (CREATURES' plate lift less BOX_GAP), else the hit capsule's height, else its known height.
+pub fn head(model: u32, p: [f32; 3], height: f32, top: Option<[f32; 3]>) -> Option<[f32; 3]> {
+    let &(_, _, _, _, _, tall, seen, _) = CREATURES.iter().find(|c| c.0 == model)?;
+    let known = seen.unwrap_or(tall);
+    if let Some(t) = top.filter(|t| t[1] - p[1] <= BOX_CAP * known) {
+        return Some(t);
+    }
+    let h = seen.map(|s| s - BOX_GAP).unwrap_or(if height > 0.0 { height } else { tall });
+    Some([p[0], p[1] + h, p[2]])
+}
+
 pub fn anchor(model: u32, p: [f32; 3], height: f32, top: Option<[f32; 3]>) -> Option<[f32; 3]> {
     let &(_, _, _, _, _, tall, seen, _) = CREATURES.iter().find(|c| c.0 == model)?;
     let lift = seen.unwrap_or(if height > 0.0 { height } else { tall } + GAP);

@@ -47,15 +47,16 @@ const COIN: f32 = 2.1;
 const CAP: f32 = 0.62;
 /// Layout pixels (768-high screen, times the size factor) it rises over its life, and its life: full for HOLD
 /// seconds, then fading out over FADE. Not in Wizard101's data (see above).
-const RISE: f32 = 40.0;
+/// Round 31 (FT6, Ryan: "rise faster; the fade time is fine"): 40 -> 100 over the same life.
+const RISE: f32 = 100.0;
 const HOLD: f32 = 1.2;
 const FADE: f32 = 0.8;
 const VICTORY_HOLD: f32 = 2.0;
 const VICTORY_FADE: f32 = 1.0;
 /// Floaters on one head that came up within this many seconds of each other stack one line apart (ref 3).
 const STACK: f32 = 0.6;
-/// Over the player: the top of an Elden Ring character (1.75 m) and the nameplates' gap over the head.
-const PLAYER_TOP: f32 = 1.75 + 0.35;
+/// Over the player: the top of an Elden Ring character (1.75 m). Round 31 (FT6): the head itself, no plate gap.
+const PLAYER_TOP: f32 = 1.75;
 /// Runes gained this soon after an enemy died are that kill's.
 const KILL_WINDOW: f32 = 3.0;
 /// Enemies farther than this (metres) show no damage numbers (the nameplates' own range is near this).
@@ -120,7 +121,7 @@ impl Floaters {
 
     /// Reads what changed since the last frame: the player's HP (FT3), the runes held (FT4), the creatures' HP (FT2,
     /// kills, FT5 for a boss) and the wisps picked up (FT1). `creatures`: Game::combatants (ChrIns, model, physics
-    /// position, HP); `anchors`: each living enemy's nameplate anchor (physics space) by position.
+    /// position, HP); `anchor`: each living enemy's head top (nameplates::head, physics space) by model and position.
     pub fn observe(&mut self, hp: Option<(i32, i32)>, runes: Option<u32>, creatures: &[(usize, u32, [f32; 3], i32)],
                    anchor: &dyn Fn(u32, [f32; 3]) -> Option<[f32; 3]>, player: [f32; 3]) {
         let now = Instant::now();
@@ -238,9 +239,9 @@ impl Floaters {
             let side = icon.map_or(0.0, |(_, f, _)| cap * f);
             let gap = if icon.is_some() { cap * 0.2 } else { 0.0 };
             let total = text_w + gap + side;
-            // Its top starts just under the nameplate's bottom (the anchor), one line lower per stacked row, and
-            // rises RISE over its life.
-            let top = y + f.row * line - RISE * k * (age / (hold + fade));
+            // Round 31 (FT6): its bottom starts on the character's head top (nameplates::head, PLAYER_TOP), one
+            // line lower per stacked row, and rises RISE over its life (round 30: its top under the plate).
+            let top = y - line + f.row * line - RISE * k * (age / (hold + fade));
             let left = x - total / 2.0;
             crate::occlusion::begin(z, crate::occlusion::OWN_BODY, "floater", [x, top + line / 2.0]);
             let a = (255.0 * alpha) as u8;

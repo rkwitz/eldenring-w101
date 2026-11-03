@@ -465,6 +465,12 @@ fn main() {
         ("30f_float_mana", pages::Tab::Character, 0, [0.0, 0.0], "float:mana:24:p:0.2"),
         ("30g_float_heal_1.0s", pages::Tab::Character, 0, [0.0, 0.0], "float:heal:110:p:1.0"),
         ("30h_float_heal_1.6s", pages::Tab::Character, 0, [0.0, 0.0], "float:heal:110:p:1.6"),
+        // Round 31 (FT6): from each one's head top, rising faster.
+        ("31ft6a_damage_sprite_0s", pages::Tab::Character, 0, [0.0, 0.0], "float:damage:105:e:0.0"),
+        ("31ft6b_damage_lost_soul_0s", pages::Tab::Character, 0, [0.0, 0.0], "float:damage:105:e4180:0.0"),
+        ("31ft6c_damage_sprite_1s", pages::Tab::Character, 0, [0.0, 0.0], "float:damage:105:e:1.0"),
+        ("31ft6d_heal_0s", pages::Tab::Character, 0, [0.0, 0.0], "float:heal:110:p:0.0"),
+        ("31ft6e_heal_1s", pages::Tab::Character, 0, [0.0, 0.0], "float:heal:110:p:1.0"),
         ("23g_wisp_pickup_0.3", pages::Tab::Character, 0, [0.0, 0.0], "wisp:0.3"),
         ("23h_wisp_pickup_0.8", pages::Tab::Character, 0, [0.0, 0.0], "wisp:0.8"),
         ("23i_wisp_pickup_1.4", pages::Tab::Character, 0, [0.0, 0.0], "wisp:1.4"),
@@ -569,10 +575,11 @@ fn main() {
             // (-17.5, 94, -106) 3.5 m ahead.
             // Shots with nothing over the enemy look the other way, down the street, so only the player's are seen.
             let player = [-18.5f32, 94.0, -109.5];
-            let back = if list.contains(":e:") { 1.0 } else { -1.0 };
+            let back = if list.contains(":e") { 1.0 } else { -1.0 };
             *game::VIEW.lock().unwrap() = Some(([player[0] - 0.9 * back, player[1] + 2.0, player[2] - 3.8 * back],
                                                 [player[0] + 0.3 * back, player[1] + 1.5, player[2] + 1.5 * back], player));
-            let sprite = game.enemies(&[3450]).first().and_then(|e| nameplates::anchor(e.0, e.1, e.2, e.3));
+            // Round 31 (FT6): over an enemy's head top (nameplates::head): "e" the Dark Sprite, "e<model>" another.
+            let over = |model: u32| game.enemies(&[model]).first().and_then(|e| nameplates::head(e.0, e.1, e.2, e.3));
             let items: Vec<_> = list.split(';').filter_map(|f| {
                 let v: Vec<&str> = f.split(':').collect();
                 let n: i32 = v.get(1)?.parse().ok()?;
@@ -583,7 +590,8 @@ fn main() {
                     "runes" => floaters::Kind::Runes(n as u32),
                     _ => floaters::Kind::Victory,
                 };
-                Some((kind, if *v.get(2)? == "e" { sprite } else { None }, v.get(3)?.parse().ok()?))
+                let on = v.get(2)?.strip_prefix('e').map(|m| over(m.parse().unwrap_or(3450))).unwrap_or(None);
+                Some((kind, on, v.get(3)?.parse().ok()?))
             }).collect();
             book.preview_floaters(&items);
         }

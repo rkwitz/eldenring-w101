@@ -149,12 +149,33 @@ pub struct Shop {
     pub note: Option<(String, Instant)>,
     /// Round 30 (SH1): the items bought while the window is up: chosen again, the picture box says SOLD.
     pub sold: Vec<u32>,
+    /// Round 31 (SH4): every item the player has (inventory and equipped, from the character sheet). A buy row of
+    /// one of them is SOLD too, so the sold state lasts past the window and the session (Shop.sold only covers the
+    /// second between the event giving the item and the next sheet read).
+    pub owned: Vec<u32>,
 }
 
 impl Shop {
     pub fn new(request: Option<usize>, title: String) -> Shop {
         Shop { request, title, selling: false, cat: 0, page: 0, chosen: 0, opened: Instant::now(), held: Vec::new(),
-               runes: 0, read_at: None, note: None, sold: Vec::new() }
+               runes: 0, read_at: None, note: None, sold: Vec::new(), owned: Vec::new() }
+    }
+
+    /// Round 31 (SH4): whether buy row item `item` is already the player's (bought now or held).
+    pub fn is_sold(&self, item: u32) -> bool {
+        self.sold.contains(&item) || self.owned.contains(&item)
+    }
+
+    /// Round 31 (SH7): a sale went through: the item leaves the Sell list at once (the next sheet read agrees),
+    /// and the highlight stays on the same row, which is now the next item.
+    pub fn sold_one(&mut self, item: u32) {
+        if let Some(i) = self.held.iter().position(|h| h.0 == item) {
+            self.held[i].1 -= 1;
+            if self.held[i].1 == 0 {
+                self.held.remove(i);
+            }
+        }
+        self.owned.retain(|o| *o != item);
     }
 
     /// The rows of the open tab and category.
@@ -175,6 +196,7 @@ impl Shop {
             .filter(|(i, id)| (*i < 6 || (12..16).contains(i)) && **id >= 0)
             .map(|(i, id)| if i < 6 { *id as u32 } else { 0x1000_0000 | *id as u32 })
             .collect();
+        self.owned = sheet.items.iter().filter(|i| i.1 > 0).map(|i| i.0).chain(equipped.iter().copied()).collect();
         let mut held: Vec<(u32, u32)> = Vec::new();
         for (id, n) in &sheet.items {
             if !stock.sell.contains_key(id) || equipped.contains(id) || *n == 0 {
@@ -284,7 +306,6 @@ pub fn page_view(l: &Layout, shop: &mut Shop, stock: &Stock, names: &Names, item
     shop.clamp(list.len());
     let pages = list.len().div_ceil(ROWS).max(1);
     let row_style = TextStyle::new("WizardFancy", 0.5, yellow());
-    let price_style = TextStyle::new("WizardFancy", 0.5, yellow()).right();
     for r in 0..ROWS {
         let Some(node) = l.find(&format!("shoplist{r}")) else { continue };
         let at = shop.page * ROWS + r;
@@ -298,13 +319,8 @@ pub fn page_view(l: &Layout, shop: &mut Shop, stock: &Stock, names: &Names, item
         }
         let name = names.item(line.item);
         let name = if *count > 1 { format!("{name} ({count})") } else { name };
-        if shop.selling {
-            v.add([rect[0] + 12.0, rect[1], rect[2] - 70.0, rect[3]], name, row_style.clone());
-            v.add([rect[2] - 70.0, rect[1], rect[2] - 10.0, rect[3]], line.runes.to_string(), price_style.clone());
-        } else {
-            v.add([rect[0] + 8.0, rect[1], rect[2] - 8.0, rect[3]], format!("<center>{name}"),
-                  row_style.clone().centred());
-        }
+        // Round 31 (SH6): Sell rows as Buy's: the name centred, no price (the cost box shows it).
+        v.add([rect[0] + 8.0, rect[1], rect[2] - 8.0, rect[3]], format!("<center>{name}"), row_style.clone().centred());
         v.tip(rect, items.tooltip(line.item, *count, names, false));
     }
     let chosen = list.get(shop.chosen);
@@ -318,7 +334,7 @@ pub fn page_view(l: &Layout, shop: &mut Shop, stock: &Stock, names: &Names, item
             let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
             // Round 30 (SH1, ref 4): an item just bought shows BuyWindow's own "sold" text (WizardFancy 1.5,
             // yellow, centred in the picture box) instead of its picture, and BUY is greyed.
-            if !shop.selling && shop.sold.contains(&line.item) {
+            if !shop.selling && shop.is_sold(line.item) {
                 v.show(l.find("sold"), true);
             } else if let Some(icon) = items.icon(line.item) {
                 v.image([cx - side / 2.0, cy - side / 2.0, cx + side / 2.0, cy + side / 2.0], icon);
@@ -358,7 +374,7 @@ pub fn page_view(l: &Layout, shop: &mut Shop, stock: &Stock, names: &Names, item
         v.image([cx - half, RUNES_MIDDLE - half, cx + half, RUNES_MIDDLE + half], crate::pages::REWARD_RUNES);
     }
     let action = l.find(if shop.selling { "sellAction" } else { "buyAction" });
-    let can = chosen.is_some_and(|(line, _)| shop.selling || (shop.runes >= line.runes && !shop.sold.contains(&line.item)));
+    let can = chosen.is_some_and(|(line, _)| shop.selling || (shop.runes >= line.runes && !shop.is_sold(line.item)));
     if let Some(a) = action.filter(|_| !can) {
         v.greyed.insert(a);
     }
@@ -436,7 +452,7 @@ pub fn request(shop: &Shop, stock: &Stock, names: &Names) -> Result<Trade, Strin
     if game::event_flag(REQUEST) == Some(true) {
         return Err("One moment...".into());
     }
-    if !shop.selling && shop.sold.contains(&line.item) {
+    if !shop.selling && shop.is_sold(line.item) {
         return Err("Sold".into());
     }
     if !shop.selling && shop.runes < line.runes {
