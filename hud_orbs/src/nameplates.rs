@@ -120,6 +120,29 @@ fn log_box_rejected(model: u32, over: f32, known: f32) {
     }
 }
 
+/// Round 30 (floaters.rs): the point (physics space) the plate of creature `model` at `p` (capsule height, posed box
+/// top as for plates) hangs its bottom on.
+pub fn anchor(model: u32, p: [f32; 3], height: f32, top: Option<[f32; 3]>) -> Option<[f32; 3]> {
+    let &(_, _, _, _, _, tall, seen, _) = CREATURES.iter().find(|c| c.0 == model)?;
+    let lift = seen.unwrap_or(if height > 0.0 { height } else { tall } + GAP);
+    // Round 29 (N1, Ryan: Skeleton Pirates' names way too high): the round 29 log reads c3500's posed box top
+    // 8.36-8.38 m over its physics position, for a 2.16 m mesh (er_chr_height.py), so that box is not the posed
+    // mesh. A box top more than BOX_CAP x the creature's known height over its feet is not used (Rattlebones
+    // 10.3 m of 5.95, Fear of Fire 7.5 of 3.2 and Blackhope 2.56 of 2.8 stay under it).
+    let known = seen.unwrap_or(tall);
+    let top = top.filter(|t| {
+        let ok = t[1] - p[1] <= BOX_CAP * known;
+        if !ok {
+            log_box_rejected(model, t[1] - p[1], known);
+        }
+        ok
+    });
+    Some(match top {
+        Some(t) => [t[0], t[1] + BOX_GAP, t[2]],
+        None => [p[0], p[1] + lift, p[2]],
+    })
+}
+
 /// The plates for the enemies (model, physics position, hit capsule height or 0, top of the posed model box) in view,
 /// farthest first (nearer ones over them).
 ///
@@ -130,24 +153,8 @@ fn log_box_rejected(model: u32, over: f32, known: f32) {
 pub fn plates(camera: &Camera, enemies: &[(u32, [f32; 3], f32, Option<[f32; 3]>)], screen: [f32; 2]) -> Vec<Plate> {
     let mut out: Vec<(f32, Plate)> = Vec::new();
     for &(model, p, height, top) in enemies {
-        let Some(&(_, name, rank, school, title, tall, seen, colour)) = CREATURES.iter().find(|c| c.0 == model) else { continue };
-        let lift = seen.unwrap_or(if height > 0.0 { height } else { tall } + GAP);
-        // Round 29 (N1, Ryan: Skeleton Pirates' names way too high): the round 29 log reads c3500's posed box top
-        // 8.36-8.38 m over its physics position, for a 2.16 m mesh (er_chr_height.py), so that box is not the posed
-        // mesh. A box top more than BOX_CAP x the creature's known height over its feet is not used (Rattlebones
-        // 10.3 m of 5.95, Fear of Fire 7.5 of 3.2 and Blackhope 2.56 of 2.8 stay under it).
-        let known = seen.unwrap_or(tall);
-        let top = top.filter(|t| {
-            let ok = t[1] - p[1] <= BOX_CAP * known;
-            if !ok {
-                log_box_rejected(model, t[1] - p[1], known);
-            }
-            ok
-        });
-        let anchor = match top {
-            Some(t) => [t[0], t[1] + BOX_GAP, t[2]],
-            None => [p[0], p[1] + lift, p[2]],
-        };
+        let Some(&(_, name, rank, school, title, _, _, colour)) = CREATURES.iter().find(|c| c.0 == model) else { continue };
+        let Some(anchor) = anchor(model, p, height, top) else { continue };
         let d = ((p[0] - camera.player[0]).powi(2) + (p[1] - camera.player[1]).powi(2)
             + (p[2] - camera.player[2]).powi(2)).sqrt();
         if d > RANGE {

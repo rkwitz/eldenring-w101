@@ -173,6 +173,8 @@ pub struct Book {
     pub map_bosses_all: bool,
     /// Round 23 (H7): Wizard101's quest popups ("Goal Update: ...", goalpopup.rs).
     pub popups: crate::goalpopup::GoalPopups,
+    /// Round 30 (FT1-FT5): Wizard101's floating numbers over heads (floaters.rs).
+    pub floaters: crate::floaters::Floaters,
     /// Round 25 (H2): Wizard101's quest picker (picker.rs) while one NPC's events ask for several conversations.
     picker: Option<crate::picker::Picker>,
     /// The picker's rows follow the mouse once it moves (else the controller's focus row is lit).
@@ -410,6 +412,7 @@ impl Book {
             play_since: None,
             map_bosses_all: false,
             popups: Default::default(),
+            floaters: Default::default(),
             picker: None,
             picker_mouse: false,
             picker_pinned: false,
@@ -846,6 +849,33 @@ impl Book {
         let draw = ui.get_foreground_draw_list();
         self.popups.draw(&draw, &self.textures, &self.fonts, ui.io().display_size, visible,
                          ui.io().delta_time.clamp(0.0, 0.1));
+    }
+
+    /// Round 30 (FT1-FT5): reads the HP, runes and creatures' HP changes and draws the floating numbers
+    /// (floaters.rs) in normal play; with the book or a dialogue up time runs on but nothing is drawn.
+    pub fn draw_floaters(&mut self, ui: &Ui, cx: &Context) {
+        let Some(game) = cx.game else { return };
+        let Some(camera) = game.camera() else { return };
+        let creatures = game.combatants(&nameplates::models());
+        let enemies = game.enemies(&nameplates::models());
+        // A living creature's plate anchor: the enemies entry at its position (both read the physics position).
+        let anchor = |model: u32, p: [f32; 3]| enemies.iter()
+            .find(|e| e.0 == model && (e.1[0] - p[0]).abs() + (e.1[1] - p[1]).abs() + (e.1[2] - p[2]).abs() < 0.05)
+            .and_then(|e| nameplates::anchor(e.0, e.1, e.2, e.3))
+            .or_else(|| nameplates::anchor(model, p, 0.0, None));
+        let stats = cx.stats.filter(|_| cx.gameplay);
+        self.floaters.observe(stats.map(|s| (s.hp, s.max_hp)), stats.and_then(|s| s.level).map(|l| l.1), &creatures,
+                              &anchor, camera.player);
+        self.textures.want(crate::floaters::Floaters::art());
+        let visible = cx.gameplay && !self.blocking() && self.map == MapState::Idle;
+        let draw = ui.get_background_draw_list();
+        self.floaters.draw(&draw, &self.textures, &self.fonts, &camera, ui.io().display_size, visible);
+    }
+
+    /// Round 30: floaters for the preview renderer (floaters::Floaters::preview).
+    #[allow(dead_code)]
+    pub fn preview_floaters(&mut self, list: &[(crate::floaters::Kind, Option<[f32; 3]>, f32)]) {
+        self.floaters.preview(list);
     }
 
     /// Wizard101's Quest Helper (questhelper.rs, round 18 quests F4): the yellow arrow toward the current goal of

@@ -8,6 +8,9 @@ pub struct Game;
 /// A giver's MSB position to put the preview camera in front of (11b/11c_markers_close).
 pub static CLOSE: std::sync::Mutex<Option<[f32; 3]>> = std::sync::Mutex::new(None);
 
+/// Round 30: a third-person view (camera, look-at point, player's feet) for the floater shots (30*).
+pub static VIEW: std::sync::Mutex<Option<([f32; 3], [f32; 3], [f32; 3])>> = std::sync::Mutex::new(None);
+
 /// The camera turned this far (radians, clockwise from up the street): the quest helper shots (14_quest_helper*).
 pub static TURN: std::sync::Mutex<f32> = std::sync::Mutex::new(0.0);
 
@@ -108,6 +111,16 @@ impl Game {
 
     /// A camera behind the player looking up the street at the quest givers (physics space = chunk space here).
     pub fn camera(&self) -> Option<crate::markers::Camera> {
+        if let Some((pos, look, player)) = *VIEW.lock().unwrap() {
+            let f = [look[0] - pos[0], look[1] - pos[1], look[2] - pos[2]];
+            let l = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt();
+            let f = [f[0] / l, f[1] / l, f[2] / l];
+            let rl = (f[2] * f[2] + f[0] * f[0]).sqrt();
+            let r = [f[2] / rl, 0.0, -f[0] / rl];
+            let u = [f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]];
+            let matrix = [[r[0], r[1], r[2], 0.0], [u[0], u[1], u[2], 0.0], [f[0], f[1], f[2], 0.0], [pos[0], pos[1], pos[2], 1.0]];
+            return Some(crate::markers::Camera { matrix, fov: 0.85, player });
+        }
         let turn = *TURN.lock().unwrap();
         let f = [if CLOSE.lock().unwrap().is_some() { 0.0f32 } else { 0.02 } + turn.sin(), 0.0, turn.cos()];
         let n = (f[0] * f[0] + f[2] * f[2]).sqrt();
@@ -181,6 +194,10 @@ impl Game {
     }
     pub fn player_address(&self) -> Option<usize> {
         Some(1)
+    }
+    /// Round 30: no live HP in the preview (floaters come from the "float:" scenes).
+    pub fn combatants(&self, _models: &[u32]) -> Vec<(usize, u32, [f32; 3], i32)> {
+        Vec::new()
     }
 }
 

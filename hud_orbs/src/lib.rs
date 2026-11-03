@@ -21,6 +21,7 @@ mod markers;
 mod music;
 mod wisps;
 mod goalpopup;
+mod floaters;
 mod nameplates;
 mod occlusion;
 mod steam;
@@ -384,6 +385,7 @@ impl ImguiRenderLoop for Orbs {
             if cx.settings.nameplates {
                 self.book.draw_nameplates(ui, &cx);
             }
+            self.book.draw_floaters(ui, &cx);
             let wisp_play = cx.gameplay && !self.book.blocking();
             self.wisps.frame(ui, &mut self.book.textures, game, wisp_play, street, &self.book.nav);
         }

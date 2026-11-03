@@ -334,6 +334,8 @@ impl Wisps {
                                    if fp { "FP" } else { "HP" });
                     w.picked = Some((now, [p[0] - player[0], p[1] - player[1], p[2] - player[2]]));
                     w.seen = 1.0;
+                    // Round 30 (FT1): "+N" over the player.
+                    crate::floaters::wisp(fp, to - from);
                     crate::music::play_file(self.folder.join(SOUND));
                 }
             }
