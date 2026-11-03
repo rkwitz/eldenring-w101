@@ -163,6 +163,13 @@ struct State {
     /// Old copies, kept alive (game command lists recorded with them may not have run yet).
     retired: Vec<ID3D12Resource>,
     logged_none: bool,
+    /// The frame the main buffer's depth ends are counted for, the count so far, and the frame last copied in.
+    /// The game ends depth writes on the main buffer many times a frame; copying every time cost about 40 fps
+    /// at 2560x1440 (round 27 log), so one copy a frame is made, at about the frame's last end.
+    frame_of_ends: u64,
+    frame_ends: u64,
+    prev_frame_ends: u64,
+    copied_frame: u64,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -368,13 +375,31 @@ unsafe fn depth_write_ended(list: *mut c_void, raw: usize, subresource: u32, aft
         }
         if s.main_raw == raw && (subresource == D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES || subresource == 0) {
             s.after_state = after;
-            s.copy.clone().zip(s.main.clone())
+            let frame = FRAME.load(Ordering::Relaxed);
+            if s.frame_of_ends != frame {
+                s.frame_of_ends = frame;
+                s.prev_frame_ends = s.frame_ends;
+                s.frame_ends = 0;
+            }
+            let index = s.frame_ends;
+            s.frame_ends += 1;
+            // Copy once, at the end that was last in the previous frame (a frame with fewer ends keeps the
+            // older copy, and the next frame adjusts).
+            if index + 1 >= s.prev_frame_ends.max(1) && s.copied_frame != frame {
+                s.copy.clone().zip(s.main.clone()).map(|j| (j, frame))
+            } else {
+                None
+            }
         } else {
             None
         }
     };
-    if let Some((copy, source)) = job {
-        record_copy(list, &copy, &source, after, original);
+    if let Some(((copy, source), frame)) = job {
+        if record_copy(list, &copy, &source, after, original) {
+            if let Some(s) = STATE.lock().as_mut() {
+                s.copied_frame = frame;
+            }
+        }
     }
 }
 
@@ -498,11 +523,11 @@ unsafe fn record_copy(
     source: &ID3D12Resource,
     after: u32,
     original: ResourceBarrierFn,
-) {
-    let Some(list_ref) = ID3D12GraphicsCommandList::from_raw_borrowed(&list) else { return };
+) -> bool {
+    let Some(list_ref) = ID3D12GraphicsCommandList::from_raw_borrowed(&list) else { return false };
     // Copies and these transitions belong on a direct (graphics) list.
     if list_ref.GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT {
-        return;
+        return false;
     }
     let move_source = after & COPY_SOURCE == 0;
     if move_source {
@@ -530,6 +555,7 @@ unsafe fn record_copy(
     }
     COPIES.fetch_add(1, Ordering::Relaxed);
     LAST_COPY_FRAME.store(FRAME.load(Ordering::Relaxed).max(1), Ordering::Relaxed);
+    true
 }
 
 /// Points (screen pixels) to read the scene depth at, asked by the app; the renderer copies the depth to the CPU
