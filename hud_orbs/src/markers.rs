@@ -51,6 +51,21 @@ pub const SHOP_NPC: &str = "ugo_kalahad";
 pub const SHOP_TITLE: &str = "Merchant";
 pub const SHOP_REQUEST: u32 = 1042362441;
 
+/// Round 30 (T1): the street NPCs' titles, from Wizard101's Locale/English/Title.lang (the strings its NPC
+/// templates point at with Title_ keys) and WC-NPCs.lang. Wizard City's Unicorn Way templates
+/// (ObjectData/WC/WC-ST01-NPC*.xml) carry only their display-name keys, no Title_ key, so each one is matched by
+/// its own text: Diego, "Diego the Duelmaster" (WC-NPCs_00000116), is the "Duelmaster" (Title_00000003,
+/// WC-NPCs_00000119); Private Connelly (WC-NPCs_00000024) is one of the "Wizard City Guard"s (Title_00000002,
+/// WC-NPCs_00000149..158); Ugo is the "Merchant" (Title_00000052). No title string names Ceren, Olivia or
+/// Lady Oriel, so they keep the name alone.
+pub const TITLES: [(&str, &str); 3] =
+    [("diego", "Duelmaster"), ("private_connelly", "Wizard City Guard"), (SHOP_NPC, SHOP_TITLE)];
+
+/// The title line of NPC `slug` ("" for none).
+pub fn title(slug: &str) -> &'static str {
+    TITLES.iter().find(|t| t.0 == slug).map_or("", |t| t.1)
+}
+
 /// The tile the givers are in (m60_42_36_00).
 const TILE: [i32; 2] = [42, 36];
 
@@ -423,7 +438,7 @@ fn log_state(camera: &Camera, position: Option<([f32; 3], i32, i32)>, entities: 
 }
 
 /// The Wizard101 name plates of the street NPCs in view (book.rs draws them with the creature plates): the name in
-/// Wizard101's NPC green, no second line (none of these NPCs has a title in Wizard101's data).
+/// Wizard101's NPC green, and under it the NPC's title (TITLES).
 pub fn npc_plates(camera: &Camera, spots: &[Spot], sight: &Sight, screen: [f32; 2]) -> Vec<crate::nameplates::Plate> {
     let mut out = Vec::new();
     let p = camera.player;
@@ -443,8 +458,8 @@ pub fn npc_plates(camera: &Camera, spots: &[Spot], sight: &Sight, screen: [f32; 
             continue;
         }
         let k = (screen[1] / 768.0) * (8.0 / z.max(1.0)).clamp(0.7, 1.15);
-        // Round 27 (A9): the merchant's title under his name.
-        let line = if NPCS[i].0 == SHOP_NPC { SHOP_TITLE.to_string() } else { String::new() };
+        // Round 27 (A9) / round 30 (T1): the title under the name.
+        let line = title(NPCS[i].0).to_string();
         out.push(crate::nameplates::Plate { at: on_screen, k, alpha, name, line, school: "",
                                              colour: NPC_NAME_COLOUR, z });
     }

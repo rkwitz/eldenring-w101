@@ -438,6 +438,9 @@ fn main() {
         ("28f_ugo_purse_12m", pages::Tab::Character, 0, [0.0, 0.0], "markers:-29.7745,94.5018,-68.3978"),
         ("28g_ugo_purse_25m", pages::Tab::Character, 0, [0.0, 0.0], "markers:-29.7745,94.5018,-81.3978"),
         // Round 28 (B1-B9): Elden Ring names, centred Buy rows, the Robes tab's hover bubble, a Sell row's tooltip.
+        // Round 30 (SH1, SH2): ref 4 (Ryan's Wizard101 shop after buying a wand): SOLD in the picture box, BUY on its plate.
+        ("30sh_shop_buy_wand_sold", pages::Tab::Character, 0, [0.0, 0.0], "shop:buy|3|0|sold"),
+        ("30sh_shop_buy_wand", pages::Tab::Character, 0, [0.0, 0.0], "shop:buy|3|0"),
         ("28a_shop_buy_hats", pages::Tab::Character, 0, [0.0, 0.0], "shop:buy|0|0"),
         ("28b_shop_buy_robes_tab_hover", pages::Tab::Character, 0, [0.30, 0.245], "shop:buy|1|0"),
         ("28c_shop_buy_wands_tip", pages::Tab::Character, 0, [0.60, 0.42], "shop:buy|3|2"),
@@ -527,6 +530,9 @@ fn main() {
             let f: Vec<&str> = rest.split('|').collect();
             let num = |i: usize| f.get(i).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
             book.preview_shop(f.first() == Some(&"sell"), num(1), num(2), game.sheet());
+            if f.get(3) == Some(&"sold") {
+                book.preview_shop_sold();
+            }
         }
         if let Some((who, pad)) = show.strip_prefix("prompt:").and_then(|p| p.split_once('|')) {
             book.preview_closed();

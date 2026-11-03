@@ -145,14 +145,16 @@ pub struct Shop {
     pub held: Vec<(u32, u32)>,
     pub runes: u32,
     pub read_at: Option<Instant>,
-    /// A line under the BUY / SELL button for a while (bought, sold, not enough runes).
+    /// A line under the BUY / SELL button for a while (sold, not enough runes; a buy shows SOLD instead).
     pub note: Option<(String, Instant)>,
+    /// Round 30 (SH1): the items bought while the window is up: chosen again, the picture box says SOLD.
+    pub sold: Vec<u32>,
 }
 
 impl Shop {
     pub fn new(request: Option<usize>, title: String) -> Shop {
         Shop { request, title, selling: false, cat: 0, page: 0, chosen: 0, opened: Instant::now(), held: Vec::new(),
-               runes: 0, read_at: None, note: None }
+               runes: 0, read_at: None, note: None, sold: Vec::new() }
     }
 
     /// The rows of the open tab and category.
@@ -251,6 +253,13 @@ const RUNES_MIDDLE: f32 = 427.5;
 /// spot, so only the BUY button and its own background stay.
 const BACKPACK_BAR: [f32; 4] = [119.0, 294.0, 292.0, 362.0];
 const PARCHMENT: &str = "GUI/Shopping/Background_Selling.png";
+/// Round 30 (SH2, Ryan's ref 4: the BUY button sits on its own torn, darker parchment plate): BuyWindow's own
+/// `overlay` (Background_Crowns_Equipment.png at 80,258, 256x128 at 1:1) has that plate under its backpack bar
+/// (texture 48..210 x 74..124); the overlay stays hidden (its bar is the backpack bar round 28 took out) and only
+/// the plate is drawn, as Art_Buy_Plate.png (that crop, its lighter parchment made transparent by brightness,
+/// made on the PC: round30/ui/README.md), behind the button (144,340..272,372).
+const BUY_PLATE: &str = "GUI/Shopping/Art_Buy_Plate.png";
+const BUY_PLATE_RECT: [f32; 4] = [128.0, 332.0, 290.0, 382.0];
 /// Round 28 (B2): the Sell window's cost-box font (SellWindow.gui labelCost / priceControlText: WizardFancy 0.5006),
 /// used on the Buy window too (BuyWindow.gui's 0.67 was much too big for "Cost 1000").
 const COST_SCALE: f32 = 0.5006;
@@ -269,6 +278,7 @@ pub fn page_view(l: &Layout, shop: &mut Shop, stock: &Stock, names: &Names, item
         let uv = [BACKPACK_BAR[0] / INNER_SIZE[0], BACKPACK_BAR[1] / INNER_SIZE[1], BACKPACK_BAR[2] / INNER_SIZE[0],
                   BACKPACK_BAR[3] / INNER_SIZE[1]];
         v.patches.push((0, BACKPACK_BAR, PARCHMENT.to_string(), uv));
+        v.patches.push((0, BUY_PLATE_RECT, BUY_PLATE.to_string(), [0.0, 0.0, 1.0, 1.0]));
     }
     let list = shop.list(stock);
     shop.clamp(list.len());
@@ -306,7 +316,11 @@ pub fn page_view(l: &Layout, shop: &mut Shop, stock: &Stock, names: &Names, item
             let (w, h) = (r[2] - r[0], r[3] - r[1]);
             let side = w.min(h) * 0.8;
             let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
-            if let Some(icon) = items.icon(line.item) {
+            // Round 30 (SH1, ref 4): an item just bought shows BuyWindow's own "sold" text (WizardFancy 1.5,
+            // yellow, centred in the picture box) instead of its picture, and BUY is greyed.
+            if !shop.selling && shop.sold.contains(&line.item) {
+                v.show(l.find("sold"), true);
+            } else if let Some(icon) = items.icon(line.item) {
                 v.image([cx - side / 2.0, cy - side / 2.0, cx + side / 2.0, cy + side / 2.0], icon);
             }
         }
@@ -344,7 +358,7 @@ pub fn page_view(l: &Layout, shop: &mut Shop, stock: &Stock, names: &Names, item
         v.image([cx - half, RUNES_MIDDLE - half, cx + half, RUNES_MIDDLE + half], crate::pages::REWARD_RUNES);
     }
     let action = l.find(if shop.selling { "sellAction" } else { "buyAction" });
-    let can = chosen.is_some_and(|(line, _)| shop.selling || shop.runes >= line.runes);
+    let can = chosen.is_some_and(|(line, _)| shop.selling || (shop.runes >= line.runes && !shop.sold.contains(&line.item)));
     if let Some(a) = action.filter(|_| !can) {
         v.greyed.insert(a);
     }
@@ -421,6 +435,9 @@ pub fn request(shop: &Shop, stock: &Stock, names: &Names) -> Result<Trade, Strin
     let Some((line, _)) = list.get(shop.chosen) else { return Err("Choose an item first".into()) };
     if game::event_flag(REQUEST) == Some(true) {
         return Err("One moment...".into());
+    }
+    if !shop.selling && shop.sold.contains(&line.item) {
+        return Err("Sold".into());
     }
     if !shop.selling && shop.runes < line.runes {
         return Err(format!("You need {} runes", line.runes));

@@ -362,6 +362,7 @@ impl Game {
             if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6) {
                 let top = self.model_top(chr, [x, y, z]);
                 log_model_top(model, [x, y, z], top);
+                log_first_frames(chr, model, [x, y, z], top);
                 out.push((model, [x, y, z], if height.is_finite() && (0.2..30.0).contains(&height) { height } else { 0.0 },
                           top.map(|t| t.0)));
             }
@@ -1239,6 +1240,44 @@ const _: () = {
 
 /// Round 26 (O3): logs a model's box against its physics position, once per model and then every 20 s (proof the
 /// plate follows the pose: "tags: c4960 box top ...").
+/// Round 30 (NT1, Ryan: "enemy name plates sometimes all flicker when a group first loads in, then settle"): what a
+/// creature's plate anchor does in its first FIRST_SECONDS after it is first seen, logged on its first frame and on
+/// every change: the anchor source (the posed box in world space, the box read as model space, or none: the capsule /
+/// fixed height, model_top), a jump of the anchor height over 0.2 m, or of the position over 1 m. Three sources that
+/// can alternate frame to frame while a character finishes loading would move the plate up and down (and into the
+/// model's own head, where the depth test hides it); this log is to prove or rule that out.
+fn log_first_frames(chr: usize, model: u32, at: [f32; 3], top: Option<([f32; 3], bool)>) {
+    const FIRST_SECONDS: f32 = 3.0;
+    static SEEN: std::sync::Mutex<Vec<(usize, std::time::Instant, u32, i8, f32, [f32; 3])>> = std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    let now = std::time::Instant::now();
+    seen.retain(|e| now.duration_since(e.1).as_secs_f32() < 60.0);
+    let source: i8 = match top { Some((_, true)) => 2, Some((_, false)) => 1, None => 0 };
+    let height = top.map_or(0.0, |t| t.0[1] - at[1]);
+    let name = |s: i8| ["none (capsule / fixed height)", "box as model space", "box in world space"][s as usize];
+    match seen.iter_mut().find(|e| e.0 == chr) {
+        None => {
+            seen.push((chr, now, 0, source, height, at));
+            tracing::info!("tags first frames: c{model} {chr:#x} first seen at [{:.1}, {:.1}, {:.1}], anchor {} {height:.2} m",
+                           at[0], at[1], at[2], name(source));
+        }
+        Some(e) => {
+            let age = now.duration_since(e.1).as_secs_f32();
+            e.2 += 1;
+            if age > FIRST_SECONDS {
+                return;
+            }
+            let moved = ((at[0] - e.5[0]).powi(2) + (at[1] - e.5[1]).powi(2) + (at[2] - e.5[2]).powi(2)).sqrt();
+            if source != e.3 || (height - e.4).abs() > 0.2 || moved > 1.0 {
+                tracing::info!("tags first frames: c{model} {chr:#x} +{age:.2} s (read {}): anchor {} {height:.2} m \
+                                (was {} {:.2} m), moved {moved:.1} m", e.2, name(source), name(e.3), e.4);
+                (e.3, e.4) = (source, height);
+            }
+            e.5 = at;
+        }
+    }
+}
+
 fn log_model_top(model: u32, at: [f32; 3], top: Option<([f32; 3], bool)>) {
     static LOGGED: std::sync::Mutex<Vec<(u32, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
     let mut logged = LOGGED.lock().unwrap_or_else(|e| e.into_inner());

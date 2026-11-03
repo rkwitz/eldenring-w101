@@ -198,7 +198,7 @@ impl Conversation {
                 v.node_art.insert(id, portrait.to_string());
             }
         }
-        v.set(window.find("txtTitle"), format!("<center>{name}</center>"));
+        title_left(window, &mut v, name);
         let text = self.pages.get(self.page).cloned().unwrap_or_default();
         if let Some(id) = window.find("txtMessage") {
             v.text.insert(id, text);
@@ -247,7 +247,8 @@ impl Conversation {
     /// had no ER portrait yet: the log's "NpcPortraits/ER/diego.png: cannot find the file") had his name centred
     /// 48 layout px right of the box's middle over an empty space. With no portrait loaded the name is centred on the
     /// whole title scroll (the box's 0..802 less the scroll ends: 40..762) and the text starts at the same 40.
-    /// With a portrait, Wizard101's own layout is kept.
+    /// With a portrait, Wizard101's own layout is kept. Round 30 (D1): the name is left-justified (title_left), so
+    /// with no portrait it starts at the scroll's left, 40.
     pub fn without_portrait(window: &Layout, v: &mut View) {
         for (name, left, right) in [("txtTitle", 40.0, 762.0), ("txtMessage", 40.0, 768.0)] {
             if let Some(id) = window.find(name) {
@@ -314,4 +315,21 @@ pub fn picture_rect(image: Option<&Layout>, screen: [f32; 2]) -> [f32; 4] {
     };
     let x = (screen[0] - side * s) / 2.0;
     [x, top * s, x + side * s, (top + side) * s]
+}
+
+/// Round 30 (D1, Ryan: "the dialogue window's speaker name is still centred: left-justify it, starting right after
+/// the portrait"): DialogWindow.gui's txtTitle (169..730, HCENTER) was drawn centred ("<center>" and the node's own
+/// style) by Conversation::view and by picker.rs's dialog_view (the "What can I do for you?" menu). It is now drawn
+/// left-justified from TITLE_LEFT, just right of imgPortrait (0..180), in the node's own font, size and colour.
+pub const TITLE_LEFT: f32 = 186.0;
+
+pub fn title_left(window: &Layout, v: &mut View, name: &str) {
+    let Some(id) = window.find("txtTitle") else { return };
+    v.text.insert(id, name.to_string());
+    let r = window.nodes[id].rect;
+    v.rect.insert(id, [TITLE_LEFT, r[1], r[2], r[3]]);
+    if let Some(mut style) = window.nodes[id].text_style.clone() {
+        style.align = crate::layout::Align::Left;
+        v.style.insert(id, style);
+    }
 }

@@ -130,7 +130,8 @@ pub fn dialog_view(window: &Layout, picker: &Picker) -> View {
     if let Some(id) = window.find("imgPortrait") {
         v.node_art.insert(id, picker.portrait.clone());
     }
-    v.set(window.find("txtTitle"), format!("<center>{}</center>", picker.name));
+    // Round 30 (D1): left-justified after the portrait, as the dialogue's (talk::title_left).
+    crate::talk::title_left(window, &mut v, &picker.name);
     if let Some(id) = window.find("txtMessage") {
         v.text.insert(id, MESSAGE.to_string());
         if let Some(mut style) = window.nodes[id].text_style.clone() {

@@ -2350,6 +2350,17 @@ impl Book {
         self.shop = Some(shop);
     }
 
+    /// Round 30 (SH1): marks the preview shop's chosen item as just bought (the picture box says SOLD).
+    #[allow(dead_code)]
+    pub fn preview_shop_sold(&mut self) {
+        if let Some(shop) = self.shop.as_mut() {
+            if let Some((line, _)) = shop.list(&self.stock).get(shop.chosen) {
+                let item = line.item;
+                shop.sold.push(item);
+            }
+        }
+    }
+
     /// Closes the shop, answering Ugo's talk OK (Wizard101's shops have no cancel).
     fn end_shop(&mut self) {
         if let Some(shop) = self.shop.take() {
@@ -2372,7 +2383,14 @@ impl Book {
                 self.shop_trade = None;
                 crate::music::sfx(if result.is_ok() { "ui_reward_gold" } else { "HudCancel" });
                 if let Some(shop) = self.shop.as_mut() {
-                    shop.note = Some((result.unwrap_or_else(|e| e), Instant::now()));
+                    // Round 30 (SH1, ref 4): a buy shows SOLD in the picture box, no line under BUY.
+                    match result {
+                        Ok(_) if !trade.sell => {
+                            shop.sold.push(trade.line.item);
+                            shop.note = None;
+                        }
+                        r => shop.note = Some((r.unwrap_or_else(|e| e), Instant::now())),
+                    }
                     shop.read_at = None;
                 }
             }

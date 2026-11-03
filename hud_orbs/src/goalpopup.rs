@@ -21,7 +21,7 @@
 //! They show over the dialogue box too (screenshot 2: over the quest picker), not over the book or map.
 //!
 //! Round 26 (W5, Ryan: "several at once must appear one after another with a delay, not all together"): queued
-//! lines come up one at a time, STAGGER s apart, each with its own sound. "Return to <NPC>" goals (done by walking
+//! lines come up one at a time, STAGGER s apart (round 30 SND2: only a "Goal Complete" line plays a sound). "Return to <NPC>" goals (done by walking
 //! up to the NPC, e.g. Sinister Skeleton's near_ceren) pop nothing, nor does the "Talk to" goal they lead to: Ryan got
 //! "Goal Complete: Return to Ceren Nightchant / New Goal: Talk to Ceren Nightchant" at Ceren before talking to her;
 //! the talk itself then shows "Goal Complete" and "Quest Complete" as before.
@@ -167,10 +167,18 @@ impl GoalPopups {
         self.lines.retain(|l| (now - l.born).as_secs_f32() < HOLD + FADE);
         let due = self.last_shown.is_none_or(|t| (now - t).as_secs_f32() >= STAGGER);
         if visible && due && !self.queue.is_empty() {
-            crate::music::sfx(SOUND);
             self.last_shown = Some(now);
             // The new line comes in at the bottom, the older ones keep their row and slide up from there.
             if let Some(text) = self.queue.pop_front() {
+                // Round 30 (SND2, Ryan: "only Goal Complete plays a sound; New Goal / New Quest / Goal Update are
+                // silent but still shown"). Wizard101's data has the sounds (_Shared-WorldData.wad Sound/GUI:
+                // ui_quest_accepted, ui_quest_updated, ui_quest_decline; Sound/SFX/QuestComplete) but not which popup
+                // plays which (the client's code), so this follows Ryan's account of Wizard101.
+                let sounded = text.starts_with("Goal Complete");
+                tracing::info!("quest popup shown: {text} ({})", if sounded { "sound" } else { "silent" });
+                if sounded {
+                    crate::music::sfx(SOUND);
+                }
                 self.lines.push(Line { text, born: now, row: -1.0 });
             }
             let extra = self.lines.len().saturating_sub(MAX_LINES);
