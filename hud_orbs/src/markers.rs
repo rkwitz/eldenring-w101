@@ -29,6 +29,15 @@ pub const SPIRAL: &str = "Wizbang/Quest_Spiral.png";
 /// on a 58.16-unit quad (Start's is 76.2). PNG made by tools/w101_quest_art.py (MARKERS).
 pub const SHOP: &str = "Wizbang/Quest_Shopping.png";
 const SIGN_SHOP: f32 = 0.5816;
+/// Round 28 (S1, Ryan: "slightly smaller; constant screen size, Wizard101 doesn't scale it; always a fixed pixel gap
+/// above the TOP of the name tag at any distance"). The purse is drawn SHOP_PX layout pixels (768-high screen)
+/// square, its picture's visible bottom (Quest_Shopping.png alpha box 17..249 of 256: SHOP_BOTTOM of the half side
+/// under its centre) SHOP_GAP pixels over the top of Ugo's name plate (the plate's own anchor and scale, npc_plates,
+/// and its drawn height: the name and the "Merchant" line, `plate_h` font units from book.rs). Round 27 hung it at a
+/// world height (ChatNode) and scaled it with distance: far away it sank into the name, close up it floated high.
+const SHOP_PX: f32 = 44.0;
+const SHOP_GAP: f32 = 4.0;
+const SHOP_BOTTOM: f32 = (249.0 - 128.0) / 128.0;
 /// Round 27 (A9): the merchant, his plate's title, and the request flag his talk event raises. Ugo has no
 /// dialogue: emevd_quests' "ugo_kalahad|idle" talk raises SHOP_REQUEST (DIALOGUE_FLAG + its key, dialogue.tsv) and
 /// waits, like any talk, for the HUD's answer (1042362620 OK / 1042362621 Cancel) or the player walking 6 m off.
@@ -405,13 +414,15 @@ pub fn draw(
     sight: &Sight,
     time: f32,
     screen: [f32; 2],
+    plate_h: f32,
 ) {
     let flag = |f: u32| flags.get(&f) == Some(&true);
     log_state(camera, position, entities, spots, render, &flag);
     let p = camera.player;
-    let mut drawn: Vec<(f32, [f32; 2], f32, u8, &str)> = Vec::new();
+    // (depth, centre, sign half side, spiral half side, alpha, picture)
+    let mut drawn: Vec<(f32, [f32; 2], f32, f32, u8, &str)> = Vec::new();
     for &(i, at, _) in spots {
-        let (slug, _, _, _, _, _, lift) = NPCS[i];
+        let (slug, _, _, _, _, plate_lift, lift) = NPCS[i];
         let Some(kind) = marker(slug, &flag) else { continue };
         // Round 22 (H6, Ryan: "the name fades away at a certain distance; make those symbols also fade"): faded with
         // distance exactly as the names are (PLATE_RANGE, 3D distance), and out of sight behind walls (`sight`).
@@ -421,22 +432,33 @@ pub fn draw(
         if alpha == 0 {
             continue;
         }
+        if kind == Marker::Shop {
+            // Round 28 (S1): fixed screen size, a fixed gap over the top of the name plate (npc_plates' anchor and
+            // scale k).
+            let Some(([x, y], z)) = camera.project([at[0], at[1] + plate_lift, at[2]], screen) else { continue };
+            let s = screen[1] / 768.0;
+            let k = s * (8.0 / z.max(1.0)).clamp(0.7, 1.15);
+            let half = SHOP_PX * s / 2.0;
+            let centre = [x, y - plate_h * k - SHOP_GAP * s - half * SHOP_BOTTOM];
+            drawn.push((z, centre, half, half * SPIRAL_SIDE / SIGN_SHOP, alpha, SHOP));
+            continue;
+        }
         let Some((on_screen, z)) = camera.project([at[0], at[1] + lift + CENTRE, at[2]], screen) else { continue };
         // Wizard101 draws it at its world size; far away it is kept to a still readable 1.5 % of the screen.
         let metre = camera.scale(z, screen[1]).max(screen[1] * 0.015 / SIGN);
         let sign = match kind { Marker::Offer => OFFER, Marker::Talk => TALK, Marker::Shop => SHOP };
-        drawn.push((z, on_screen, metre, alpha, sign));
+        drawn.push((z, on_screen, SIGN * metre / 2.0, SPIRAL_SIDE * metre / 2.0, alpha, sign));
     }
     // Far ones first, so near ones cover them.
     drawn.sort_by(|a, b| b.0.total_cmp(&a.0));
     // The spiral turns clockwise on the screen, a full turn every SPIRAL_TURN seconds.
     let angle = (time / SPIRAL_TURN).fract() * std::f32::consts::TAU;
-    for (z, at, metre, alpha, name) in drawn {
+    for (z, at, sign_half, spiral_half, alpha, name) in drawn {
         // Round 26 (O1): hidden wherever the game's scene is in front of it (occlusion.rs).
         crate::occlusion::begin(z, 0.0, "", at);
         let tint = ImColor32::from_rgba(255, 255, 255, alpha);
         if let Some((spiral, _)) = textures.get(SPIRAL) {
-            let h = SPIRAL_SIDE * metre / 2.0;
+            let h = spiral_half;
             let (sin, cos) = angle.sin_cos();
             let corner = |x: f32, y: f32| [at[0] + (x * cos - y * sin) * h, at[1] + (x * sin + y * cos) * h];
             draw.add_image_quad(spiral, corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0))
@@ -444,7 +466,7 @@ pub fn draw(
                 .build();
         }
         let Some((texture, _)) = textures.get(name) else { continue };
-        let h = if name == SHOP { SIGN_SHOP } else { SIGN } * metre / 2.0;
+        let h = sign_half;
         draw.add_image(texture, [at[0] - h, at[1] - h], [at[0] + h, at[1] + h]).col(tint).build();
     }
     crate::occlusion::end();

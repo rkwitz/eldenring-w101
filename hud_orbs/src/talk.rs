@@ -39,8 +39,12 @@ pub const SCREEN: [f32; 2] = [1024.0, 768.0];
 const NEXT: &str = "NEXT";
 const BACK: &str = "BACK";
 const DONE: &str = "DONE";
-const YES: &str = "yes";
-const NO: &str = "no";
+/// Round 28 (Q2, Ryan: "Decline (left) and Accept (right), not Yes/No"): Wizard101's GUI.lang ACCEPT / DECLINE
+/// strings (keys ACCEPT and DECLINE; GUI_00000378/379 "yes"/"no" are DialogWindow.gui's own labels, which Ryan
+/// doesn't want). DialogWindow.gui has btnYes left (448..576) and btnNo right (616..744); the pair is swapped so
+/// Decline is on the left and Accept on the right.
+const YES: &str = "Accept";
+const NO: &str = "Decline";
 
 /// One conversation of dialogue.tsv.
 #[derive(Clone, Debug, Default)]
@@ -225,6 +229,16 @@ impl Conversation {
         v.show(window.find("btnNo"), choosing);
         label(&mut v, "btnYes", YES);
         label(&mut v, "btnNo", NO);
+        if let (Some(yes), Some(no)) = (window.find("btnYes"), window.find("btnNo")) {
+            v.rect.insert(yes, window.nodes[no].rect);
+            v.rect.insert(no, window.nodes[yes].rect);
+        }
+        // Round 28 (Q3): no red X on an offer. Wizard101's own dialogue box with a choice (Ryan's screenshot
+        // round25/ref/2_w101_multi_quest_picker.png: "What can I do for you?" with CANCEL) shows no close X at the
+        // bottom right; the offer is closed by Decline (B / Esc).
+        if choosing {
+            v.show(window.find("btnExit"), false);
+        }
         v
     }
 

@@ -1997,6 +1997,48 @@ fn quests(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     }
 }
 
+/// Round 28 (Q4): a goal line split as Wizard101's quest card shows it: the verb over the goal's picture (txtGoal) and
+/// what it is about under it (txtGoalObjective1): "Defeat Lost Souls in Unicorn Way" -> ("Defeat", "Lost Souls"),
+/// "Talk to Lady Oriel in the Hedge Maze" -> ("Talk to", "Lady Oriel"), "Search for Rattlebones (The Archives)" ->
+/// ("Search for", "Rattlebones"). The place (" in <place>", "(<place>)") is dropped: the card's scroll shows it. A
+/// counted goal with one left names one ("Lost Soul"). A line with no known verb stays whole over the picture.
+pub fn goal_parts(goal: &str, place: &str, progress: Option<(u32, u32)>) -> (String, String) {
+    const VERBS: [&str; 9] = ["Talk to", "Go to", "Return to", "Search for", "Defeat", "Collect", "Open", "Find",
+                              "Examine"];
+    let Some(verb) = VERBS.iter().find(|v| goal.starts_with(&format!("{v} "))) else {
+        return (goal.to_string(), String::new());
+    };
+    let mut target = goal[verb.len()..].trim().to_string();
+    let place = place.trim();
+    for tail in [format!(" in {place}"), format!(" in the {place}"), format!(" ({place})")] {
+        if !place.is_empty() && target.ends_with(&tail) {
+            target.truncate(target.len() - tail.len());
+        }
+    }
+    if let Some(cut) = target.find(" (").filter(|_| target.ends_with(')')) {
+        target.truncate(cut);
+    }
+    if let Some((done, of)) = progress {
+        if of.saturating_sub(done) == 1 && !target.contains(" and ") {
+            target = singular(&target);
+        }
+    }
+    (verb.to_string(), target)
+}
+
+/// The last word of `name` in the singular ("Lost Souls" -> "Lost Soul", "Dark Fairies" -> "Dark Fairy").
+fn singular(name: &str) -> String {
+    if let Some(stem) = name.strip_suffix("ies") {
+        format!("{stem}y")
+    } else if let Some(stem) = name.strip_suffix("es").filter(|s| s.ends_with("sh") || s.ends_with("ch") || s.ends_with('x')) {
+        stem.to_string()
+    } else if let Some(stem) = name.strip_suffix('s').filter(|s| !s.ends_with('s')) {
+        stem.to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 /// Fills quest card `q` (QuestInfoWindow.gui).
 pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
     for n in ["wndReward1", "wndReward2", "wndReward3", "wndReward4", "wndReward5", "btnHideQuest", "btnUnhideQuest"] {
@@ -2014,7 +2056,11 @@ pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
         }
     };
     set(v, "txtName", q.title.clone());
-    set(v, "txtGoal", q.goal.clone());
+    // Round 28 (Q4, Ryan: "verb above the picture, the target's name under it"): QuestInfoWindow.gui's own goal
+    // fields, txtGoal (26,48..246,67) over imgGoalObjective1 and txtGoalObjective1 (18,134..) under it; the place is
+    // already on the scroll (txtZone), so " in Unicorn Way" is not repeated.
+    let (verb, target) = goal_parts(&q.goal, &q.place, q.progress);
+    set(v, "txtGoal", verb);
     // Round 18 (quests F3): the goal's picture in Wizard101's goal square (imgGoalObjective1, hidden in the .gui
     // until the client fills it): the creature to defeat, the NPC to talk to, the Bone Cage.
     // Round 21 (Q3, Ryan): centred across the card (272 wide: 103..169), not in the left goal box.
@@ -2026,10 +2072,18 @@ pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
         }
     }
     // The other goals open now, across both objective boxes.
-    hide(card, v, &["txtGoalObjective1", "txtGoalObjective2"]);
+    hide(card, v, &["txtGoalObjective2"]);
+    match card.find("txtGoalObjective1") {
+        Some(id) if !target.is_empty() => {
+            v.show(Some(id), true);
+            v.rect.insert(id, [18.0, 138.0, 254.0, 156.0]);
+            set(v, "txtGoalObjective1", target);
+        }
+        id => v.show(id, false),
+    }
     if !q.other_goals.is_empty() {
-        v.add([18.0, 134.0, 255.0, 168.0], format!("Also: {}", q.other_goals.join("; ")),
-              TextStyle::new("WizardNormal", 0.36, BLACK).centred().wrapped());
+        v.add([18.0, 155.0, 255.0, 169.0], format!("Also: {}", q.other_goals.join("; ")),
+              TextStyle::new("WizardNormal", 0.3, BLACK).centred());
     }
     match q.progress {
         Some((n, of)) => {

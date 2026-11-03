@@ -825,8 +825,10 @@ impl Book {
         let player = crate::questhelper::player_msb_from_npcs(&camera, &entities)
             .or_else(|| position.and_then(crate::questhelper::player_msb));
         self.sight.update(&self.nav, player, ui.time() as f32);
+        // Round 28 (S1): the drawn height of a plate with a title line (draw_nameplates), for the shop purse over it.
+        let plate_h = self.fonts.get("WizardFancy").map_or(40.0, |f| f.line_height * (NAME_SCALE + RANK_SCALE));
         markers::draw(&draw, &self.textures, &camera, position, &entities, &spots, &render, &self.flags, &self.sight,
-                      ui.time() as f32, ui.io().display_size);
+                      ui.time() as f32, ui.io().display_size, plate_h);
     }
 
     /// Round 23 (H7): the quest popups (goalpopup.rs), shown in normal play while no book or map is up. Round 25 (H1):
@@ -2186,11 +2188,18 @@ impl Book {
         // An offer's last page: the quest card (QuestInfoWindow, as on the Quests page) in DialogImage's square.
         if d.choosing() {
             if let (Some(card), Some(active)) = (self.layouts.get(pages::QUEST_CARD), self.quests.offer_card(&request.card)) {
-                let square = talk::picture_rect(self.layouts.get(talk::IMAGE), screen);
+                // Round 28 (Q1, Ryan: "smaller, over the RIGHT side of the dialogue box at the bottom, not
+                // mid-screen"): the card at OFFER_CARD_SCALE of its own size (272x273 layout pixels) standing on the
+                // box's top edge (OFFER_CARD_SINK into its title scroll), its right edge OFFER_CARD_RIGHT in from the
+                // box's right end. Round 17-27 filled DialogImage's 399-pixel square in the middle of the screen.
+                const OFFER_CARD_SCALE: f32 = 0.85;
+                const OFFER_CARD_RIGHT: f32 = 44.0;
+                const OFFER_CARD_SINK: f32 = 6.0;
                 let c = card.nodes[0].rect;
                 let (cw, ch) = (c[2] - c[0], c[3] - c[1]);
-                let k = ((square[2] - square[0]) / cw).min((square[3] - square[1]) / ch);
-                let at = [(square[0] + square[2] - cw * k) / 2.0, (square[1] + square[3] - ch * k) / 2.0];
+                let k = OFFER_CARD_SCALE * s;
+                let b = window.nodes.first().map(|n| n.rect).unwrap_or([0.0, 0.0, 802.0, 180.0]);
+                let at = [origin[0] + (b[2] - OFFER_CARD_RIGHT) * s - cw * k, origin[1] + OFFER_CARD_SINK * s - ch * k];
                 let mut view = View::default();
                 pages::quest_card(card, &active, &mut view);
                 let inner = Canvas {
@@ -2347,7 +2356,13 @@ impl Book {
         let mut wanted = top.images();
         wanted.extend(page.images());
         wanted.extend(page_view.images.iter().map(|i| i.1.clone()));
+        wanted.extend(page_view.patches.iter().map(|p| p.2.clone()));
         wanted.extend(crate::itemdata::TIP_ICONS.iter().map(|i| i.to_string()));
+        // Round 28 (B5/B9): the hover bubble's and the item tooltip's own art, as the book asks for them (without
+        // it the category names had no white bubble and the item tooltip no frame).
+        wanted.extend(BUBBLE.iter().map(|p| p.to_string()));
+        wanted.extend(tip_frame(false).into_iter().chain(tip_frame(true)).flatten());
+        wanted.push(EQUIP_FIST.into());
         wanted.push(CURSOR.into());
         self.textures.want(wanted);
         let draw = ui.get_foreground_draw_list();

@@ -52,8 +52,6 @@ pub const FAILED: u32 = 1042362313;
 const ANSWER_SECONDS: f32 = 3.0;
 /// Rows per page (shoplist0-7).
 pub const ROWS: usize = 8;
-/// The rune icon (the quest rewards' rune piece) beside prices.
-pub const RUNE_ICON: &str = crate::pages::REWARD_RUNES;
 
 /// Ugo's categories: ShoppingWindow's category button and shop.tsv's category.
 pub const CATEGORIES: [(&str, &str, &str); 4] = [
@@ -242,14 +240,32 @@ pub fn top_view(l: &Layout, shop: &Shop) -> View {
     v
 }
 
-/// The Buy or Sell window's view: the page of rows, the chosen item's picture, name, price, what it is in Elden
-/// Ring, the runes held and the page number.
+/// Round 28 (B4): Elden Ring's own rune symbol (01_common.tpf SB_FE_01 MENU_FL_Runes, the icon beside the HUD's rune
+/// count, 52x50), deployed to book/er/menu; it replaces Wizard101's gold bag (goldBagIcon) beside the runes held.
+pub const ER_RUNE: &str = "@er/menu/MENU_FL_Runes.png";
+/// Round 28 (B3): the part of Background_Buying with Wizard101's backpack-space bar (the blue backpack badge and the
+/// red box, 120..288 x 298..358 of the 800x453 window), covered with Background_Selling's plain parchment at the same
+/// spot, so only the BUY button and its own background stay.
+const BACKPACK_BAR: [f32; 4] = [119.0, 294.0, 292.0, 362.0];
+const PARCHMENT: &str = "GUI/Shopping/Background_Selling.png";
+/// Round 28 (B2): the Sell window's cost-box font (SellWindow.gui labelCost / priceControlText: WizardFancy 0.5006),
+/// used on the Buy window too (BuyWindow.gui's 0.67 was much too big for "Cost 1000").
+const COST_SCALE: f32 = 0.5006;
+
+/// The Buy or Sell window's view: the page of rows, the chosen item's picture, name, price, the runes held and the
+/// page number. Round 28: Elden Ring names everywhere (B1), Buy rows show only the centred name (B6), Sell rows the
+/// name and price without a rune (B8), the item tooltip is the book's (B9).
 pub fn page_view(l: &Layout, shop: &mut Shop, stock: &Stock, names: &Names, items: &ItemData) -> View {
     let mut v = View::default();
     for (i, n) in l.nodes.iter().enumerate() {
         if HIDDEN.iter().any(|h| n.name == *h || (n.name.starts_with(h) && n.name[h.len()..].parse::<u32>().is_ok())) {
             v.show.insert(i, false);
         }
+    }
+    if !shop.selling {
+        let uv = [BACKPACK_BAR[0] / INNER_SIZE[0], BACKPACK_BAR[1] / INNER_SIZE[1], BACKPACK_BAR[2] / INNER_SIZE[0],
+                  BACKPACK_BAR[3] / INNER_SIZE[1]];
+        v.patches.push((0, BACKPACK_BAR, PARCHMENT.to_string(), uv));
     }
     let list = shop.list(stock);
     shop.clamp(list.len());
@@ -267,23 +283,20 @@ pub fn page_view(l: &Layout, shop: &mut Shop, stock: &Stock, names: &Names, item
         if at == shop.chosen {
             v.checked.insert(node);
         }
-        let name = if shop.selling { names.item(line.item) } else { line.name.clone() };
+        let name = names.item(line.item);
         let name = if *count > 1 { format!("{name} ({count})") } else { name };
-        v.add([rect[0] + 12.0, rect[1], rect[2] - 70.0, rect[3]], name, row_style.clone());
-        v.add([rect[2] - 70.0, rect[1], rect[2] + 8.0, rect[3]], line.runes.to_string(), price_style.clone());
-        let icon = [rect[2] + 13.0, rect[1] + 5.0, rect[2] + 43.0, rect[1] + 35.0];
-        v.image(icon, RUNE_ICON);
-        let mut tip = items.tooltip(line.item, *count, names, false);
-        if !shop.selling && !tip.is_empty() {
-            tip[0] = format!("{} ({})", line.name, tip[0]);
+        if shop.selling {
+            v.add([rect[0] + 12.0, rect[1], rect[2] - 70.0, rect[3]], name, row_style.clone());
+            v.add([rect[2] - 70.0, rect[1], rect[2] - 10.0, rect[3]], line.runes.to_string(), price_style.clone());
+        } else {
+            v.add([rect[0] + 8.0, rect[1], rect[2] - 8.0, rect[3]], format!("<center>{name}"),
+                  row_style.clone().centred());
         }
-        v.tip(rect, tip);
+        v.tip(rect, items.tooltip(line.item, *count, names, false));
     }
     let chosen = list.get(shop.chosen);
     if let Some((line, _)) = chosen {
-        let er = names.item(line.item);
-        let title = if shop.selling { er.clone() } else { line.name.clone() };
-        v.set(l.find("labelItemHighlighted"), format!("<center>{title}"));
+        v.set(l.find("labelItemHighlighted"), format!("<center>{}", names.item(line.item)));
         v.set(l.find("priceControlText"), format!("<center>{}", line.runes));
         if let Some(i) = l.find("pictureDisplay") {
             let r = l.nodes[i].rect;
@@ -294,23 +307,35 @@ pub fn page_view(l: &Layout, shop: &mut Shop, stock: &Stock, names: &Names, item
                 v.image([cx - side / 2.0, cy - side / 2.0, cx + side / 2.0, cy + side / 2.0], icon);
             }
         }
-        // The price beside the rune icon, both inside the cost box (its right end at x ~289 in Background_Buying, ~280 in Background_Selling).
+        // The price beside the rune icon, both inside the cost box (its right end at x ~289 in Background_Buying,
+        // ~280 in Background_Selling), in the Sell window's font on both (B2).
         if let Some(i) = l.find("priceControlText") {
             let r = l.nodes[i].rect;
             let right = r[2].min(288.0) - 2.0;
-            v.rect.insert(i, [r[0], r[1], right - 27.0, r[3]]);
-            v.image([right - 26.0, r[1] + 1.0, right, r[1] + 27.0], RUNE_ICON);
+            let left = if shop.selling { r[0] } else { 200.0 };
+            v.rect.insert(i, [left, r[1], right - 27.0, r[3]]);
+            v.image([right - 26.0, r[1] + 1.0, right, r[1] + 27.0], ER_RUNE);
         }
-        // The Elden Ring item a Wizard101 one stands for (Buy: in the red bar beside the backpack that
-        // Background_Buying has under the price, where Wizard101 shows the backpack space).
-        if !shop.selling {
-            v.add([150.0, 298.0, 284.0, 336.0], format!("<center>{er}"),
-                  TextStyle::new("WizardFancy", 0.36, ImColor32::WHITE).centred());
+        for name in ["labelCost", "priceControlText"] {
+            if let Some(i) = l.find(name) {
+                if let Some(mut style) = l.nodes[i].text_style.clone() {
+                    style.scale = COST_SCALE;
+                    style.middle = true;
+                    v.style.insert(i, style);
+                }
+            }
         }
     } else {
         v.set(l.find("labelItemHighlighted"), if shop.selling { "<center>Nothing to sell" } else { "" });
         v.set(l.find("priceControlText"), "");
         v.set(l.find("labelCost"), "");
+    }
+    // Round 28 (B4): Elden Ring's rune symbol in place of Wizard101's gold bag.
+    if let Some(i) = l.find("goldBagIcon") {
+        v.no_back.insert(i);
+        let r = l.nodes[i].rect;
+        let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+        v.image([cx - 21.0, cy - 20.0, cx + 21.0, cy + 20.0], ER_RUNE);
     }
     let action = l.find(if shop.selling { "sellAction" } else { "buyAction" });
     let can = chosen.is_some_and(|(line, _)| shop.selling || shop.runes >= line.runes);
@@ -321,7 +346,9 @@ pub fn page_view(l: &Layout, shop: &mut Shop, stock: &Stock, names: &Names, item
     v.set(l.find("labelScrollPage"), format!("<center>{}/{}", shop.page + 1, pages));
     for (name, back) in [("leftscroll", shop.page == 0), ("rightscroll", shop.page + 1 >= pages)] {
         if let Some(i) = l.find(name).filter(|_| back) {
+            // Round 28 (B7): Wizard101's disabled frame of Button_Left/Right is already grey; drawn solid.
             v.greyed.insert(i);
+            v.opaque.insert(i);
         }
     }
     if let Some((note, at)) = &shop.note {
@@ -410,7 +437,7 @@ pub fn request(shop: &Shop, stock: &Stock, names: &Names) -> Result<Trade, Strin
 /// failed or no answer.
 pub fn poll(trade: &Trade, game: Option<&game::Game>, names: &Names) -> Option<Result<String, String>> {
     let on = |f: u32| game::event_flag(f) == Some(true);
-    let name = if trade.sell { names.item(trade.line.item) } else { trade.line.name.clone() };
+    let name = names.item(trade.line.item);
     if on(DONE) {
         game::set_event_flag(DONE, false);
         let runes = trade.line.runes;

@@ -279,6 +279,13 @@ pub struct View {
     pub checked: HashSet<usize>,
     /// Nodes drawn greyed out (Wizard101's disabled frame and alpha).
     pub greyed: HashSet<usize>,
+    /// Round 28 (B7): greyed nodes drawn in their disabled frame at full opacity (Wizard101's grey page arrows are
+    /// a solid grey picture, not a see-through one).
+    pub opaque: HashSet<usize>,
+    /// Round 28 (B3): pictures drawn right after node `.0` (over its own art, under everything after it in the
+    /// layout's painter's order): (node, rect, image, uv). The shop's Buy window covers the backpack bar of its
+    /// background with the plain parchment of the Sell window's at the same spot.
+    pub patches: Vec<(usize, [f32; 4], String, [f32; 4])>,
     /// Nodes moved to another rectangle (the tab marker under the chosen tab).
     pub rect: HashMap<usize, [f32; 4]>,
     pub extra: Vec<([f32; 4], String, TextStyle)>,
@@ -778,7 +785,7 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
             continue;
         }
         let greyed = view.greyed.contains(&i);
-        let alpha = n.alpha * if greyed { 0.45 } else { 1.0 };
+        let alpha = n.alpha * if greyed && !view.opaque.contains(&i) { 0.45 } else { 1.0 };
         let mut r = view.rect.get(&i).copied().unwrap_or(n.rect);
         let is_hovered = hovered == Some(i);
         if is_hovered && n.grow > 1.0 && !greyed {
@@ -870,6 +877,9 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
             }
         }
         canvas.hole.set(hole);
+        for (_, pr, img, uv) in view.patches.iter().filter(|p| p.0 == i) {
+            canvas.image(img, *pr, *uv, fade(ImColor32::WHITE, n.alpha));
+        }
     }
     Hits { button: hovered }
 }

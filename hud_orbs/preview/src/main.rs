@@ -427,6 +427,15 @@ fn main() {
         ("27q_shop_buy_wands_tip", pages::Tab::Character, 0, [0.60, 0.42], "shop:buy|3|2"),
         ("27r_shop_sell_wands", pages::Tab::Character, 0, [0.0, 0.0], "shop:sell|3|0"),
         ("27s_shop_sell_robes", pages::Tab::Character, 0, [0.0, 0.0], "shop:sell|1|0"),
+        // Round 28 (S1): Ugo's purse a fixed size and gap over his plate's top, 5.5, 12 and 25 m away.
+        ("28e_ugo_purse_5m", pages::Tab::Character, 0, [0.0, 0.0], "markers:-29.7745,94.5018,-61.8978"),
+        ("28f_ugo_purse_12m", pages::Tab::Character, 0, [0.0, 0.0], "markers:-29.7745,94.5018,-68.3978"),
+        ("28g_ugo_purse_25m", pages::Tab::Character, 0, [0.0, 0.0], "markers:-29.7745,94.5018,-81.3978"),
+        // Round 28 (B1-B9): Elden Ring names, centred Buy rows, the Robes tab's hover bubble, a Sell row's tooltip.
+        ("28a_shop_buy_hats", pages::Tab::Character, 0, [0.0, 0.0], "shop:buy|0|0"),
+        ("28b_shop_buy_robes_tab_hover", pages::Tab::Character, 0, [0.30, 0.245], "shop:buy|1|0"),
+        ("28c_shop_buy_wands_tip", pages::Tab::Character, 0, [0.60, 0.42], "shop:buy|3|2"),
+        ("28d_shop_sell_wands_tip", pages::Tab::Character, 0, [0.62, 0.36], "shop:sell|3|0"),
         ("23l_popup_goal_update", pages::Tab::Character, 0, [0.0, 0.0], "popup:0.5|Goal Update: Defeat Lost Souls 1 of 2"),
         ("23m_popup_goal_complete", pages::Tab::Character, 0, [0.0, 0.0], "popup:1.0|Goal Complete: Defeat Lost Souls"),
         ("23n_popup_quest_complete_fading", pages::Tab::Character, 0, [0.0, 0.0], "popup:3.5|Quest Complete: Ghost Hunters"),

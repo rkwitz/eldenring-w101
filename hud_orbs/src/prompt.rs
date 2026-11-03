@@ -50,6 +50,19 @@
 //! picture isn't loaded is drawn as a disc / cap with its letter, never left out; each prompt logs once whether its
 //! portrait and glyph pictures were drawn.
 
+//!
+//! Round 28 (S2, Ryan: "the talk prompt doesn't appear at all on Torrent; talking still works"). Root cause, from
+//! Ryan's 02:30-02:42 log (orbs\w101_orbs.log.round28_input): RIDING_FLAG 1042362570 was on 02:32:50-02:33:00 and
+//! 02:33:05-02:33:18 (he talked to Diego on Torrent at 02:32:53 and 02:33:13), and the riding rows were read
+//! (6001: radius 1.2, height 1.0, base -0.25; 9300: radius 1.5, height 1.5, base -0.25). At 02:32:55.896 the prompt
+//! went to "none" with Diego 1.1 m away (inside 1.2) and the facing 47 degrees off (inside allowAngle 90 + 10): the
+//! only test left is the height, dy = player - target within base - 0.5 .. base + height + 0.5 = -0.75 .. 1.25 m.
+//! On Torrent the player's position is the rider in the saddle, above Torrent's feet, so dy sits at or over that top
+//! (it passed for a moment at 02:32:55.6 and 02:32:59.4 and failed the rest of the time), while Elden Ring's own
+//! test passed (its talks fired). The log has no dy value, so the saddle height itself is not measured yet. Fix: on Torrent the height window's top is raised by
+//! RIDER_LIFT (the saddle); radius and facing stay Elden Ring's. Each riding approach within 4 m logs its distance,
+//! dy and result once a second ("prompt: riding ..."), and a talk that fires logs where the player was
+//! ("prompt: talk fired ..."), so the next log shows Elden Ring's own reach on Torrent.
 use std::collections::HashMap;
 
 use hudhook::imgui::{DrawListMut, ImColor32};
@@ -76,6 +89,9 @@ const FALLBACK: (f32, f32, f32, i32) = (2.0, 2.5, -0.5, 90);
 /// sample (running or walking straight; faster is a world shift / teleport).
 const FACING_VOTES: u32 = 40;
 const FACING_SPEED: std::ops::Range<f32> = 1.2..12.0;
+/// Round 28 (S2): metres added to the top of a riding row's height window (the rider sits on Torrent's back, about
+/// 1.3-1.6 m over its feet; 2.0 leaves room for Torrent's gait).
+const RIDER_LIFT: f32 = 2.0;
 
 /// Layout pixels (768-high screen), measured on the screenshot.
 const BOX: [f32; 2] = [420.0, 103.0];
@@ -144,6 +160,9 @@ pub struct Prompt {
     last_move: Option<([f32; 3], std::time::Instant, f32)>,
     /// Round 27 (A2): the current prompt's drawing was logged.
     drawn_log: std::sync::atomic::AtomicBool,
+    /// Round 28 (S2): the nearest NPC's measures this frame (for the talk-fired log) and when a riding line was logged.
+    probe: String,
+    riding_log: Option<std::time::Instant>,
 }
 
 impl Default for Prompt {
@@ -151,7 +170,8 @@ impl Default for Prompt {
         Prompt { key: "E".into(), pad_button: "Y".into(), folder: None, last_pad: None, last_key: None,
                  held_before: 0, keys_before: Vec::new(), requests_before: Vec::new(), clock: None, hide_er: true,
                  shapes: Vec::new(), blanked: false, pad: false, current: None, preview: false, facing: Some(std::f32::consts::PI), calibrated: false,
-                 votes: [0, 0], last_move: None, drawn_log: std::sync::atomic::AtomicBool::new(false) }
+                 votes: [0, 0], last_move: None, drawn_log: std::sync::atomic::AtomicBool::new(false),
+                 probe: String::new(), riding_log: None }
     }
 }
 
@@ -207,6 +227,10 @@ impl Prompt {
             .filter(|f| flag(*f)).collect();
         let fired = on.iter().any(|f| !self.requests_before.contains(f));
         self.requests_before = on;
+        if fired && !self.probe.is_empty() {
+            tracing::info!("prompt: talk fired with the prompt {} ({})",
+                           if self.current.is_some() { "up" } else { "NOT up" }, self.probe);
+        }
         if !fired || self.current.is_none() {
             return;
         }
@@ -281,10 +305,11 @@ impl Prompt {
             (if b.radius > 0.1 { b.radius } else { FALLBACK.0 }, if b.height > 0.1 { b.height } else { FALLBACK.1 },
              b.base, b.allow_angle)
         }).collect();
+        let lift = if riding { RIDER_LIFT } else { 0.0 };
         if shapes.is_empty() {
-            return self.inside_shape(FALLBACK, player, yaw, at);
+            return self.inside_shape(FALLBACK, lift, player, yaw, at);
         }
-        shapes.into_iter().any(|s| self.inside_shape(s, player, yaw, at))
+        shapes.into_iter().any(|s| self.inside_shape(s, lift, player, yaw, at))
     }
 
     /// The angle (degrees, 0..180) between facing `yaw` (radians, atan2(x, z)) and the direction from `from` to `at`.
@@ -293,11 +318,11 @@ impl Prompt {
         ((to - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI).abs().to_degrees()
     }
 
-    fn inside_shape(&self, (radius, height, base, allow): (f32, f32, f32, i32), player: [f32; 3], yaw: Option<f32>,
-                    at: [f32; 3]) -> bool {
+    fn inside_shape(&self, (radius, height, base, allow): (f32, f32, f32, i32), lift: f32, player: [f32; 3],
+                    yaw: Option<f32>, at: [f32; 3]) -> bool {
         let (dx, dz) = (at[0] - player[0], at[2] - player[2]);
         let dy = player[1] - at[1];
-        if dx.hypot(dz) > radius || dy < base - 0.5 || dy > base + height + 0.5 {
+        if dx.hypot(dz) > radius || dy < base - 0.5 || dy > base + height + 0.5 + lift {
             return false;
         }
         // allowAngle: the player facing the target within that many degrees either side (180: any way), once the
@@ -385,6 +410,16 @@ impl Prompt {
                                                  examine: true }));
                 }
             }
+        }
+        // Round 28 (S2): the nearest NPC's distance and height for the logs (talk fired; riding approaches).
+        self.probe = match near {
+            Some((i, at, _)) => format!("{} {:.2} m, dy {:+.2} m, {}", crate::markers::NPCS[*i].1, d(*at),
+                                        player[1] - at[1], if riding { "on Torrent" } else { "on foot" }),
+            None => String::new(),
+        };
+        if riding && !self.probe.is_empty() && self.riding_log.is_none_or(|t| t.elapsed().as_secs_f32() >= 1.0) {
+            tracing::info!("prompt: riding: {} -> {}", self.probe, best.as_ref().map_or("none", |b| b.1.name.as_str()));
+            self.riding_log = Some(std::time::Instant::now());
         }
         let now = best.map(|b| b.1);
         if now != self.current {
