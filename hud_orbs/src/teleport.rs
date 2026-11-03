@@ -88,16 +88,28 @@ pub struct Teleport {
     torrent: u8,
     /// Round 30 (SND1): a teleport's poof started at this time; Some(true) once the loading screen has come up.
     arrive: Option<(Instant, bool)>,
+    /// Round 31 (SND1): the school whose W101 teleport sounds this teleport plays (pages::char_school).
+    school: &'static str,
 }
 
 /// Round 30 (SND1, Ryan: "play W101's teleport-out and teleport-in sounds with the poof"): Wizard101 plays
 /// Sound/GUI/ui_homebutton_select.wav (_Shared-WorldData.wad) with its teleport effects. WizardGraphicalClient.exe
 /// names it next to Character/FX_Disappear.nif for the Go Home teleport (our poof), next to the arrival effect
-/// "Character/FX_Spawner_" + school in the teleport-effect preview, and next to MSG_UPDATETELEPORTEFFECT. Only the
-/// bought teleport effects (Sound/PlayerEmotes/Teleports/*_IN / *_OUT.ogg) have separate in and out sounds; the
-/// default one has this single sound, so it plays at the poof (out) and again as the loading screen lifts (in).
+/// "Character/FX_Spawner_" + school in the teleport-effect preview, and next to MSG_UPDATETELEPORTEFFECT. Round 30
+/// played it at both ends; round 31 found the school's own out / in sounds (school_sound), so it plays at the poof.
 /// tools/w101_sfx.py copies it to w101_orbs\sfx.
 pub const TELEPORT_SOUND: &str = "ui_homebutton_select";
+
+/// Round 31 (SND1, Ryan: "W101 clearly has an extra sound on teleport IN"): W101's default teleport is the school's
+/// "Original" teleport emote, Root.wad ObjectData/Emotes/Teleport43..49_Original_<School>_01.xml (Life, Balance,
+/// Death, Fire, Ice, Myth, Storm): arrival effect Character/FX_Spawner_<School>.nif, sounds
+/// Sound/PlayerEmotes/Teleports/Spawner_Special_<School>_OUT.ogg and _IN.ogg (_Shared-WorldData.wad). So the poof
+/// plays the button's ui_homebutton_select plus the school's _OUT, the arrival its _IN (tools/w101_sfx.py copies them
+/// to w101_orbs\sfx). The school is the book's (pages::char_school); Storm and Fire have no Elden Ring stat of their
+/// own there, so they never come up.
+fn school_sound(school: &str, inward: bool) -> String {
+    format!("Spawner_Special_{school}_{}.ogg", if inward { "IN" } else { "OUT" })
+}
 /// A teleport not arrived (loading screen up and lifting) this long after its poof makes no arrival sound.
 const ARRIVE_WINDOW: f32 = 90.0;
 
@@ -161,7 +173,10 @@ impl Teleport {
             self.torrent = 0;
             match (ready, game.and_then(|g| g.camera())) {
                 (true, Some(camera)) => {
-                    tracing::info!("teleport: book warp poof at {:?}, sound {TELEPORT_SOUND} (out)", camera.player);
+                    self.school = game.and_then(|g| g.sheet()).map_or("Balance", |s| crate::pages::char_school(&s));
+                    tracing::info!("teleport: book warp poof at {:?}, sounds {TELEPORT_SOUND} + {} (out)", camera.player,
+                                   school_sound(self.school, false));
+                    crate::music::sfx(&school_sound(self.school, false));
                     self.poof = Some(Poof::new(camera.player, None, POOF_LIVE));
                     crate::music::sfx(TELEPORT_SOUND);
                     self.arrive = Some((Instant::now(), false));
@@ -201,7 +216,9 @@ impl Teleport {
                     tracing::info!("teleport: Elden Ring warp, poof on the world copy from {:.1} s ago",
                                    at.elapsed().as_secs_f32());
                     self.poof = Some(Poof::new(camera.player, Some(camera), POOF_FROZEN));
-                    tracing::info!("teleport: sound {TELEPORT_SOUND} (out)");
+                    self.school = game.and_then(|g| g.sheet()).map_or("Balance", |s| crate::pages::char_school(&s));
+                    tracing::info!("teleport: sounds {TELEPORT_SOUND} + {} (out)", school_sound(self.school, false));
+                    crate::music::sfx(&school_sound(self.school, false));
                     crate::music::sfx(TELEPORT_SOUND);
                     self.arrive = Some((Instant::now(), false));
                     self.held = true;
@@ -249,9 +266,9 @@ impl Teleport {
             }
             Some((at, false)) if holding => self.arrive = Some((at, true)),
             Some((at, true)) if !holding => {
-                tracing::info!("teleport: arrived {:.1} s after the poof, sound {TELEPORT_SOUND} (in)",
-                               at.elapsed().as_secs_f32());
-                crate::music::sfx(TELEPORT_SOUND);
+                tracing::info!("teleport: arrived {:.1} s after the poof, sound {} (in)", at.elapsed().as_secs_f32(),
+                               school_sound(self.school, true));
+                crate::music::sfx(&school_sound(self.school, true));
                 self.arrive = None;
             }
             _ => {}

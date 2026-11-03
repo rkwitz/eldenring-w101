@@ -25,6 +25,12 @@ SOUNDS = {
 }
 
 
+# Round 31 (SND1): the "Original" (default) teleport emotes' sounds, Root.wad ObjectData/Emotes/
+# Teleport43..49_Original_<School>_01.xml -> _Shared-WorldData.wad Sound/PlayerEmotes/Teleports/.
+TELEPORTS = [f"Spawner_Special_{school}_{way}.ogg" for school in ("Balance", "Death", "Fire", "Ice", "Life", "Myth", "Storm")
+             for way in ("OUT", "IN")]
+
+
 def entries(path):
     """KIWAD entries: (name, offset, size, stored size, compressed)."""
     with open(path, "rb") as f:
@@ -42,6 +48,8 @@ def main(argv):
     out.mkdir(parents=True, exist_ok=True)
     for wad, names in SOUNDS.items():
         want = {f"Sound/GUI/{n}.wav" for n in names}
+        if wad == "_Shared-WorldData.wad":
+            want |= {f"Sound/PlayerEmotes/Teleports/{n}" for n in TELEPORTS}
         with open(data / wad, "rb") as f:
             for name, offset, size, stored, compressed in entries(data / wad):
                 if name not in want:

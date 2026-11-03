@@ -123,7 +123,9 @@ fn want() -> std::sync::MutexGuard<'static, Want> {
 pub fn sfx(name: &str) {
     let Some(folder) = FOLDER.get() else { return };
     if SFX_ON.load(Ordering::Relaxed) {
-        play_file(folder.join(SFX_DIR).join(format!("{name}.wav")));
+        // Round 31: a name with its own extension (the teleport .ogg files) is used as it is.
+        let file = if name.contains('.') { name.to_string() } else { format!("{name}.wav") };
+        play_file(folder.join(SFX_DIR).join(file));
     }
 }
 

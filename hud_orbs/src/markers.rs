@@ -127,38 +127,68 @@ pub const NPCS: [(&str, &str, u32, u32, [f32; 3], f32, f32); 6] = [
     ("ugo_kalahad", "Ugo Kalahad", 1042360826, 3200, [-29.7745, 94.5018, -61.8978], 2.0, 2.6),
 ];
 /// Round 29 (NP1, Ryan: "NPCs knocked away by hits sometimes walk back to their spot and sometimes just stay"):
-/// proof of which NPCs go home. Each street NPC's first position after it is (re)loaded is its spot; the log says
-/// when one is pushed more than HOME_AWAY m off it, when it is back within HOME_BACK m (and after how long), and when
-/// it is still away HOME_STUCK s later. Their Think rows (regulation, NpcThinkParam) differ: Connelly / Ceren / Olivia
-/// / Diego run logic 10000 with backhomeDist 50 / 50 / 50 / 35 m, Ugo (Kale) his own logic 320000 with backhomeDist
-/// 30 and BackHomeLife_OnHitEneWal 5, Lady Oriel (Trina) 9999, so the log is what tells which of them return.
+/// proof of which NPCs go home. The log says when one is pushed more than HOME_AWAY m off its spot, when it is back
+/// within HOME_BACK m (and after how long), and when it is still away HOME_STUCK s later. Their Think rows
+/// (regulation, NpcThinkParam) differ: Connelly / Ceren / Olivia / Diego run logic 10000 with backhomeDist 50 / 50 /
+/// 50 / 35 m, Ugo (Kale) his own logic 320000 with backhomeDist 30 and BackHomeLife_OnHitEneWal 5, Lady Oriel (Trina)
+/// 9999, so the log is what tells which of them return.
+/// Round 31 (NP1, Ryan's round 30 log: every NPC "pushed" 72-328 m at once): the physics positions Game::entities
+/// returns move all together when the game shifts its world origin, so a spot taken in that space goes stale. Now each
+/// NPC is placed against the other loaded street NPCs instead: its offset from NPC j, minus the two MSB spots' offset
+/// (NPCS), is the same in any shifted space; the median over the others is how far it is off its own spot, minus
+/// that same number when it was first seen (its standing offset from the MSB spot). A shift moves everybody and
+/// changes nothing; one pushed NPC moves only its own number. It needs two other NPCs loaded (Lady Oriel, alone in
+/// the garden, is not tracked).
 const HOME_AWAY: f32 = 0.5;
 const HOME_BACK: f32 = 0.3;
 const HOME_STUCK: f32 = 20.0;
 struct Home {
     id: u32,
-    spot: [f32; 3],
+    /// Its offset from the MSB spot when first seen (x, z).
+    base: [f32; 2],
     seen: std::time::Instant,
     away: Option<(std::time::Instant, bool)>,
 }
 static HOMES: std::sync::Mutex<Vec<Home>> = std::sync::Mutex::new(Vec::new());
 
+/// The horizontal offset of `i` from its MSB spot, measured against the other loaded NPCs (median per axis).
+fn off_spot(i: usize, at: &[([f32; 3], [f32; 3])]) -> Option<[f32; 2]> {
+    let mut xs = Vec::new();
+    let mut zs = Vec::new();
+    for (j, (p, m)) in at.iter().enumerate() {
+        if j != i {
+            xs.push((at[i].0[0] - p[0]) - (at[i].1[0] - m[0]));
+            zs.push((at[i].0[2] - p[2]) - (at[i].1[2] - m[2]));
+        }
+    }
+    if xs.len() < 2 {
+        return None;
+    }
+    let median = |v: &mut Vec<f32>| { v.sort_by(f32::total_cmp); v[v.len() / 2] };
+    Some([median(&mut xs), median(&mut zs)])
+}
+
 pub fn track_homes(entities: &[(u32, [f32; 3])]) {
     let now = std::time::Instant::now();
     let mut homes = HOMES.lock().unwrap_or_else(|e| e.into_inner());
-    // An NPC unseen for 3 s (map load, warp, out of range) takes its spot afresh when it is back.
+    // An NPC unseen for 3 s (map load, warp, out of range) takes its standing offset afresh when it is back.
     homes.retain(|h| now.duration_since(h.seen).as_secs_f32() < 3.0);
-    for (id, p) in entities {
-        let name = NPCS.iter().find(|n| n.2 == *id).map_or("?", |n| n.1);
+    // (physics position, MSB spot) of the street NPCs loaded now (not Lady Oriel's garden).
+    let known: Vec<(u32, &str, [f32; 3], [f32; 3])> = entities.iter().filter_map(|(id, p)| {
+        NPCS.iter().find(|n| n.2 == *id && n.0 != "lady_oriel").map(|n| (*id, n.1, *p, n.4))
+    }).collect();
+    let at: Vec<([f32; 3], [f32; 3])> = known.iter().map(|k| (k.2, k.3)).collect();
+    for (i, (id, name, _, _)) in known.iter().enumerate() {
+        let Some(off) = off_spot(i, &at) else { continue };
         let Some(h) = homes.iter_mut().find(|h| h.id == *id) else {
-            homes.push(Home { id: *id, spot: *p, seen: now, away: None });
+            homes.push(Home { id: *id, base: off, seen: now, away: None });
             continue;
         };
         h.seen = now;
-        let d = ((p[0] - h.spot[0]).powi(2) + (p[2] - h.spot[2]).powi(2)).sqrt();
+        let d = (off[0] - h.base[0]).hypot(off[1] - h.base[1]);
         match h.away {
             None if d > HOME_AWAY => {
-                tracing::info!("npc home: {name} ({id}) pushed {d:.2} m off its spot");
+                tracing::info!("npc home: {name} ({id}) pushed {d:.2} m off its spot ({} others to measure by)", at.len() - 1);
                 h.away = Some((now, false));
             }
             Some((since, _)) if d < HOME_BACK => {

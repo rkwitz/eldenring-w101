@@ -13,7 +13,7 @@ frame's bounds round their centre; fairies.rs SIZE / CENTRE_UP take the numbers 
 
 Usage (bpy module: pip install bpy==5.1.2 pyffi setuptools pillow, Python 3.13; or Blender's own Python):
   python blender_fairy_sheet.py <Wizard101 Data\\GameData> <out folder>
-Env: VIEWS (8), FRAMES (48), CELL (128), SAMPLES (24), ELEV (10).
+Env: VIEWS (8), FRAMES (48), CELL (224), SAMPLES (24), ELEV (10), PITCH (50).
 """
 import math
 import os
@@ -209,11 +209,21 @@ def textures(src, dest):
 def render(D, TEX, OUT):
     import bpy
     import mathutils
-    VIEWS = int(os.environ.get("VIEWS", 8)); FRAMES = int(os.environ.get("FRAMES", 48)); CELL = int(os.environ.get("CELL", 128))
+    VIEWS = int(os.environ.get("VIEWS", 8)); FRAMES = int(os.environ.get("FRAMES", 48)); CELL = int(os.environ.get("CELL", 224))
     ELEV = math.radians(float(os.environ.get("ELEV", 10)))
     m = Model(D + "/MC_Spirit_Model.nif"); a = Anim(D + "/MC_Dark_Spirit_Walk.kf")
     times = [a.start + (a.stop - a.start) * i / FRAMES for i in range(FRAMES)]
     poses = [m.skinned(m.world(a, t)) for t in times]
+    # Round 31 (FA1, Ryan: "they look tilted up at the sky, not facing forward"): Walk.kf on its own holds the
+    # body upright with the face up; W101's maze sprites (ref 6_hedge_maze_fairies.png) fly pitched forward, the
+    # body axis about 47 degrees off vertical towards the flight, legs trailing. PITCH (degrees, ref-measured)
+    # turns the posed mesh forward (head towards -y, the model's front) about the first frame's middle.
+    pitch = math.radians(float(os.environ.get("PITCH", 50)))
+    first = np.concatenate([s[1] for s in poses[0]])
+    pivot = (first.min(0) + first.max(0)) / 2
+    c, s_ = math.cos(pitch), math.sin(pitch)
+    turn = np.array([[1, 0, 0], [0, c, s_], [0, -s_, c]])  # rows: v @ turn turns +z towards -y
+    poses = [[(n, (v - pivot) @ turn + pivot, uv, tris) for n, v, uv, tris in p] for p in poses]
     allv = np.concatenate([s[1] for p in poses for s in p])
     lo, hi = allv.min(0), allv.max(0); centre = (lo + hi) / 2; radius = float(np.linalg.norm(hi - lo) / 2) * 1.02
     bpy.ops.wm.read_factory_settings(use_empty=True)

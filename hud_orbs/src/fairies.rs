@@ -32,13 +32,23 @@ use crate::markers::Camera;
 const SHEET: &str = "../../fairies/fairy_sheet.png";
 const VIEWS: usize = 8;
 const FRAMES: usize = 48;
+/// Round 31 (FA1, Ryan: "a bit too big ... too slow ... they clip into the ground a lot ... resolution too low"):
+/// the sheet is now 224 px cells (was 128) of the model pitched forward 50 degrees (blender_fairy_sheet.py PITCH, read
+/// off ref 6). SCALE shrinks the W101-size model (our choice, from Ryan's "a bit too big"; W101's NPCSprite template
+/// gives no scale the client reads). LIFT raises the whole fairy so its lowest point (0.30 m over the model root in
+/// the sheet, x SCALE) flies at least CLEAR m over the path, and the depth test gets DEPTH_LEEWAY m of leeway (the
+/// fairy's own half-depth), so ground just in front of it no longer cuts its legs off.
+const SCALE: f32 = 0.8;
+const CLEAR: f32 = 0.6;
+const LIFT: f32 = CLEAR - 0.303_36 * SCALE;
+const DEPTH_LEEWAY: f32 = 0.4;
 /// MC_Dark_Spirit_Walk.kf's length (seconds).
 const CLIP: f32 = 2.333_333_4;
 /// The render's square (2 x its radius, W101 units / 100) and its centre's height over the model's root (metres).
-const SIZE: f32 = 2.0 * 0.820_460_2;
-const CENTRE_UP: f32 = 0.689_126;
+const SIZE: f32 = 2.0 * 0.801_442_3 * SCALE;
+const CENTRE_UP: f32 = 0.848_623_7 * SCALE + LIFT;
 /// Metres per second along the path (not in W101's client data; ini fairy_speed).
-const FAIRY_SPEED: f32 = 1.2;
+const FAIRY_SPEED: f32 = 2.0;
 /// Fairies farther than this from the player aren't drawn.
 const DRAW_RANGE: f32 = 70.0;
 /// Fade in over this long when the depth test comes back (seconds).
@@ -199,7 +209,7 @@ fn draw(ui: &Ui, textures: &Textures, camera: &Camera, looks: &[([f32; 3], [f32;
         let (row, col) = cell(at, dir, eye, clock);
         let half = SIZE / 2.0 * screen[1] / (2.0 * z * (camera.fov / 2.0).tan());
         let (u, v) = (1.0 / FRAMES as f32, 1.0 / VIEWS as f32);
-        crate::occlusion::begin(z, 0.0, "", [0.0, 0.0]);
+        crate::occlusion::begin(z, DEPTH_LEEWAY, "", [0.0, 0.0]);
         list.add_image(sheet, [p[0] - half, p[1] - half], [p[0] + half, p[1] + half])
             .uv_min([col as f32 * u, row as f32 * v]).uv_max([(col + 1) as f32 * u, (row + 1) as f32 * v])
             .col(ImColor32::from_rgba(255, 255, 255, a)).build();
