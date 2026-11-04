@@ -42,6 +42,9 @@ mod sidewalk;
 mod picker;
 mod prompt;
 mod shop;
+mod npcturn;
+mod ridewarp;
+mod cages;
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -151,6 +154,11 @@ struct Orbs {
     fairies: fairies::Fairies,
     /// Round 24 M1: enemies don't see the player off the road (sidewalk.rs).
     sidewalk: sidewalk::Sidewalk,
+    /// Round 32 (G2, G7, G5): NPCs face the player in a talk, the maze doors keep the rider mounted, cage sound.
+    npcturn: npcturn::NpcTurn,
+    ridewarp: ridewarp::RideWarp,
+    cages: cages::Cages,
+    ride_press: cages::RidePress,
 }
 
 /// Frame timing written to w101_orbs.log every few seconds, to see what the overlay costs the game.
@@ -234,6 +242,10 @@ impl Orbs {
             focused: true,
             flag_check_logged: false,
             teleport: teleport::Teleport::default(),
+            npcturn: npcturn::NpcTurn::default(),
+            ridewarp: ridewarp::RideWarp::default(),
+            cages: cages::Cages::default(),
+            ride_press: cages::RidePress::default(),
         }
     }
 
@@ -397,6 +409,10 @@ impl ImguiRenderLoop for Orbs {
         // Polled every frame: the screen goes up on the first frame the door flag is on, or Elden Ring starts a
         // loading screen of its own. The flag is cleared when the screen starts to fade (or right away when the
         // loading screen is turned off).
+        self.ridewarp.frame(game);
+        self.npcturn.frame(game, self.book.talking());
+        self.cages.frame(game.is_some() && stats.is_some());
+        self.ride_press.frame(game.filter(|_| !self.book.blocking()), self.book.prompt.binding());
         let door = game.is_some() && game::event_flag(loadscreen::DOOR_FLAG) == Some(true);
         let loading = self.loadscreen.game_loading_started(game::loading_screens());
         let loading = self.teleport.frame(ui, &mut self.book.textures, game, loading, door, stats.map(|s| s.hp));

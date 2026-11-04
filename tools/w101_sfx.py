@@ -27,6 +27,11 @@ SOUNDS = {
 
 # Round 31 (SND1): the "Original" (default) teleport emotes' sounds, Root.wad ObjectData/Emotes/
 # Teleport43..49_Original_<School>_01.xml -> _Shared-WorldData.wad Sound/PlayerEmotes/Teleports/.
+# Round 32 (G5): the Bone Cage's open sound. Root.wad ObjectData/WC/WC-FairyCage02..05.xml use StateData/
+# FairyCageStates.xml, whose Escape (FairyEscaped) state plays Sound-WorldData.wad Sound/Ambient/envgen_chestwood_open.ogg.
+CAGE_OPEN = "Sound/Ambient/envgen_chestwood_open.ogg"
+SOUNDS["Sound-WorldData.wad"] = []
+
 TELEPORTS = [f"Spawner_Special_{school}_{way}.ogg" for school in ("Balance", "Death", "Fire", "Ice", "Life", "Myth", "Storm")
              for way in ("OUT", "IN")]
 
@@ -50,6 +55,8 @@ def main(argv):
         want = {f"Sound/GUI/{n}.wav" for n in names}
         if wad == "_Shared-WorldData.wad":
             want |= {f"Sound/PlayerEmotes/Teleports/{n}" for n in TELEPORTS}
+        if wad == "Sound-WorldData.wad":
+            want = {CAGE_OPEN}
         with open(data / wad, "rb") as f:
             for name, offset, size, stored, compressed in entries(data / wad):
                 if name not in want:

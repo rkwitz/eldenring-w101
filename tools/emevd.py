@@ -179,6 +179,12 @@ ARRIVAL_YAW = {  # arrival region -> its rotation y in m60_42_36_00 (msb_add_roo
     1042362821: STREET_YAW, 1042362823: STREET_YAW,  # Fear of Fire in / out
 }
 CAMERA_PITCH = 5.0  # as common event 950 after its warp
+# Round 32 (G7/G3): riding doors whose move the HUD DLL does (hud_orbs/src/ridewarp.rs REQUESTS / DONE): arrival region
+# -> request flag. The event turns the request on, waits RIDE_WAIT s and skips its map warp when the DLL turned
+# RIDE_DONE on (Torrent at the arrival, still mounted, no map load and so no area title); otherwise it map-warps.
+RIDE_WARPS = {1042362805: 1042362920, 1042362807: 1042362921}  # hedge maze in / out
+RIDE_DONE = 1042362922
+RIDE_WAIT = 1.5
 LOAD_SCREEN_LEAD = 0.75  # seconds between LOAD_SCREEN_FLAG on and the warp, so the HUD's load screen is up first
 FADE = 0.5  # seconds of 2004[77] fade to black before the warp
 ARRIVAL_SETTLE = 1.0  # seconds after the warp before the door listens again
@@ -250,8 +256,17 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS, on_foot=False):
             ]
             if riding:
                 body.append(_i(2012, 8, "<Bxxx", 0))  # area welcome message off, so the load shows no title card
+                if arrival in RIDE_WARPS:  # round 32: the DLL moves Torrent; the map warp only if it didn't
+                    body += [_i(2003, 66, "<BxxxIBxxx", 0, RIDE_DONE, 0),
+                             _i(2003, 66, "<BxxxIBxxx", 0, RIDE_WARPS[arrival], 1),
+                             _i(1001, 0, "<f", RIDE_WAIT),
+                             _i(1003, 1, "<BBBxI", 2, 1, 0, RIDE_DONE)]  # SKIP the 2 map-warp lines IF done
                 body.append(_i(2003, 14, "<BBBBIi", *HOME_MAP, SPAWN_OF[arrival], 0))  # map warp to its spawn point
                 body.append(_i(1001, 0, "<f", MOUNTED_WAIT))
+                if arrival in RIDE_WARPS:
+                    body.append(_i(2003, 66, "<BxxxIBxxx", 0, RIDE_WARPS[arrival], 0))
+                    if arrival in ARRIVAL_YAW:  # camera looking where the arrival faces, as on foot
+                        body.append(_i(2008, 4, "<ff", CAMERA_PITCH, (ARRIVAL_YAW[arrival] + 180.0) % 360.0 - 180.0))
             else:
                 # Round 23 (H3, Ryan: "When you go into the hedge maze, it shouldn't say Unicorn Way again"): the short
                 # warp also announces the arrival's MapNameOverride box (the garden's W101_name_maze, 610900), so the
@@ -1084,6 +1099,9 @@ if __name__ == "__main__":
         sys.exit()
     if sys.argv[1] == "--garden":  # emevd.py --garden m60_42_36_00.emevd out.emevd (doors of msb_add_garden.py)
         open(sys.argv[3], "wb").write(garden_doors(open(sys.argv[2], "rb").read()))
+        sys.exit()
+    if sys.argv[1] == "--garden-doors":  # emevd.py --garden-doors in.emevd[.dcx] out.emevd[.dcx] (round 32 G7)
+        _dcx_apply(sys.argv[2], sys.argv[3], lambda raw: rattlebones_doors(raw, GARDEN_DOORS))
         sys.exit()
     if sys.argv[1] == "--sidewalk":  # emevd.py --sidewalk in.emevd[.dcx] out.emevd[.dcx] (round 24 M1)
         _dcx_apply(sys.argv[2], sys.argv[3], sidewalk)

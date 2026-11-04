@@ -319,6 +319,92 @@ impl Game {
         Some(chr)
     }
 
+    /// Round 32 (G2/G7): the physics module (CSChrPhysicsModule address) of a character: the player (`None`),
+    /// Torrent (`Some(TORRENT)`, character id 8000 in the summon/buddy set, as fade_torrent) or the street NPC with
+    /// event entity id `id` (from the cached character list, as `entities`).
+    pub fn physics_of(&self, who: Option<u32>) -> Option<usize> {
+        use eldenring::cs::{ChrIns, ChrInsModuleContainer};
+        use std::mem::offset_of;
+        let chr = match who {
+            None => self.player()?,
+            Some(TORRENT) => self.fade_torrent_chr()?,
+            Some(id) => {
+                let list = self.characters.lock().unwrap_or_else(|e| e.into_inner()).1.clone();
+                list.into_iter().map(|(c, _)| c)
+                    .find(|c| read::<u32>(c + offset_of!(ChrIns, event_entity_id)) == Some(id))?
+            },
+        };
+        let modules = read::<usize>(chr + offset_of!(ChrIns, modules))?;
+        read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics)).filter(|p| *p >= 0x10000)
+    }
+
+    /// Round 32: Torrent's ChrIns (character id 8000 in summon_buddy_chr_set), None when he isn't loaded.
+    fn fade_torrent_chr(&self) -> Option<usize> {
+        use eldenring::cs::{ChrIns, ChrSet, ChrSetEntry, WorldChrMan};
+        use std::mem::{offset_of, size_of};
+        let wcm = read::<usize>(self.world_chr_man)?;
+        let set = wcm + offset_of!(WorldChrMan, summon_buddy_chr_set);
+        let capacity = read::<u32>(set + offset_of!(ChrSet<ChrIns>, capacity))? as usize;
+        let entries = read::<usize>(set + offset_of!(ChrSet<ChrIns>, entries))?;
+        let entry = size_of::<ChrSetEntry<ChrIns>>();
+        let bytes = read_bytes(entries, capacity.min(256) * entry)?;
+        bytes.chunks_exact(entry).map(|e| usize::from_le_bytes(e[..8].try_into().unwrap()))
+            .filter(|c| *c >= 0x10000 && *c % 8 == 0)
+            .find(|c| read::<u32>(c + offset_of!(ChrIns, character_id)) == Some(8000))
+    }
+
+    /// Round 32: a character's yaw `a` (radians; its quaternion is a turn about +y by `a`, and the character faces
+    /// -z of that frame: forward = -(sin a, cos a), as the prompt's calibrated "-z" and the MSB rotations show).
+    pub fn yaw_of(&self, who: Option<u32>) -> Option<f32> {
+        use eldenring::cs::CSChrPhysicsModule;
+        use std::mem::offset_of;
+        let physics = self.physics_of(who)?;
+        let [x, y, z, w] = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, orientation))?;
+        if ![x, y, z, w].iter().all(|v| v.is_finite()) || ((x * x + y * y + z * z + w * w) - 1.0).abs() > 0.1 {
+            return None;
+        }
+        Some((2.0 * (x * z + w * y)).atan2(1.0 - 2.0 * (x * x + y * y)))
+    }
+
+    /// Round 32: turns a character to yaw `a` (see `yaw_of`): both the orientation and the interpolated one.
+    pub fn set_yaw(&self, who: Option<u32>, a: f32) -> bool {
+        use eldenring::cs::CSChrPhysicsModule;
+        use std::mem::offset_of;
+        let Some(physics) = self.physics_of(who) else { return false };
+        let q = [0.0, (a / 2.0).sin(), 0.0, (a / 2.0).cos()];
+        for field in [offset_of!(CSChrPhysicsModule, orientation), offset_of!(CSChrPhysicsModule, interpolated_orientation)] {
+            if read::<[f32; 4]>(physics + field).is_none() {
+                return false;
+            }
+            unsafe { ((physics + field) as *mut [f32; 4]).write_volatile(q) };
+        }
+        true
+    }
+
+    /// Round 32 (G7): a character's physics position.
+    pub fn position_of(&self, who: Option<u32>) -> Option<[f32; 3]> {
+        use eldenring::cs::CSChrPhysicsModule;
+        use std::mem::offset_of;
+        let physics = self.physics_of(who)?;
+        let [x, y, z, _] = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position))?;
+        [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6).then_some([x, y, z])
+    }
+
+    /// Round 32 (G7): moves a character to physics position `to` (position and last-update position, then asks the
+    /// character proxy to take it, chr_proxy_pos_update_requested).
+    pub fn set_position(&self, who: Option<u32>, to: [f32; 3]) -> bool {
+        use eldenring::cs::CSChrPhysicsModule;
+        use std::mem::offset_of;
+        let Some(physics) = self.physics_of(who) else { return false };
+        for field in [offset_of!(CSChrPhysicsModule, position), offset_of!(CSChrPhysicsModule, last_update_position)] {
+            let Some(old) = read::<[f32; 4]>(physics + field) else { return false };
+            unsafe { ((physics + field) as *mut [f32; 4]).write_volatile([to[0], to[1], to[2], old[3]]) };
+        }
+        let flag = physics + offset_of!(CSChrPhysicsModule, chr_proxy_pos_update_requested);
+        unsafe { (flag as *mut bool).write_volatile(true) };
+        true
+    }
+
     /// The camera as CSCam holds it right now (see `camera`).
     fn camera_now(&self) -> Option<crate::markers::Camera> {
         use eldenring::cs::{CSCam, CSCamera, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
@@ -903,6 +989,9 @@ pub fn loading_screens() -> Option<i32> {
     let helper = read::<usize>(helper.as_ptr() as usize)?;
     read::<i32>(helper + std::mem::offset_of!(eldenring::cs::CSNowLoadingHelper, menu_load_counter))
 }
+
+/// Round 32: `Game::physics_of` etc. take this for Torrent.
+pub const TORRENT: u32 = u32::MAX;
 
 /// Sets or clears an event flag.
 pub fn set_event_flag(flag: u32, on: bool) {

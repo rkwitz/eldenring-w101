@@ -408,5 +408,45 @@ def main(argv):
         Path(argv[1]).write_bytes(add_quests(data))
 
 
+# Round 32 (G6, Ryan: Bone Cages are hard to open on Torrent): the DLL (hud_orbs/src/cages.rs CAGE_PRESS) turns
+# CAGE_PRESS + c on when the rider presses Examine within prompt::RIDE_EXAMINE_REACH m of shut cage c; the riding
+# branch of the cage's button wait takes it as the press (no vanilla ActionButtonParam row reaches further on Torrent:
+# the only riding Examine rows are 9300-9560 at 1.5 m and 9330, front-only).
+CAGE_PRESS = 1042362923
+
+
+def cage_ride_press(d):
+    """Patches the cage events already in m60_42_36_00.emevd: after the riding branch's OR of its button (group 5) and
+    the (un)mount restart (group 6), also OR flag CAGE_PRESS + c (group 4). Rerunning changes nothing more."""
+    e = Emevd(d)
+    events = events_of(e)
+    entities = [entity for _p, entity in Q.CAGES]
+    patched = 0
+    for ev in events:
+        ins = ev["ins"]
+        for k, i in enumerate(ins):
+            if (i["bank"], i["id"]) != (3, 24):
+                continue
+            group, button, entity = struct.unpack("<bxxxiI", i["args"])
+            if button != Q.CAGE_BUTTON_RIDING or entity not in entities:
+                continue
+            c = entities.index(entity)
+            press = if_flag(4, 1, CAGE_PRESS + c)
+            if any(j["args"] == press["args"] and (j["bank"], j["id"]) == (3, 0) for j in ins):
+                patched += 1
+                break
+            at = next(j for j in range(k, len(ins)) if (ins[j]["bank"], ins[j]["id"]) == (0, 0)
+                      and ins[j]["args"] == if_group(-5, 1, 6)["args"])
+            ins[at + 1:at + 1] = [press, if_group(-5, 1, 4)]
+            patched += 1
+            break
+    assert patched == len(entities), f"patched {patched} cage events"
+    return build(e, events)
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--cage-ride-press"]:  # emevd_quests.py --cage-ride-press in.emevd[.dcx] out.emevd[.dcx]
+        from emevd import _dcx_apply
+        _dcx_apply(sys.argv[2], sys.argv[3], cage_ride_press)
+        sys.exit()
     main(sys.argv[1:])

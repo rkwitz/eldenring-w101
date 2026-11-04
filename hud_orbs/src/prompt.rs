@@ -72,6 +72,10 @@ use crate::layout::Textures;
 
 pub const TALK_ROWS: [u32; 2] = [6000, 6001];
 pub const EXAMINE_ROWS: [u32; 2] = [9260, 9300];
+/// Round 32 (G6, Ryan: Bone Cages are hard to open on Torrent): 9300's 1.5 m (9260 on foot: 1.8) from the lamp post
+/// is hard to reach with Torrent's body round the rider; on Torrent the prompt shows within this many metres and the
+/// press is passed to the cage event by the DLL (cages.rs, flag CAGE_PRESS + c), so no vanilla row needs changing.
+pub const RIDE_EXAMINE_REACH: f32 = 2.5;
 /// Round 26 (N4): set by the talk / cage events while the player rides Torrent (tools/w101_quests.py RIDING_FLAG).
 pub const RIDING_FLAG: u32 = 1042362570;
 /// Dialogue request flags (tools/w101_quests.py DIALOGUE_FLAG + key) and the Bone Cage flags (CAGE_FLAG + i).
@@ -301,13 +305,27 @@ impl Prompt {
         }
     }
 
+    /// Round 32 (G6): the learned interact binding: its XInput bit (0: none) and virtual key (None: no key).
+    pub fn binding(&self) -> (u16, Option<u8>) {
+        let pad = PAD_NAMES.iter().find(|(_, n)| *n == self.pad_button).map_or(0, |(b, _)| *b);
+        let key = match self.key.as_str() {
+            "Enter" => Some(0x0D),
+            "Space" => Some(0x20),
+            "Tab" => Some(0x09),
+            k if k.len() == 1 => Some(k.as_bytes()[0]),
+            k => k.strip_prefix('F').and_then(|n| n.parse::<u8>().ok()).map(|n| 0x6F + n),
+        };
+        (pad, key)
+    }
+
     /// Whether the player at `player` (feet, physics space) facing `yaw` is inside one of the talk (or `examine`)
     /// rows' prompt shapes round a target whose feet are at `at` (on foot or on Torrent: whichever row fits).
     fn inside(&self, examine: bool, riding: bool, player: [f32; 3], yaw: Option<f32>, at: [f32; 3]) -> bool {
         // Round 26 (N4): only the row the events wait for now: the second of each pair on Torrent.
         let row = |r: &u32| (if examine { EXAMINE_ROWS } else { TALK_ROWS })[riding as usize] == *r;
         let shapes: Vec<(f32, f32, f32, i32)> = self.shapes.iter().filter(|s| s.2 == examine && row(&s.0)).map(|(_, b, _)| {
-            (if b.radius > 0.1 { b.radius } else { FALLBACK.0 }, if b.height > 0.1 { b.height } else { FALLBACK.1 },
+            let radius = if b.radius > 0.1 { b.radius } else { FALLBACK.0 };
+            (if examine && riding { radius.max(RIDE_EXAMINE_REACH) } else { radius }, if b.height > 0.1 { b.height } else { FALLBACK.1 },
              b.base, b.allow_angle)
         }).collect();
         let lift = if riding { RIDER_LIFT } else { 0.0 };
@@ -534,13 +552,13 @@ impl Prompt {
 
 /// Round 26 (N5): which virtual keys are down now (index = VK code), read in the game only.
 #[cfg(windows)]
-fn keys_down() -> Vec<bool> {
+pub fn keys_down() -> Vec<bool> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
     (0..256).map(|vk| unsafe { GetAsyncKeyState(vk) } < 0).collect()
 }
 
 #[cfg(not(windows))]
-fn keys_down() -> Vec<bool> {
+pub fn keys_down() -> Vec<bool> {
     Vec::new()
 }
 
