@@ -289,15 +289,22 @@ const OFFERS: &[(&str, u32, u32)] = &[
 pub const QUEST_RESET: u32 = 1042360691;
 
 /// Talk goals: (npc, quest assigned flag, quest complete flag, goal flag, flags of the goals it comes after).
+/// Round 32 (U8, Ryan: "Ceren kept the grey ? until I was close, then it turned yellow; it should be yellow as soon as
+/// it shows"): a talk goal that comes after a "go to this NPC" goal (w101_quests: finding_out_why goal 3 "Go to Lady
+/// Oriel" = goto hedge_maze, where she stands; sinister_skeleton goal 3 "Return to Ceren Nightchant" = goto near_ceren)
+/// now waits only for the goals before that one: the yellow "?" shows from the moment the quest sends the player to
+/// the NPC. Round 31's log (round32_input): 03:12:31 +1042360362 (Rattlebones defeated, popup "New Goal: Return to
+/// Ceren Nightchant"), but Ceren stayed Unfinished until 03:14:21 +1042360363 (near_ceren) at 13 m; Lady Oriel the
+/// same at 03:09:10 (+1042360343 at 14 m) although her two goals before were done at 03:07:54.
 const TALKS: &[(&str, u32, u32, u32, &[u32])] = &[
     ("private_connelly", 1042360300, 1042360309, 1042360301, &[]),
     ("private_connelly", 1042360310, 1042360319, 1042360312, &[1042360311]),
     ("ceren_nightchant", 1042360310, 1042360319, 1042360313, &[1042360312]),
     ("ceren_nightchant", 1042360320, 1042360329, 1042360322, &[1042360321]),
     ("lady_oriel", 1042360330, 1042360339, 1042360332, &[1042360331]),
-    ("lady_oriel", 1042360340, 1042360349, 1042360344, &[1042360343]),
+    ("lady_oriel", 1042360340, 1042360349, 1042360344, &[1042360341, 1042360342]),
     ("ceren_nightchant", 1042360350, 1042360359, 1042360351, &[]),
-    ("ceren_nightchant", 1042360360, 1042360369, 1042360364, &[1042360363]),
+    ("ceren_nightchant", 1042360360, 1042360369, 1042360364, &[1042360362]),
 ];
 
 /// Quest_Marker_*.nif: the sign's and the spiral's quad sides (W101 units = cm), and the spiral's turn (its z

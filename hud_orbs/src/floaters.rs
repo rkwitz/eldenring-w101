@@ -56,7 +56,14 @@ const VICTORY_FADE: f32 = 1.0;
 /// Floaters on one head that came up within this many seconds of each other stack one line apart (ref 3).
 const STACK: f32 = 0.6;
 /// Over the player: the top of an Elden Ring character (1.75 m). Round 31 (FT6): the head itself, no plate gap.
+/// Round 32 (U1): only the fallback; the player's own head (Floaters::set_head) is used when it can be read.
 const PLAYER_TOP: f32 = 1.75;
+/// Round 32 (U7, Ryan: "VICTORY! with no rising, fixed at the top centre of the screen, shows then fades";
+/// ref round32/ref/victory_top_centre.png): measured on the reference, whose game picture is the screen's full height
+/// (rows 12..349, the XP bar at its bottom): the word's middle at 13.2 % of the screen height down, its capitals
+/// 3.6 % of the screen height tall, centred.
+const VICTORY_Y: f32 = 0.132;
+const VICTORY_CAP: f32 = 0.036;
 /// Runes gained this soon after an enemy died are that kill's.
 const KILL_WINDOW: f32 = 3.0;
 /// Enemies farther than this (metres) show no damage numbers (the nameplates' own range is near this).
@@ -72,6 +79,8 @@ pub enum Kind {
     Damage(i32),
     Runes(u32),
     Victory,
+    /// Round 32 (U6): an item that came into the inventory (its ID; the name is in Floaters::names), and how many.
+    Item(u32, u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -105,16 +114,43 @@ pub struct Floaters {
     runes: Option<u32>,
     enemy_hp: HashMap<usize, i32>,
     last_kill: Option<Instant>,
+    /// Round 32 (U6): the names of the items floated (Kind::Item).
+    names: HashMap<u32, String>,
+    /// Round 32 (U1): the player's head top over the camera's player position (metres), 0 = PLAYER_TOP.
+    head: f32,
 }
 
 impl Floaters {
+    /// Round 32 (U6): an item gained (`count` of item `id`, called `name`) floats over the player like runes.
+    pub fn item(&mut self, id: u32, count: u32, name: String) {
+        self.names.insert(id, name);
+        self.add(Kind::Item(id, count), Over::Player, Instant::now());
+    }
+
+    /// Round 32 (U6): preview only: the name an item floater shows.
+    #[allow(dead_code)]
+    pub fn name_item(&mut self, id: u32, name: &str) {
+        self.names.insert(id, name.to_string());
+    }
+
+    /// Round 32 (U1): the player's head top over the camera's player position (game.rs Game::player_head).
+    pub fn set_head(&mut self, head: Option<f32>) {
+        self.head = head.unwrap_or(0.0);
+    }
+
+    fn player_top(&self) -> f32 {
+        if self.head > 0.0 { self.head } else { PLAYER_TOP }
+    }
+
     fn add(&mut self, kind: Kind, over: Over, now: Instant) {
         let same = |a: Over, b: Over| match (a, b) {
             (Over::Player, Over::Player) => true,
             (Over::Enemy(x, _), Over::Enemy(y, _)) => x == y,
             _ => false,
         };
-        let row = self.live.iter().filter(|f| same(f.over, over) && (now - f.born).as_secs_f32() < STACK).count() as f32;
+        // Round 32 (U7): VICTORY! is on the screen, not in the player's stack.
+        let row = self.live.iter()
+            .filter(|f| f.kind != Kind::Victory && same(f.over, over) && (now - f.born).as_secs_f32() < STACK).count() as f32;
         tracing::info!("floaters: {kind:?} over {}", if over == Over::Player { "the player".to_string() } else { "an enemy".into() });
         self.live.push(Floater { kind, over, born: now, row });
     }
@@ -185,7 +221,8 @@ impl Floaters {
         self.live.clear();
         for (i, (kind, enemy, age)) in list.iter().enumerate() {
             let over = enemy.map_or(Over::Player, |a| Over::Enemy(1 + i, a));
-            let row = list[..i].iter().filter(|o| o.1.is_some() == enemy.is_some() && (o.2 - age).abs() < STACK).count() as f32;
+            let row = list[..i].iter()
+                .filter(|o| o.0 != Kind::Victory && o.1.is_some() == enemy.is_some() && (o.2 - age).abs() < STACK).count() as f32;
             self.live.push(Floater { kind: *kind, over, born: now - std::time::Duration::from_secs_f32(*age), row });
         }
     }
@@ -201,11 +238,28 @@ impl Floaters {
         let life = |k: Kind| if k == Kind::Victory { VICTORY_HOLD + VICTORY_FADE } else { HOLD + FADE };
         self.live.retain(|f| (now - f.born).as_secs_f32() < life(f.kind));
         let Some(font) = fonts.get("WizardFancy").filter(|_| visible) else { return };
+        let top_of_player = self.player_top();
+        // Round 32 (U7): VICTORY! is fixed on the screen, not over anyone.
+        for f in self.live.iter().filter(|f| f.kind == Kind::Victory) {
+            let age = (now - f.born).as_secs_f32();
+            let alpha = if age < VICTORY_HOLD { 1.0 } else { (1.0 - (age - VICTORY_HOLD) / VICTORY_FADE).clamp(0.0, 1.0) };
+            let a = (255.0 * alpha) as u8;
+            let sc = VICTORY_CAP * screen[1] / (font.line_height * CAP);
+            let text = "VICTORY!";
+            let w = font.width(text) * sc;
+            // The glyph cells start a little over the capitals: the cell's top is half a line over the middle.
+            let top = VICTORY_Y * screen[1] - font.line_height * sc * 0.5;
+            font.draw_at(draw, text, [(screen[0] - w) / 2.0, top], sc,
+                         ImColor32::from_rgba(VICTORY.0[0], VICTORY.0[1], VICTORY.0[2], a));
+        }
         // Farther ones first.
         let mut order: Vec<(f32, usize)> = Vec::new();
         for (i, f) in self.live.iter().enumerate() {
+            if f.kind == Kind::Victory {
+                continue;
+            }
             let at = match f.over {
-                Over::Player => [camera.player[0], camera.player[1] + PLAYER_TOP, camera.player[2]],
+                Over::Player => [camera.player[0], camera.player[1] + top_of_player, camera.player[2]],
                 Over::Enemy(_, at) => at,
             };
             if let Some((_, z)) = camera.project(at, screen) {
@@ -216,7 +270,7 @@ impl Floaters {
         for (_, i) in order {
             let f = &self.live[i];
             let at = match f.over {
-                Over::Player => [camera.player[0], camera.player[1] + PLAYER_TOP, camera.player[2]],
+                Over::Player => [camera.player[0], camera.player[1] + top_of_player, camera.player[2]],
                 Over::Enemy(_, at) => at,
             };
             let Some(([x, y], z)) = camera.project(at, screen) else { continue };
@@ -231,6 +285,11 @@ impl Floaters {
                 Kind::Damage(n) => (n.to_string(), DAMAGE, SCALE, Some((FIST_ART, FIST, false))),
                 Kind::Runes(n) => (format!("{n} RUNES"), GOLD, SCALE, Some((RUNE_ART, COIN, true))),
                 Kind::Victory => ("VICTORY!".to_string(), VICTORY, VICTORY_SCALE, None),
+                // Round 32 (U6): the item's name in the runes' gold, without the coin.
+                Kind::Item(id, n) => {
+                    let name = self.names.get(&id).cloned().unwrap_or_default().to_uppercase();
+                    (if n > 1 { format!("{name} x{n}") } else { name }, GOLD, SCALE, None)
+                }
             };
             let sc = scale * k;
             let line = font.line_height * SCALE * k;

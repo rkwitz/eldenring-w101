@@ -130,6 +130,11 @@ impl Game {
         Some(crate::markers::Camera { matrix, fov: 0.85, player })
     }
 
+    /// Round 32 (U1): no model box in the preview (PLAYER_TOP).
+    pub fn player_head(&self) -> Option<f32> {
+        None
+    }
+
     pub fn sheet(&self) -> Option<Sheet> {
         let goods = |id: u32| 0x4000_0000 | id;
         let mut items = vec![

@@ -50,8 +50,12 @@ const CLOUD: [&str; 2] = ["Wisp_Cloud_Red.png", "Wisp_Cloud_Blue.png"];
 const SPARK: [&str; 2] = ["Wisp_Spark_Red.png", "Wisp_Spark_Blue.png"];
 const GLOW: &str = "Wisp_Glow.png";
 const SOUND: &str = "w101_orbs/wisps/ui_health_powerup_01.wav";
-/// Horizontal pick-up distance (metres) and the height range it counts over.
-const PICKUP: f32 = 1.0;
+/// Horizontal pick-up distance (metres) and the height range it counts over. Round 32 (U2, Ryan: "pickup radius
+/// larger, especially on Torrent"): 1.0 -> 1.6 m on foot (the cloud's puffs reach about 1 m round its centre, so a
+/// wisp is taken once the player brushes its cloud), and PICKUP_RIDING on Torrent, whose body reaches about 1.2 m
+/// ahead of and behind the rider and who covers 0.2 m a frame at a gallop.
+const PICKUP: f32 = 1.6;
+const PICKUP_RIDING: f32 = 2.6;
 const PICKUP_HEIGHT: f32 = 2.2;
 /// Cloud centre over the path, bob amplitude and period, sideways sway (metres, seconds).
 const HOVER: f32 = 0.9;
@@ -322,16 +326,18 @@ impl Wisps {
             tracing::info!("wisps: {in_sight} of {} in sight from the camera at MSB [{:.1}, {:.1}, {:.1}]{}",
                            self.wisps.len(), eye[0], eye[1], eye[2], if away { " (player in a room or the garden)" } else { "" });
         }
+        let riding = crate::game::event_flag(crate::prompt::RIDING_FLAG) == Some(true);
+        let reach = if riding { PICKUP_RIDING } else { PICKUP };
         for (w, (p, _, _)) in self.wisps.iter_mut().zip(&spots) {
             if w.picked.is_some() || !gameplay {
                 continue;
             }
             let d = ((p[0] - player[0]).powi(2) + (p[2] - player[2]).powi(2)).sqrt();
-            if d < PICKUP && (p[1] - HOVER - player[1]).abs() < PICKUP_HEIGHT {
+            if d < reach && (p[1] - HOVER - player[1]).abs() < PICKUP_HEIGHT {
                 let fp = w.kind == Kind::Mana;
                 if let Some((from, to)) = g.add_player_stat(fp, self.restore) {
-                    tracing::info!("wisps: picked up a {:?} wisp on path {}, {} {from} -> {to}", w.kind, w.path + 1,
-                                   if fp { "FP" } else { "HP" });
+                    tracing::info!("wisps: picked up a {:?} wisp on path {}, {} {from} -> {to} ({d:.2} m away{})", w.kind,
+                                   w.path + 1, if fp { "FP" } else { "HP" }, if riding { ", on Torrent" } else { "" });
                     w.picked = Some((now, [p[0] - player[0], p[1] - player[1], p[2] - player[2]]));
                     w.seen = 1.0;
                     // Round 30 (FT1): "+N" over the player.

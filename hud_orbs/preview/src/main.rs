@@ -470,6 +470,10 @@ fn main() {
         ("31ft6b_damage_lost_soul_0s", pages::Tab::Character, 0, [0.0, 0.0], "float:damage:105:e4180:0.0"),
         ("31ft6c_damage_sprite_1s", pages::Tab::Character, 0, [0.0, 0.0], "float:damage:105:e:1.0"),
         ("31ft6d_heal_0s", pages::Tab::Character, 0, [0.0, 0.0], "float:heal:110:p:0.0"),
+        // Round 32 (U7): VICTORY! fixed at the top centre (0.2 s, and 2.6 s fading); U6: an item's name.
+        ("32u7_victory_0.2s", pages::Tab::Character, 0, [0.0, 0.0], "float:victory:0:p:0.2;runes:1500:p:0.2"),
+        ("32u7_victory_2.6s", pages::Tab::Character, 0, [0.0, 0.0], "float:victory:0:p:2.6"),
+        ("32u6_item_0.3s", pages::Tab::Character, 0, [0.0, 0.0], "float:item:2900:p:0.3"),
         ("31ft6e_heal_1s", pages::Tab::Character, 0, [0.0, 0.0], "float:heal:110:p:1.0"),
         ("23g_wisp_pickup_0.3", pages::Tab::Character, 0, [0.0, 0.0], "wisp:0.3"),
         ("23h_wisp_pickup_0.8", pages::Tab::Character, 0, [0.0, 0.0], "wisp:0.8"),
@@ -588,11 +592,18 @@ fn main() {
                     "mana" => floaters::Kind::Mana(n),
                     "damage" => floaters::Kind::Damage(n),
                     "runes" => floaters::Kind::Runes(n as u32),
+                    // Round 32 (U6): an item gained (named below with the preview's own sample name).
+                    "item" => floaters::Kind::Item(n as u32, 1),
                     _ => floaters::Kind::Victory,
                 };
                 let on = v.get(2)?.strip_prefix('e').map(|m| over(m.parse().unwrap_or(3450))).unwrap_or(None);
                 Some((kind, on, v.get(3)?.parse().ok()?))
             }).collect();
+            for (kind, _, _) in &items {
+                if let floaters::Kind::Item(id, _) = kind {
+                    book.floaters.name_item(*id, "Golden Rune [1]");
+                }
+            }
             book.preview_floaters(&items);
         }
         if let Some(at) = show.strip_prefix("markers") {

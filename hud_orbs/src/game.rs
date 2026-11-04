@@ -83,6 +83,18 @@ impl Game {
         [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6).then_some(([x, y, z], block, origin))
     }
 
+    /// Round 32 (U1, Ryan: "floating text over the player is much too high on Torrent"): the top of the player's own
+    /// posed model box over the player's physics position (the camera's player point), in metres, when it reads as
+    /// a body (0.5-3 m); None otherwise. On Torrent the physics position is the rider's (round 28's prompt log: dy
+    /// +1.39 m over an NPC's feet), so a fixed 1.75 m over it put the numbers a whole body too high.
+    pub fn player_head(&self) -> Option<f32> {
+        let chr = self.player()?;
+        let p = Self::chr_physics(chr)?;
+        let (top, _) = self.model_top(chr, p)?;
+        let h = top[1] - p[1];
+        (0.5..3.0).contains(&h).then_some(h)
+    }
+
     /// The main player's ChrIns (scene probe).
     pub fn player_address(&self) -> Option<usize> {
         self.player()

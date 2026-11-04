@@ -83,6 +83,12 @@ const TIP_ICON: f32 = 20.0;
 /// (w101_reference/nameplate_lost_soul.png, taken at about 1.1x Wizard101's 768 size like the reagent card beside it)
 /// has the name about 20 pixels tall, the rank line about 14.
 const NAME_SCALE: f32 = 0.5;
+/// Round 32 (U1): a seated rider's head top over the rider's physics position on Torrent, when the player's model box
+/// can't be read (the standing head is 1.75 m; seated, the legs are off the count: about 0.95 m).
+const RIDER_HEAD: f32 = 0.95;
+/// Round 32 (U6): how often the inventory is read for item floaters, and the most kinds of item one read may add.
+const ITEM_POLL: f32 = 0.5;
+const ITEM_BURST: usize = 4;
 const RANK_SCALE: f32 = 0.34;
 
 /// The Backpack picture's own turning (radians per second), like Wizard101's slowly turning wizard.
@@ -175,6 +181,10 @@ pub struct Book {
     pub popups: crate::goalpopup::GoalPopups,
     /// Round 30 (FT1-FT5): Wizard101's floating numbers over heads (floaters.rs).
     pub floaters: crate::floaters::Floaters,
+    /// Round 32 (U6): the inventory as last read for the item floaters (when, item ID -> count), and the head's
+    /// source last logged (U1).
+    held_items: Option<(Instant, HashMap<u32, u32>)>,
+    head_logged: String,
     /// Round 25 (H2): Wizard101's quest picker (picker.rs) while one NPC's events ask for several conversations.
     picker: Option<crate::picker::Picker>,
     /// The picker's rows follow the mouse once it moves (else the controller's focus row is lit).
@@ -243,7 +253,6 @@ pub struct Book {
     /// shut), whether a copy of the world from before the map opened exists, whether the map was copied this frame.
     frames: u64,
     world_ready: bool,
-    map_shot: bool,
     /// The Equipment Sets page: every character's saved sets (character name, set), the file they are kept in
     /// (next to w101_orbs.ini), and the set being put on: its name and the (slot, item) equips still to make, one
     /// per frame, as Elden Ring's Equipment menu makes them one at a time.
@@ -413,6 +422,8 @@ impl Book {
             map_bosses_all: false,
             popups: Default::default(),
             floaters: Default::default(),
+            held_items: None,
+            head_logged: String::new(),
             picker: None,
             picker_mouse: false,
             picker_pinned: false,
@@ -453,7 +464,6 @@ impl Book {
             last_frame: Instant::now(),
             frames: 0,
             world_ready: false,
-            map_shot: false,
             gear: Vec::new(),
             gear_path: None,
             gear_queue: None,
@@ -552,7 +562,6 @@ impl Book {
     /// bookmap setting.
     pub fn capture(&mut self, render: &mut dyn RenderContext, enabled: bool) {
         self.frames += 1;
-        self.map_shot = false;
         if !enabled {
             self.world_ready = false;
             return;
@@ -564,13 +573,7 @@ impl Book {
                     self.world_ready = true;
                 }
             }
-            // Once the map is closing, the last copy of it stays (the closing map is not copied).
-            MapState::Open if self.map_leaving.is_none() && self.after_map.is_none() => {
-                if let Some(id) = render.capture_screen(1) {
-                    self.textures.set(pages::MAP_PICTURE, id, [1.0, 1.0]);
-                    self.map_shot = true;
-                }
-            }
+            // Round 32 (U4): Elden Ring's map is no longer copied onto the page (see `draw`'s map_picture).
             _ => {}
         }
     }
@@ -865,6 +868,21 @@ impl Book {
             .find(|e| e.0 == model && (e.1[0] - p[0]).abs() + (e.1[1] - p[1]).abs() + (e.1[2] - p[2]).abs() < 0.05)
             .and_then(|e| nameplates::head(e.0, e.1, e.2, e.3))
             .or_else(|| nameplates::head(model, p, 0.0, None));
+        // Round 32 (U1): the player's own head, from the posed model box; without one, a seated rider's head over
+        // the rider's position on Torrent (RIDER_HEAD) or the round 31 standing height.
+        let riding = game::event_flag(crate::prompt::RIDING_FLAG) == Some(true);
+        let (head, source) = match game.player_head() {
+            Some(h) => (Some(h), "model box"),
+            None if riding => (Some(RIDER_HEAD), "riding, no model box: seated head"),
+            None => (None, "on foot, no model box: 1.75 m"),
+        };
+        let note = format!("{:.1} m ({source}){}", head.unwrap_or(1.75), if riding { " on Torrent" } else { "" });
+        if note != self.head_logged {
+            tracing::info!("floaters: player head {note}");
+            self.head_logged = note;
+        }
+        self.floaters.set_head(head);
+        self.item_floaters(game, cx);
         let stats = cx.stats.filter(|_| cx.gameplay);
         self.floaters.observe(stats.map(|s| (s.hp, s.max_hp)), stats.and_then(|s| s.level).map(|l| l.1), &creatures,
                               &anchor, camera.player);
@@ -872,6 +890,37 @@ impl Book {
         let visible = cx.gameplay && !self.blocking() && self.map == MapState::Idle;
         let draw = ui.get_background_draw_list();
         self.floaters.draw(&draw, &self.textures, &self.fonts, &camera, ui.io().display_size, visible);
+    }
+
+    /// Round 32 (U6, Ryan: "enemy item drops: float the item name over the player's head like the runes"): every
+    /// ITEM_POLL s the inventory is read; an item whose count went up floats its name over the player. Not while a
+    /// shop, dialogue or the book is up (a buy is not a drop), not for the flasks (drinking turns a filled flask
+    /// into an empty one, a new ID), and not when more than ITEM_BURST kinds come at once (a sheet read after a
+    /// load, not a pickup).
+    fn item_floaters(&mut self, game: &game::Game, cx: &Context) {
+        if self.held_items.as_ref().is_some_and(|(t, _)| t.elapsed().as_secs_f32() < ITEM_POLL) {
+            return;
+        }
+        let Some(sheet) = game.sheet() else { return };
+        let now: HashMap<u32, u32> = sheet.items.iter().chain(&sheet.key_items)
+            .filter(|(id, _)| !(id >> 28 == 4 && (1000..1076).contains(&(id & 0x0FFF_FFFF))))
+            .fold(HashMap::new(), |mut m, (id, n)| { *m.entry(*id).or_insert(0) += n; m });
+        let quiet = cx.gameplay && !self.blocking() && self.shop_trade.is_none();
+        if let Some((_, before)) = self.held_items.as_ref().filter(|_| quiet) {
+            let gained: Vec<(u32, u32)> = now.iter()
+                .filter_map(|(id, n)| { let b = before.get(id).copied().unwrap_or(0); (*n > b).then_some((*id, n - b)) })
+                .collect();
+            if !gained.is_empty() && gained.len() <= ITEM_BURST && !before.is_empty() {
+                self.load_names();
+                let names = self.names.as_ref().expect("loaded");
+                for (id, n) in gained {
+                    let name = names.item(id);
+                    tracing::info!("floaters: item {id:#x} {name} x{n} came into the inventory");
+                    self.floaters.item(id, n, name);
+                }
+            }
+        }
+        self.held_items = Some((Instant::now(), now));
     }
 
     /// Round 30: floaters for the preview renderer (floaters::Floaters::preview).
@@ -1653,7 +1702,9 @@ impl Book {
             self.last_os = os;
         }
         // Round 31 (SH3): the shop window's cursor moves on the right stick as the book's wand does.
-        let shop = self.shop.is_some();
+        // Round 32 (U3, Ryan: "the right stick moves the cursor in every menu where the mouse cursor works"): so do
+        // the dialogue box's and the quest picker's (each locks the camera and draws the wand cursor).
+        let shop = self.shop.is_some() || self.dialogue.is_some() || self.picker.is_some();
         if shop || (self.open && (self.tab != Tab::Map || self.map == MapState::Idle)) {
             // The map page: either stick moves the cursor over the map (the map itself stays still). Round 19 A5:
             // every other page: the right stick moves the wand (the camera is locked while the book is open; the
@@ -1706,10 +1757,14 @@ impl Book {
             settings,
             map_opening: matches!(self.map, MapState::Opening(_)) || self.map_on_open,
             map_open: map_view,
-            map_picture: (map_view && self.world_ready && self.map_shot).then(|| {
-                let [w, h] = ui.io().display_size;
-                w / h.max(1.0)
-            }),
+            // Round 32 (U4, Ryan: "switching from the W101 map to the Elden Ring map flickers fast with a solid colour
+            // and the mouse can't move; I was trying to remove a waypoint"): the map is shown live through the page's
+            // window (the hole), never as a copy drawn into the page. The copy (rounds 19-31) was the screen
+            // captured each frame and drawn scaled into the page's frame, so Elden Ring's own cursor and markers
+            // were not where the mouse was (a click on a waypoint in the copy landed elsewhere on the real map), and
+            // any frame Elden Ring's map screen didn't redraw left the copy holding the overlay itself. Through the
+            // hole the map is the real one at its own scale: what the cursor points at is what Elden Ring clicks.
+            map_picture: None,
             position: cx.position,
             achieved: &self.achieved,
             gear_sets: &gear_sets,
@@ -2279,7 +2334,10 @@ impl Book {
             return;
         }
         let key = |k: Key| ui.is_key_pressed_no_repeat(k);
-        let click = hits.button.filter(|_| pointer.clicked).and_then(|b| talk::button(&window.nodes[b].name));
+        // Round 32 (U3): A / Enter clicks the button under the cursor (the right stick moves it), as in the book;
+        // anywhere else it is Next / Accept as before.
+        let a_press = pressed & input::A != 0 || key(Key::Enter);
+        let click = hits.button.filter(|_| pointer.clicked || a_press).and_then(|b| talk::button(&window.nodes[b].name));
         let press = click.or_else(|| {
             if pressed & input::A != 0 || key(Key::Enter) || key(Key::Space) || key(Key::E) {
                 Some(if d.choosing() { Press::Accept } else { Press::Next })
@@ -2577,7 +2635,9 @@ impl Book {
             return;
         }
         let key = |k: Key| ui.is_key_pressed_no_repeat(k);
-        let button = hits.button.filter(|_| pointer.clicked).map(|b| window.nodes[b].name.as_str());
+        // Round 32 (U3): A / Enter on a button under the cursor clicks it (a row under it is picked below).
+        let a_press = pressed & input::A != 0 || key(Key::Enter);
+        let button = hits.button.filter(|_| pointer.clicked || a_press).map(|b| window.nodes[b].name.as_str());
         let rows = p.rows.len();
         let mut pick = hover.filter(|_| pointer.clicked);
         let mut cancel = matches!(button, Some("btnRight") | Some("btnExit"));
