@@ -2360,7 +2360,7 @@ impl Book {
         if let Some(shop) = self.shop.as_mut() {
             if let Some((line, _)) = shop.list(&self.stock).get(shop.chosen) {
                 let item = line.item;
-                shop.sold.push(item);
+                shop.bought(item);
             }
         }
     }
@@ -2391,7 +2391,7 @@ impl Book {
                     // a sale shows nothing either; the item just leaves the list.
                     match result {
                         Ok(_) if !trade.sell => {
-                            shop.sold.push(trade.line.item);
+                            shop.bought(trade.line.item);
                             shop.note = None;
                         }
                         Ok(_) => {

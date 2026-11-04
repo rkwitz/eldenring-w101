@@ -147,23 +147,30 @@ pub struct Shop {
     pub read_at: Option<Instant>,
     /// A line under the BUY / SELL button for a while (sold, not enough runes; a buy shows SOLD instead).
     pub note: Option<(String, Instant)>,
-    /// Round 30 (SH1): the items bought while the window is up: chosen again, the picture box says SOLD.
-    pub sold: Vec<u32>,
-    /// Round 31 (SH4): every item the player has (inventory and equipped, from the character sheet). A buy row of
-    /// one of them is SOLD too, so the sold state lasts past the window and the session (Shop.sold only covers the
-    /// second between the event giving the item and the next sheet read).
-    pub owned: Vec<u32>,
+    /// Round 30 (SH1): items just bought and when: the picture box says SOLD. Round 31 (SH4, Ryan: "the sold
+    /// should appear for a second, and then it should return to the item picture; you should be able to buy it
+    /// multiple times"): only for SOLD_SECONDS, then the picture is back and it can be bought again.
+    pub sold: Vec<(u32, Instant)>,
 }
+
+/// Round 31 (SH4): how long SOLD shows after a buy.
+pub const SOLD_SECONDS: f32 = 1.0;
 
 impl Shop {
     pub fn new(request: Option<usize>, title: String) -> Shop {
         Shop { request, title, selling: false, cat: 0, page: 0, chosen: 0, opened: Instant::now(), held: Vec::new(),
-               runes: 0, read_at: None, note: None, sold: Vec::new(), owned: Vec::new() }
+               runes: 0, read_at: None, note: None, sold: Vec::new() }
     }
 
-    /// Round 31 (SH4): whether buy row item `item` is already the player's (bought now or held).
+    /// Round 31 (SH4): whether buy row item `item` was bought in the last SOLD_SECONDS (SOLD shown).
     pub fn is_sold(&self, item: u32) -> bool {
-        self.sold.contains(&item) || self.owned.contains(&item)
+        self.sold.iter().any(|(i, at)| *i == item && at.elapsed().as_secs_f32() < SOLD_SECONDS)
+    }
+
+    /// Round 31 (SH4): a buy of `item` just went through.
+    pub fn bought(&mut self, item: u32) {
+        self.sold.retain(|(i, at)| *i != item && at.elapsed().as_secs_f32() < SOLD_SECONDS);
+        self.sold.push((item, Instant::now()));
     }
 
     /// Round 31 (SH7): a sale went through: the item leaves the Sell list at once (the next sheet read agrees),
@@ -175,7 +182,6 @@ impl Shop {
                 self.held.remove(i);
             }
         }
-        self.owned.retain(|o| *o != item);
     }
 
     /// The rows of the open tab and category.
@@ -196,7 +202,6 @@ impl Shop {
             .filter(|(i, id)| (*i < 6 || (12..16).contains(i)) && **id >= 0)
             .map(|(i, id)| if i < 6 { *id as u32 } else { 0x1000_0000 | *id as u32 })
             .collect();
-        self.owned = sheet.items.iter().filter(|i| i.1 > 0).map(|i| i.0).chain(equipped.iter().copied()).collect();
         let mut held: Vec<(u32, u32)> = Vec::new();
         for (id, n) in &sheet.items {
             if !stock.sell.contains_key(id) || equipped.contains(id) || *n == 0 {
