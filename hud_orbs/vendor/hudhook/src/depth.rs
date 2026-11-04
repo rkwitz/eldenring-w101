@@ -987,7 +987,7 @@ pub fn report_check(ok: bool) {
             BOUNDARY.store(b as u32, Ordering::Relaxed);
         },
         // Round 31 (W1): back to the boundary that held before, not END copies. Round 30's END copies held an
-        // empty depth (value 0.000000, "scene 10000.0 m") in 157 of 365 tag lines and in every player miss while
+        // empty depth (value 0.000000, "scene 10000.0 m") in 184 of 419 tag lines and in every player miss while
         // Ryan stood still (5 of 5), and each such frame shows every wisp and tag behind every wall; boundary 3 had
         // none in 21. It is watched like a lock (a failing watch starts the trials again).
         _ if c.rounds >= 3 && c.last_good.is_some_and(|k| k < c.boundaries) => {
