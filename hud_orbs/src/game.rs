@@ -44,6 +44,8 @@ pub struct Game {
     /// The loaded characters (ChrIns, model), re-read every half second, and the models last logged.
     characters: std::sync::Mutex<(Option<std::time::Instant>, Vec<(usize, u32)>)>,
     models_logged: std::sync::Mutex<Vec<u32>>,
+    /// Round 33 (G3b): how Torrent was last found (or not), logged when it changes.
+    torrent_logged: std::sync::Mutex<String>,
     /// Round 21 (quests Q2): the camera of the last few frames, newest last (`tick_camera`).
     cameras: std::sync::Mutex<std::collections::VecDeque<crate::markers::Camera>>,
     /// Round 22 (H5): the last camera sample taken, when, and since when samples have been refused (`tick_camera`).
@@ -64,6 +66,7 @@ impl Game {
             equip_gear: scan_unique(&sections, EQUIP_GEAR).map(|at| at - EQUIP_GEAR_BACK),
             characters: Default::default(),
             models_logged: Default::default(),
+            torrent_logged: Default::default(),
             cameras: Default::default(),
             camera_guard: Default::default(),
             rebase_refs: Default::default(),
@@ -298,21 +301,13 @@ impl Game {
         local.then_some(([at[0], at[1] + max[1], at[2]], false))
     }
 
-    /// Round 29 (T1): Torrent (character c8000 in WorldChrMan's summon/buddy ChrSet, which holds spirit ashes and
-    /// Torrent) fading out (`out`) or back in, through his ChrIns base_transparency_modifier (negative fades the base
+    /// Round 29 (T1): Torrent (found by fade_torrent_chr, fixed in round 33) fading out (`out`) or back in,
+    /// through his ChrIns base_transparency_modifier (negative fades the base
     /// transparency to 0, positive back to 1; the game's own fade flags set -1 / 1). Returns his ChrIns.
     pub fn fade_torrent(&self, out: bool) -> Option<usize> {
-        use eldenring::cs::{ChrIns, ChrSet, ChrSetEntry, WorldChrMan};
-        use std::mem::{offset_of, size_of};
-        let wcm = read::<usize>(self.world_chr_man)?;
-        let set = wcm + offset_of!(WorldChrMan, summon_buddy_chr_set);
-        let capacity = read::<u32>(set + offset_of!(ChrSet<ChrIns>, capacity))? as usize;
-        let entries = read::<usize>(set + offset_of!(ChrSet<ChrIns>, entries))?;
-        let entry = size_of::<ChrSetEntry<ChrIns>>();
-        let bytes = read_bytes(entries, capacity.min(256) * entry)?;
-        let chr = bytes.chunks_exact(entry).map(|e| usize::from_le_bytes(e[..8].try_into().unwrap()))
-            .filter(|c| *c >= 0x10000 && *c % 8 == 0)
-            .find(|c| read::<u32>(c + offset_of!(ChrIns, character_id)) == Some(8000))?;
+        use eldenring::cs::ChrIns;
+        use std::mem::offset_of;
+        let chr = self.fade_torrent_chr()?;
         let at = chr + offset_of!(ChrIns, base_transparency_modifier);
         read::<f32>(at)?;
         unsafe { (at as *mut f32).write_volatile(if out { -1.0 } else { 1.0 }) };
@@ -338,19 +333,55 @@ impl Game {
         read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics)).filter(|p| *p >= 0x10000)
     }
 
-    /// Round 32: Torrent's ChrIns (character id 8000 in summon_buddy_chr_set), None when he isn't loaded.
+    /// Torrent's ChrIns, None when he isn't loaded. Round 33 (G3b): round 32 looked only for character id 8000 in
+    /// summon_buddy_chr_set and never found him ("Torrent None" / "no Torrent loaded" on every warp). Ryan's logs
+    /// never list a model 8000 at all: every "characters: N loaded, models [...]" line of rounds 30-33 lists 8002
+    /// instead (also while riding), and 8002 is the one id there without its own chr\c8002.chrbnd (Torrent's model
+    /// is c8000). So Torrent's ChrIns says 8002 (or 8000 in other versions). Looked up, in order: the player's ride
+    /// module `last_mounted` (set once he has mounted this session), the summon/buddy set, then every character the
+    /// game lists (the cached by-distance / open-field / map-set list), any of them with id 8000..=8009. What was found is logged.
     fn fade_torrent_chr(&self) -> Option<usize> {
-        use eldenring::cs::{ChrIns, ChrSet, ChrSetEntry, WorldChrMan};
+        use eldenring::cs::{CSChrRideModule, ChrIns, ChrInsModuleContainer, ChrSet, ChrSetEntry, WorldChrMan};
         use std::mem::{offset_of, size_of};
-        let wcm = read::<usize>(self.world_chr_man)?;
-        let set = wcm + offset_of!(WorldChrMan, summon_buddy_chr_set);
-        let capacity = read::<u32>(set + offset_of!(ChrSet<ChrIns>, capacity))? as usize;
-        let entries = read::<usize>(set + offset_of!(ChrSet<ChrIns>, entries))?;
-        let entry = size_of::<ChrSetEntry<ChrIns>>();
-        let bytes = read_bytes(entries, capacity.min(256) * entry)?;
-        bytes.chunks_exact(entry).map(|e| usize::from_le_bytes(e[..8].try_into().unwrap()))
-            .filter(|c| *c >= 0x10000 && *c % 8 == 0)
-            .find(|c| read::<u32>(c + offset_of!(ChrIns, character_id)) == Some(8000))
+        let horse = |c: usize| c >= 0x10000 && c % 8 == 0
+            && read::<u32>(c + offset_of!(ChrIns, character_id)).is_some_and(|id| (8000..=8009).contains(&id))
+            && crate::probe::rtti(c).is_some_and(|n| n.ends_with("Ins"));
+        let mounted = self.player()
+            .and_then(|p| read::<usize>(p + offset_of!(ChrIns, modules)))
+            .and_then(|m| read::<usize>(m + offset_of!(ChrInsModuleContainer, ride)))
+            .filter(|r| *r >= 0x10000)
+            .and_then(|r| read::<usize>(r + offset_of!(CSChrRideModule, last_mounted)))
+            .filter(|c| horse(*c));
+        let buddy = || {
+            let wcm = read::<usize>(self.world_chr_man)?;
+            let set = wcm + offset_of!(WorldChrMan, summon_buddy_chr_set);
+            let capacity = read::<u32>(set + offset_of!(ChrSet<ChrIns>, capacity))? as usize;
+            let entries = read::<usize>(set + offset_of!(ChrSet<ChrIns>, entries))?;
+            let entry = size_of::<ChrSetEntry<ChrIns>>();
+            let bytes = read_bytes(entries, capacity.min(256) * entry)?;
+            bytes.chunks_exact(entry).map(|e| usize::from_le_bytes(e[..8].try_into().unwrap())).find(|c| horse(*c))
+        };
+        let (chr, how) = match mounted {
+            Some(c) => (Some(c), "the player's ride module (last mounted)"),
+            None => match buddy() {
+                Some(c) => (Some(c), "the summon/buddy set"),
+                None => {
+                    let list = self.characters.lock().unwrap_or_else(|e| e.into_inner()).1.clone();
+                    (list.into_iter().map(|(c, _)| c).find(|c| horse(*c)), "the loaded characters")
+                },
+            },
+        };
+        let note = match chr {
+            Some(c) => format!("Torrent found in {how}: character id {:?}, {}",
+                               read::<u32>(c + offset_of!(ChrIns, character_id)), crate::probe::rtti(c).unwrap_or_default()),
+            None => "Torrent not found (no character 8000..8009 mounted, in the summon/buddy set or loaded)".into(),
+        };
+        let mut logged = self.torrent_logged.lock().unwrap_or_else(|e| e.into_inner());
+        if *logged != note {
+            tracing::info!("{note}");
+            *logged = note;
+        }
+        chr
     }
 
     /// Round 32: a character's yaw `a` (radians; its quaternion is a turn about +y by `a`, and the character faces
@@ -1442,14 +1473,15 @@ pub struct ActionButton {
     pub text_id: i32,
 }
 
+static PARAM_FILES: std::sync::Mutex<Vec<(Vec<u8>, usize)>> = std::sync::Mutex::new(Vec::new());
+
 /// Round 25 (H3): the data address of row `row` of the param table named `name` (its PARAMDEF type), found through
 /// SoloParamRepository's holders as probe.rs finds MenuOffscrRendParam; tables are looked up once and kept.
 fn param_row(name: &[u8], row: u32) -> Option<usize> {
     use eldenring::cs::{ParamResCap, SoloParamRepository};
     use eldenring::fd4::FD4ParamResCap;
     use std::mem::offset_of;
-    static FILES: std::sync::Mutex<Vec<(Vec<u8>, usize)>> = std::sync::Mutex::new(Vec::new());
-    let mut files = FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut files = PARAM_FILES.lock().unwrap_or_else(|e| e.into_inner());
     let file = match files.iter().find(|f| f.0 == name) {
         Some(f) => f.1,
         None => {
@@ -1477,17 +1509,28 @@ fn param_row(name: &[u8], row: u32) -> Option<usize> {
             file
         }
     };
-    let header = read_bytes(file, 0x40)?;
+    param_rows_of(file).into_iter().find(|(id, _)| *id == row).map(|(_, at)| at)
+}
+
+/// Round 33 (G1): every row of the param table named `name`: (row id, data address).
+pub fn param_rows(name: &[u8]) -> Vec<(u32, usize)> {
+    param_row(name, u32::MAX);
+    let files = PARAM_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    files.iter().find(|f| f.0 == name).map_or(Vec::new(), |f| param_rows_of(f.1))
+}
+
+fn param_rows_of(file: usize) -> Vec<(u32, usize)> {
+    let Some(header) = read_bytes(file, 0x40) else { return Vec::new() };
     let rows = u16::from_le_bytes(header[0x0A..0x0C].try_into().unwrap()) as usize;
     let format = header[0x2D];
     let wide = format & 0x04 != 0;
     let extended = wide || (format & 0x01 != 0 && format & 0x02 != 0);
     let first = 0x30 + if extended { 0x10 } else { 0 };
     let entry = if wide { 24 } else { 12 };
-    let table = read_bytes(file + first, rows.min(20_000) * entry)?;
-    table.chunks_exact(entry).find(|d| u32::from_le_bytes(d[0..4].try_into().unwrap()) == row).map(|d| {
+    let Some(table) = read_bytes(file + first, rows.min(20_000) * entry) else { return Vec::new() };
+    table.chunks_exact(entry).map(|d| {
         let offset = if wide { u64::from_le_bytes(d[8..16].try_into().unwrap()) as usize }
                      else { u32::from_le_bytes(d[4..8].try_into().unwrap()) as usize };
-        file + offset
-    })
+        (u32::from_le_bytes(d[0..4].try_into().unwrap()), file + offset)
+    }).collect()
 }

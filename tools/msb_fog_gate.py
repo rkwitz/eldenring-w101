@@ -76,8 +76,18 @@ MIST_PART = "AEG030_530_9102"
 MIST_PART_ID = 9402
 # Round 27 (A6): Elden Ring's fog gate (see above): (part, header id, entity, x across the archway) in the street's
 # own frame at depth FOG_WALL_Z (the plane is at z -15.7, the archway's mouth at -10.91), turned with the street.
-FOG_WALL_MODEL = "AEG099_001"
-FOG_WALLS = [("AEG099_001_9103", 9403, 1042361892, -2.0), ("AEG099_001_9104", 9404, 1042361893, 2.0)]
+# Round 33 (G8, Ryan: "after lifting the gate the fog wall blocks the player from walking through"): AEG099_001 is a
+# solid wall. Its aeg099_001_l.geomhkxbnd holds a Havok physics scene (hknpPhysicsSceneData with bodies and shapes),
+# and vanilla never walks through it: common_func 9005800 makes the player pass with the traverse animation 60060
+# (2004[14] 10000 60060) instead. Event 1042362860 enables our two copies as soon as the player stands in the gateway
+# (FOG_SIDE_NEAR is 0.5 m behind the door), 0.10 m in front of him, so the gate is blocked both ways. The fog gates now
+# use AEG099_990: no mesh, no collision file in asset\aeg\aeg099, AssetEnvironmentGeometryParam 99990 with no special
+# flags, used by vanilla in every legacy dungeon (m10-m16, m20, m21, m35, m40: 100+ parts in 40 MSBs), and its dummy
+# 100 has the same frame as AEG099_001's fog dummy 101 (origin, forward -z, up +y), so the SFX 3 sits where it did
+# (emevd.FOG_WALL_DUMMY 100). fog_walls_no_collision renames the round 27 parts and swaps their model in place.
+FOG_WALL_MODEL = "AEG099_990"
+FOG_WALL_OLD_MODEL = "AEG099_001"
+FOG_WALLS = [("AEG099_990_9103", 9403, 1042361892, -2.0), ("AEG099_990_9104", 9404, 1042361893, 2.0)]
 FOG_WALL_Z, FOG_WALL_Y = -15.2, 0.02  # round 27 (street frame); round 28 places them by the door instead
 # Round 28 (W3): the real gate and the fog's place in its frame (metres out of the door, toward the street).
 DOOR = "AEG110_064_1000"
@@ -151,8 +161,33 @@ def fog_side_region(lists, door_position, door_yaw):
           f"{tuple(round(v, 2) for v in centre)} rot {door_yaw:.2f} box {size}")
 
 
+def fog_walls_no_collision(lists):
+    """Round 33 (G8): the fog gate parts AEG099_001_9103 / 9104 (same part ids) become FOG_WALLS' AEG099_990 parts in
+    place: renamed, model switched, model instance counts updated. Does nothing once done."""
+    from msb_floor import _set_name, add_model
+    parts = _list(lists, "PARTS_PARAM_ST")
+    models = _list(lists, "MODEL_PARAM_ST").entries
+    for name, part_id, _, _ in FOG_WALLS:
+        old = FOG_WALL_OLD_MODEL + name[len(FOG_WALL_MODEL):]
+        k = next((k for k, e in enumerate(parts.entries) if entry_name(e) == old), None)
+        if k is None:
+            continue
+        e = bytearray(parts.entries[k])
+        assert struct.unpack_from("<i", e, 0x08)[0] == part_id
+        _set_name(e, name)
+        struct.pack_into("<i", e, 0x14, add_model(lists, FOG_WALL_MODEL, FOG_WALL_OLD_MODEL))
+        parts.entries[k] = bytes(e)
+        print(f"{old} -> {name} (model {FOG_WALL_MODEL}, no collision)")
+    for i, m in enumerate(models):
+        if entry_name(m) in (FOG_WALL_MODEL, FOG_WALL_OLD_MODEL):
+            m = bytearray(m)
+            struct.pack_into("<i", m, 0x18, sum(struct.unpack_from("<i", x, 0x14)[0] == i for x in parts.entries))
+            models[i] = bytes(m)
+
+
 def place_fog(raw):
     header, lists = read_msb(raw)
+    fog_walls_no_collision(lists)
     put_copy(lists, FOG_PART, FOG_MODEL, FOG_PART_ID, M18_POSITION, M18_ROTATION)
     parts = _list(lists, "PARTS_PARAM_ST")
     door = parts.entries[find(parts, DOOR)]

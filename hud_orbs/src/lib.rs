@@ -45,6 +45,7 @@ mod shop;
 mod npcturn;
 mod ridewarp;
 mod cages;
+mod weather;
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -159,6 +160,8 @@ struct Orbs {
     ridewarp: ridewarp::RideWarp,
     cages: cages::Cages,
     ride_press: cages::RidePress,
+    /// Round 33 (G1): Elden Ring's wind-blown leaves off on Unicorn Way.
+    weather: weather::Weather,
 }
 
 /// Frame timing written to w101_orbs.log every few seconds, to see what the overlay costs the game.
@@ -246,6 +249,7 @@ impl Orbs {
             ridewarp: ridewarp::RideWarp::default(),
             cages: cages::Cages::default(),
             ride_press: cages::RidePress::default(),
+            weather: weather::Weather::default(),
         }
     }
 
@@ -377,6 +381,7 @@ impl ImguiRenderLoop for Orbs {
         // grace warp in Ryan's 00:30 log), then the block origin.
         let street = game.and_then(questhelper::player_msb_now).or_else(|| position.and_then(questhelper::player_msb));
         self.music.frame(game, stats, position, street, self.focused);
+        self.weather.frame(street.is_some());
         self.sidewalk.frame(game.is_some() && stats.is_some(), street, position);
         let settings_path = self.folder.join("w101_orbs.ini");
         let mut cx = book::Context {

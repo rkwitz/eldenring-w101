@@ -603,7 +603,9 @@ def quest_window(d, event_id=QUEST_WINDOW_EVENT, window=WINDOW_ENTITY, assigned=
 
 FOG_WALL_EVENT = 1042362860
 FOG_WALLS = (1042361892, 1042361893)  # msb_fog_gate.FOG_WALLS: AEG099_001 copies across the Commons gateway
-FOG_WALL_DUMMY, FOG_WALL_SFX = 101, 3  # as vanilla m18 event 18000870 -> common_func 9005811 (18001850, SFX 3)
+FOG_WALL_DUMMY, FOG_WALL_SFX = 100, 3  # vanilla m18 event 18000870 -> common_func 9005811 (18001850, dummy 101, SFX 3)
+# Round 33 (G8): the fog gates are AEG099_990 now (msb_fog_gate.FOG_WALL_MODEL, no collision); its dummy 100 is
+# AEG099_001's dummy 101 (same frame).
 FOG_PLANES = (1042361894, 1042361895)  # msb_fog_gate.FOG_ENTITIES: our mist plane aeg030_530 and the phantom-wall copy
 FOG_SIDE = 1042362702  # msb_fog_gate.FOG_SIDE_ENTITY: box over the street side of the graveyard exit door
 

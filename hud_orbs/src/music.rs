@@ -11,7 +11,7 @@
 //!   The battle track comes from Root.wad `Sound/Combat1Test.mp3` when the classic copy was never streamed in.
 //!
 //! The music plays while the player is in the street's tile (questhelper::player_msb, which also covers the rooms
-//! under the street). Combat: an alive Unicorn Way creature (nameplates::CREATURES) within FIGHT_RANGE while the
+//! under the street) and, since round 33 (G10), through the graveyard gate (questhelper::on_unicorn_way). Combat: an alive Unicorn Way creature (nameplates::CREATURES) within FIGHT_RANGE while the
 //! player's stamina drops (Ryan: "when your stamina starts being actually used"), the player loses HP, or such a
 //! creature loses HP. Boss: Elden Ring's boss bar is up for one of our bosses
 //! (GameDataMan, eldenring crate layout), or a boss creature is alive near the player in a room. After `calm`
@@ -291,17 +291,25 @@ impl Music {
             }
         }
         let msb = street.or(held.map(|h| h.0));
-        let here = self.enabled && game.is_some() && msb.is_some() && !self.quit_latched;
+        // Round 33 (G10): only through the graveyard gate (questhelper::on_unicorn_way), not in the exit tunnel.
+        let gate = msb.map(crate::questhelper::gate_frame);
+        let past_gate = msb.is_some_and(crate::questhelper::on_unicorn_way);
+        let here = self.enabled && game.is_some() && past_gate && !self.quit_latched;
         let why_off = if here {
             String::new()
         } else {
             format!("enabled {}, game {}, position {:?}, on the street tile {}, last street position {:?} s ago, \
-                     quit-out byte {quit}, quit-out {}", self.enabled, game.is_some(), position.map(|p| (p.1, p.2)),
-                    street.is_some(), self.last_msb.map(|(_, t)| (now - t).as_secs()), self.quit_latched)
+                     through the graveyard gate {past_gate}, quit-out byte {quit}, quit-out {}",
+                    self.enabled, game.is_some(), position.map(|p| (p.1, p.2)), street.is_some(),
+                    self.last_msb.map(|(_, t)| (now - t).as_secs()), self.quit_latched)
         };
         if why_off != self.why_off {
             if !why_off.is_empty() {
-                tracing::info!("music: not playing ({why_off})");
+                tracing::info!("music: not playing ({why_off}; MSB {:?}, gate frame {:?})",
+                               msb.map(|p| p.map(|v| v.round())), gate.map(|g| g.map(|v| (v * 10.0).round() / 10.0)));
+            } else {
+                tracing::info!("music: on Unicorn Way at MSB {:?} (gate frame {:?}: across, up, out of the graveyard)",
+                               msb.map(|p| p.map(|v| v.round())), gate.map(|g| g.map(|v| (v * 10.0).round() / 10.0)));
             }
             self.why_off = why_off;
         }

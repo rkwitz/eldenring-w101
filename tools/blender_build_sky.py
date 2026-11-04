@@ -129,7 +129,17 @@ FLAT_LIGHTING = True
 # linear with a 1.3/1.1 boost), which decodes about 2.5x darker on average (street 2.5, room 2.6, garden 2.25,
 # interiors 2.5), so both lights are 2.5x what they were (1.5, 0.8) to keep the zone as bright as Ryan last saw it.
 AMBIENT = 2.6  # 3.3 "still too bright" (2026-10-27 round 9, ~21% down); 3.75 "a little too bright" (2026-10-27); 0.5 looked very dark (2026-10-23), 0.8 still "like lighting is off" (2026-10-25)
-OVERHEAD = 1.4  # 1.75 with AMBIENT 3.3, 2.0 with AMBIENT 3.75. A soft, shadowless white light straight down (directional light 1), 0 = none
+# Round 33 (G4, Ryan's same-spot screenshots round33/ref/2 (W101) and 3 (ours)): measured on the near flagstone path
+# (texture WC_Street30, sRGB mean 117,112,91): W101 shows 140,134,71, we showed 220,206,173. In linear light that is
+# a gain of 4.0 (all channels) for us against 1.49 / 1.31 / 0.61 for W101: ours 2.7x too bright on the ground and
+# colourless. W101's zone NIF (WC_Z06_Unicorn_Way.nif) lights the street with a warm key, diffuse 0.984/0.906/0.659
+# (dimmer 1.5; Gamebryo lights in gamma space, so 0.965/0.805/0.400 in linear light), and a cool fill 0.533/0.549/0.835.
+# The far wall (only the hemisphere ambient reaches a vertical face under a straight-down light) gives the ambient's
+# share: 0.42 of the 4.0, so 1 unit of OVERHEAD gave the ground 2.56. Ground target R 1.49 = 0.42 + 2.56 x O x 0.965:
+# O = 0.43, which predicts the path at 140,127,84 (W101 140,134,71). Was 1.4 white ("1.75 with AMBIENT 3.3, 2.0 with
+# AMBIENT 3.75"). A soft, shadowless light straight down (directional light 1), 0 = none.
+OVERHEAD = 0.43
+OVERHEAD_COLOUR = (0.965, 0.805, 0.400)
 # Elden Ring's eye adaptation (auto exposure) re-exposes the screen by what fills the view: with a big glowing sky it
 # darkened everything, and the same glow looked different by where you looked. FIXED_EXPOSURE turns it off in every
 # file written (the tone map keeps each light set's own ToneMap-Exposure, as vanilla default.gparam does). NO_BLOOM
@@ -154,7 +164,7 @@ def remove_fog():
         data, dcx_type = decompress(path)
         new, changed = gparam_fog.remove_fog(data)
         if FLAT_LIGHTING:
-            new, lit = gparam_fog.flat_lighting(new, AMBIENT, OVERHEAD)
+            new, lit = gparam_fog.flat_lighting(new, AMBIENT, OVERHEAD, OVERHEAD_COLOUR)
             changed += lit
         if FIXED_EXPOSURE:
             new, fixed = gparam_fog.fixed_exposure(new)

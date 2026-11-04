@@ -48,7 +48,9 @@ KEEP = ("AEG030_5",  # our own assets: street, sky, rooms, garden, windows (aeg0
         # round 24/25: the Commons gate fog copies (msb_fog_gate.py) and the NPC seats (msb_npc_seats.py)
         "AEG099_230_9100", "AEG092_300_9101", "AEG221_605_9500", "AEG201_043_9501",
         # round 27/28: the two Elden Ring fog gates (msb_fog_gate.py); round 27 sank them by mistake
-        "AEG099_001_9103", "AEG099_001_9104")
+        "AEG099_001_9103", "AEG099_001_9104",
+        # round 33 (G8): the same fog gates on the collision-free model AEG099_990
+        "AEG099_990_9103", "AEG099_990_9104")
 MAP_PIECE, COLLISION, ASSET = 0, 5, 13
 DUMMY_ASSET, DUMMY_ENEMY = 9, 10  # corpses, skulls and other set dressing placed as dummies
 SFX_REGIONS = (5, 6)  # SFX and WindSFX regions (embers, ash, mist)

@@ -104,8 +104,12 @@ def build_classic():
     print(f"Building from {OBJ.name}")
     positions, uvs, faces = flver_build.parse_obj(OBJ)
     walls = [f for f in faces if backdrop(positions, f)]
-    # Your own edit decides for itself what's left of the archway; only the converted original gets it cut.
-    cut = (lambda f: False) if OBJ == EDITED else (lambda f: tunnel_inside(positions, f))
+    # Round 33 (G9, Ryan: "from the graveyard side of the gate, W101 street models poke through the wall"): the cut
+    # used to be skipped for your own edit ("it decides for itself what's left of the archway"), but your edit
+    # (WC_Z06_Unicorn_Way_Classic_edited.obj, 2026-10-21) still has 69 triangles inside the archway box (30 grass,
+    # 30 street, 9 WC_Wall_01), the ramp and walls that stick into the Stranded Graveyard's lift landing behind the
+    # door. Both OBJs get it cut now.
+    cut = lambda f: tunnel_inside(positions, f)
     tunnel = [f for f in faces if cut(f)]
     faces = [f for f in faces if not backdrop(positions, f) and not cut(f)]
     print(f"Left out {len(walls)} triangles of the zone's backdrop walls and {len(tunnel)} inside the Commons archway")

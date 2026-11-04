@@ -196,7 +196,14 @@ IDLE = {"c0000": (90100, 0), "c2180": (0, 1), "c2170": (0, 1), "c5330": (30000, 
 # Roundtable Hold's standing Corhyn) stand from first to last frame (head bone 1.54 m, pelvis 0.96, feet 0.10-0.11 at
 # the first, middle and last spline control points; c0000_a9x.anibnd), looped. Diego (Varre's a320_090100), Ugo (Kale
 # a000_000000), Olivia (Rya a329_090100) already stand; Trina's risen a000_030000 is her only upright pose (head 1.22).
-IDLE_BY_SLUG = {"private_connelly": (90101, 1), "ceren_nightchant": (90101, 1)}
+# Round 33 (G11, Ryan: "Connelly starts with his sword planted in the ground, hand on it; after a hit he holds it on
+# his shoulder; make him always stand with the sword on his shoulder"): a345_090101 (and every a345 090xxx whose head
+# is at 1.5 m) has the right hand out at the side at hip height (1.13 m, 0.50 m out): the hand on the planted sword.
+# After a hit the forced loop ends and he falls back to his default idle, animation 0, which the game resolves through
+# his weapon's motion style: of c0000's three default idles (first frame, c0000_a00_lo / c0000_a0x) only a002_000000
+# raises the right hand to the shoulder (R_Hand 1.30 m, R_UpperArm 1.35 m, R_Weapon 1.38 m and 0.28 m forward), while
+# a000_000000 and a003_000000 hang it at 0.87 m. So his idle is now 0, looped, the pose he takes after a hit.
+IDLE_BY_SLUG = {"private_connelly": (0, 1), "ceren_nightchant": (90101, 1)}
 # Round 21 (Q7): characters whose AI is switched off so they stay on their MSB spot (Lady Oriel ran around the maze).
 STAND_STILL = {"lady_oriel"}
 CHARACTER_PART_ID = 9100  # part header 0x08 / name suffix of the first character (<model>_9100..)

@@ -444,7 +444,36 @@ def cage_ride_press(d):
     return build(e, events)
 
 
+def idle_patch(d):
+    """Round 33 (G11): the idle events already in m60_42_36_00.emevd (one per street character: wait a frame, ...,
+    2003[18] ForceAnimation on the character, END) get the animation and loop of Q.IDLE_BY_SLUG / Q.IDLE now, without
+    rebuilding the quest events. Returns the patched file; asserts every character's idle was found."""
+    e = Emevd(d)
+    events = events_of(e)
+    want = {entity: Q.IDLE_BY_SLUG.get(slug, Q.IDLE[model])
+            for slug, _title, _frame, _local, _yaw, model, *_rows, entity in Q.CHARACTERS}
+    found = set()
+    for ev in events:
+        for i in ev["ins"]:
+            if (i["bank"], i["id"]) != (2003, 18):
+                continue
+            entity, animation, loop = struct.unpack_from("<IiB", i["args"])
+            if entity not in want or len(ev["ins"]) > 8:
+                continue
+            new = force_animation(entity, *want[entity])
+            if new["args"] != i["args"]:
+                print(f"idle of {entity}: {animation} loop {loop} -> {want[entity][0]} loop {want[entity][1]}")
+                i["args"] = new["args"]
+            found.add(entity)
+    assert found == set(want), f"no idle event for {sorted(set(want) - found)}"
+    return build(e, events)
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--idle-patch"]:  # emevd_quests.py --idle-patch in.emevd[.dcx] out.emevd[.dcx] (round 33 G11)
+        from emevd import _dcx_apply
+        _dcx_apply(sys.argv[2], sys.argv[3], idle_patch)
+        sys.exit()
     if sys.argv[1:2] == ["--cage-ride-press"]:  # emevd_quests.py --cage-ride-press in.emevd[.dcx] out.emevd[.dcx]
         from emevd import _dcx_apply
         _dcx_apply(sys.argv[2], sys.argv[3], cage_ride_press)

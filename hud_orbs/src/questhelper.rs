@@ -120,6 +120,32 @@ pub fn player_msb(position: ([f32; 3], i32, i32)) -> Option<[f32; 3]> {
     (p[0].abs() < TILE_RANGE && p[2].abs() < TILE_RANGE).then_some(p)
 }
 
+/// Round 33 (G10): the graveyard's lift-up exit door AEG110_064_1000 (msb 61ba28c3: MSB position and yaw; its local +z
+/// points out of the graveyard, onto the street; tools/msb_name_region.DOOR).
+const GATE: [f32; 3] = [-3.522, 93.956, -86.030];
+const GATE_YAW: f32 = -27.887;
+/// Past the door plane by this much (the fog gates stand at +0.10).
+const GATE_PAST: f32 = 0.3;
+
+/// Round 33 (G10): an MSB position in the gate's frame: (across, up, out of the graveyard).
+pub fn gate_frame(p: [f32; 3]) -> [f32; 3] {
+    let (s, c) = GATE_YAW.to_radians().sin_cos();
+    let (dx, dz) = (p[0] - GATE[0], p[2] - GATE[2]);
+    [dx * c - dz * s, p[1] - GATE[1], dx * s + dz * c]
+}
+
+/// Round 33 (G10, Ryan: "W101 music must only play once the player is actually in Unicorn Way, not in the graveyard
+/// tunnel coming up to the gate"): the street tile's NPCs are loaded (so player_msb_now gives a tile position) while
+/// the player is still in the Stranded Graveyard's exit tunnel. On Unicorn Way = through the gate (gate frame z >
+/// GATE_PAST) and either at street level (y > -20; the street box starts 10 m under the door, the hedge maze floor
+/// is +1.7) or on the rooms' side (x < -60: the three rooms under the street are at x -104 / -125 / -162, the maze
+/// at -205). m18 (Stranded Graveyard, MSB + (147, 16, -102)) has nothing past the gate above y -20 except the door
+/// itself; its deep parts past the gate plane lie at y -230..-54 and x +23..+162.
+pub fn on_unicorn_way(p: [f32; 3]) -> bool {
+    let [x, y, z] = gate_frame(p);
+    z > GATE_PAST && (y > -20.0 || x < -60.0)
+}
+
 /// Round 21 (Q6): the player's MSB position from the street NPCs the game has loaded (`entities` =
 /// Game::entities): each one's MSB spot (markers::NPCS) plus the player's offset from it in the physics space,
 /// averaged. Needs no block origin (Ryan's round 20 helper never showed; the block-origin path is the fallback).
