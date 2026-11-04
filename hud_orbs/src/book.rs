@@ -766,11 +766,11 @@ impl Book {
 
     /// Shows the crafting page with recipe `recipe` chosen, and its "You made a" panel if `made` (the preview).
     #[allow(dead_code)]
-    pub fn preview_recipe(&mut self, recipe: usize, made: bool) {
+    pub fn preview_recipe(&mut self, recipe: usize, made: Option<f32>) {
         self.state.craft.materials = false;
         self.state.craft.recipe = recipe;
-        if made {
-            self.state.craft.preview_made(recipe);
+        if let Some(ago) = made {
+            self.state.craft.preview_made(recipe, ago);
         }
     }
 
@@ -1895,12 +1895,16 @@ impl Book {
         layout::draw(prefs, &prefs_view, &canvas, |i| i <= bkg);
         let mut page_hit = None;
         if let Some(page) = self.layouts.get(page_name) {
-            page_hit = layout::draw(page, &view, &canvas, |_| true).button;
+            page_hit = layout::draw(page, &view, &canvas, |i| !layout::is_late(page, &view, i)).button;
             if tab == Tab::Quests {
                 self.draw_quest_cards(page, &canvas);
             }
         }
         layout::draw_extra(&view, &canvas);
+        // Round 34 (CR1): a panel over the page's own pictures and texts (the crafting "You made a" panel).
+        if let Some(page) = self.layouts.get(page_name).filter(|_| view.late.is_some()) {
+            layout::draw(page, &view, &canvas, |i| layout::is_late(page, &view, i));
+        }
         if let Some((note, _)) = self.state.note.as_ref().filter(|n| n.1.elapsed() < NOTE_TIME && !map_view) {
             // What the last click did, in a strip along the bottom of the pages.
             let r = [150.0, 548.0, 650.0, 574.0];

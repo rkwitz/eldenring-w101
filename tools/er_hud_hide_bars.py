@@ -16,6 +16,7 @@ script still updates them but they are drawn invisibly:
   MENU_FL_Arts_waku4 (the strip, 754x80 at half scale), depth 2 MENU_FL_Arts (the skill mark at its left end) and
   depth 7 MENU_PossessionWaku, and its MpShortage (the not-enough-FP mark drawn on the strip). The sprite is the one
   placing both MpShortage and Text (each item slot's sprite places an MpShortage too, with no Text).
+- 01_000_fe.gfx, PlayerHUD > PersonalCompass: the compass bar at the top centre (round 34 CR2).
 - 01_001_fe_soul.gfx: the root's Soul clip (rune counter).
 The quick slots are PlayerHUD's ItemPanel and ItemPanel2 (pouch); in the 1920x1080 movie the slot cross reaches down
 to about y 1045, and the globes' tops (Wizard101 y 570 of 768 at hud_orbs scale 1, bottom 723) are at y 865, so both
@@ -39,6 +40,9 @@ TARGETS = {
         # Round 32 (U5): the strip under that name, its mark and the FP-shortage mark on it (Arts > Fade only).
         ((b"MpShortage", b"Text"), {("depth", 1): HIDE, ("depth", 2): HIDE, ("depth", 7): HIDE, b"MpShortage": HIDE}, 4),
         (b"ItemPanel", {b"ItemPanel": (0.0, -ITEM_RAISE), b"ItemPanel2": (0.0, -ITEM_RAISE)}, 2),
+        # Round 34 (CR2, Ryan: Wizard101 has no compass): PlayerHUD's PersonalCompass (the bar of ticks and the
+        # E / N letters at the top centre; its markers are inside it).
+        (b"PersonalCompass", {b"PersonalCompass": HIDE}, 1),
     ],
     "01_001_fe_soul.gfx": [(b"Soul", {b"Soul": HIDE}, 2)],  # root Soul and the Soul inside it
 }

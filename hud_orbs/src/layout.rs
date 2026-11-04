@@ -221,7 +221,7 @@ impl Layout {
         out
     }
 
-    fn is_under(&self, mut id: usize, ancestor: usize) -> bool {
+    pub fn is_under(&self, mut id: usize, ancestor: usize) -> bool {
         while let Some(p) = self.nodes[id].parent {
             if p == ancestor {
                 return true;
@@ -293,6 +293,10 @@ pub struct View {
     pub node_images: HashMap<usize, String>,
     /// Round 22 (H8): an alpha for a node image (default 1): the tracked quest card's pulsing light.
     pub node_image_alpha: HashMap<usize, f32>,
+    /// Round 34 (CR1): an alpha for a node and everything under it (the "You made a" panel fading out).
+    pub subtree_alpha: HashMap<usize, f32>,
+    /// Round 34 (CR1): a node drawn with everything under it after the view's extras (draw_late), over the page.
+    pub late: Option<usize>,
     /// Another picture for a node's own art (same frames).
     pub node_art: HashMap<usize, String>,
     /// Images drawn after the nodes, under the fills (backgrounds): (rect, image, uv).
@@ -769,6 +773,11 @@ pub fn shown(layout: &Layout, view: &View) -> Vec<bool> {
     out
 }
 
+/// Round 34 (CR1): whether node `i` is drawn late (View::late or under it).
+pub fn is_late(layout: &Layout, view: &View, i: usize) -> bool {
+    view.late.is_some_and(|r| i == r || layout.is_under(i, r))
+}
+
 /// Draws the nodes `filter` accepts, in order; returns the button under the mouse.
 pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize) -> bool) -> Hits {
     let visible = shown(layout, view);
@@ -780,12 +789,16 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
             && !view.greyed.contains(&i)
             && inside(canvas.mouse, view.rect.get(&i).copied().unwrap_or(layout.nodes[i].rect))
     });
+    let mut sub = vec![1.0f32; layout.nodes.len()];
+    for (i, n) in layout.nodes.iter().enumerate() {
+        sub[i] = view.subtree_alpha.get(&i).copied().unwrap_or(1.0) * n.parent.map_or(1.0, |p| sub[p]);
+    }
     for (i, n) in layout.nodes.iter().enumerate() {
         if !visible[i] || !filter(i) {
             continue;
         }
         let greyed = view.greyed.contains(&i);
-        let alpha = n.alpha * if greyed && !view.opaque.contains(&i) { 0.45 } else { 1.0 };
+        let alpha = n.alpha * sub[i] * if greyed && !view.opaque.contains(&i) { 0.45 } else { 1.0 };
         let mut r = view.rect.get(&i).copied().unwrap_or(n.rect);
         let is_hovered = hovered == Some(i);
         if is_hovered && n.grow > 1.0 && !greyed {

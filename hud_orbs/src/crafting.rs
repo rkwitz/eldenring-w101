@@ -40,8 +40,20 @@ pub const FAILED: u32 = 1042362181;
 pub const FULL: u32 = 1042362182;
 /// How long the page waits for the event before it gives up (the events aren't installed).
 const ANSWER_SECONDS: f32 = 4.0;
-/// How long the "You made a" panel stays.
-const RESULT_SECONDS: f32 = 3.0;
+/// Round 34 (CR1, Ryan's Wizard101 screenshots): the "You made a" panel stays RESULT_HOLD s, then fades out over
+/// RESULT_FADE (gone after about 1-2 s). Then Wizard101's "Crafted!" (GUI.lang CraftSuccess, "<center>Crafted!</center>";
+/// no picture: it is text) shows in red over the recipe's card, a little see-through, and fades out at once:
+/// STAMP_HOLD s, then STAMP_FADE. Wizard101's card sits under the panel, so the stamp is first seen as the panel goes.
+const RESULT_HOLD: f32 = 1.0;
+const RESULT_FADE: f32 = 0.8;
+const STAMP_HOLD: f32 = 0.15;
+const STAMP_FADE: f32 = 0.45;
+/// The stamp's red and alpha, sampled from Ryan's screenshot (197,36,26 average over the parchment).
+const STAMP_RED: ImColor32 = ImColor32::from_rgba(214, 30, 22, 215);
+/// Its WizardFancy scale on the page (capitals about as wide as the card).
+const STAMP_SCALE: f32 = 1.0;
+/// How far down the card the stamp's middle sits (Wizard101: just under the picture).
+const STAMP_DOWN: f32 = 0.62;
 /// Elden Ring's Crafting Kit (goods), needed to craft.
 const CRAFTING_KIT: u32 = 8500;
 
@@ -129,11 +141,11 @@ pub struct Craft {
 }
 
 impl Craft {
-    /// Shows the "You made a" panel for `recipe` (the preview renderer).
+    /// Shows the "You made a" panel for `recipe`, `ago` seconds after the craft (the preview renderer).
     #[allow(dead_code)]
-    pub fn preview_made(&mut self, recipe: usize) {
+    pub fn preview_made(&mut self, recipe: usize, ago: f32) {
         self.recipe = recipe;
-        self.made = Some((recipe, Instant::now()));
+        self.made = Some((recipe, Instant::now() - std::time::Duration::from_secs_f32(ago)));
     }
 }
 
@@ -296,7 +308,7 @@ fn recipes(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     marker(l, v, "TabBackground", "Tab_AllEquipment", l.find(TABS[tab].0));
     v.tab_row = crate::pages::row_of(l, &TABS.map(|t| t.0));
     // What the pages add from here (texts, pictures, hover texts) would draw over the "You made a" panel.
-    let page_layer = (v.extra.len(), v.images.len(), v.tips.len());
+    let page_tips = v.tips.len(); // no tips under the "You made a" panel
 
     // The recipes in the chosen tab, known ones first (Elden Ring's menu lists only those), then in
     // ShopLineupParam_Recipe order.
@@ -394,16 +406,36 @@ fn recipes(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         request(d, st);
         return;
     }
-    // "You made a": RecipeWindow's results panel, for a few seconds after a craft.
+    // "You made a": RecipeWindow's results panel, fading out, then the "Crafted!" stamp on the card.
     if let Some((made, at)) = st.craft.made {
-        if at.elapsed().as_secs_f32() > RESULT_SECONDS {
+        let t = at.elapsed().as_secs_f32();
+        let gone = RESULT_HOLD + RESULT_FADE;
+        if t > gone + STAMP_HOLD + STAMP_FADE {
             st.craft.made = None;
-        } else if let Some(r) = all.get(made) {
+        } else {
+            // The stamp is on the card from the craft on, under the panel (drawn after the page: View::late).
+            if made == st.craft.recipe {
+                if let Some(window) = l.find("3DCharacter") {
+                    let w = l.nodes[window].rect;
+                    let a = 1.0 - ((t - gone - STAMP_HOLD) / STAMP_FADE).clamp(0.0, 1.0);
+                    let c = STAMP_RED;
+                    let colour = ImColor32::from_rgba(c.r, c.g, c.b, (c.a as f32 * a) as u8);
+                    let y = w[1] + (w[3] - w[1]) * STAMP_DOWN;
+                    v.add([w[0] - 40.0, y - 30.0, w[2] + 40.0, y + 30.0], "CRAFTED!",
+                          TextStyle::new("WizardFancy", STAMP_SCALE, colour).centred());
+                }
+            }
+        }
+        if let Some(r) = all.get(made).filter(|_| t < gone) {
+            // Round 34 (CR1): the panel is drawn over the whole page, its pictures and texts too (View::late),
+            // so the page shows through it as it fades.
+            let fade = 1.0 - ((t - RESULT_HOLD) / RESULT_FADE).clamp(0.0, 1.0);
+            if let Some(panel) = l.find("CraftingResultsBackground") {
+                v.subtree_alpha.insert(panel, fade);
+                v.late = Some(panel);
+            }
             v.show(l.find("CraftingResultsBackground"), true);
-            v.extra.truncate(page_layer.0);
-            v.images.truncate(page_layer.1);
-            v.tips.truncate(page_layer.2);
-            hide(l, v, &["IngredientBackground"]); // its plaques' numbers draw after the nodes
+            v.tips.truncate(page_tips);
             let what = result_name(d, r);
             let what = if r.set > 1 { format!("{} x{}", what, r.set) } else { what };
             v.set(l.find("createdItemText"), centre(&what));

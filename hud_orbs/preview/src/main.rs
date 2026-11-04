@@ -324,6 +324,9 @@ fn main() {
         ("7d_crafting_food_tip", pages::Tab::Crafting, 4, [0.314, 0.66], "recipe:44"),
         ("7e_crafting_arrows", pages::Tab::Crafting, 3, [0.0, 0.0], "recipe:91"),
         ("7f_crafting_made", pages::Tab::Crafting, 1, [0.0, 0.0], "made:1"),
+        ("34cr1_made_1.4s", pages::Tab::Crafting, 1, [0.0, 0.0], "made:1@1.4"),
+        ("34cr1_stamp_1.85s", pages::Tab::Crafting, 1, [0.0, 0.0], "made:1@1.85"),
+        ("34cr1_stamp_2.2s", pages::Tab::Crafting, 1, [0.0, 0.0], "made:1@2.2"),
         // Round 16: the materials tabs' plain tooltip (ToolTip.gui; 7g: the recipe tabs').
         ("7h_crafting_materials_tab_tip", pages::Tab::Crafting, 1, [0.309, 0.203], "materials"),
         ("7i_crafting_materials_card_hover", pages::Tab::Crafting, 0, [0.30, 0.40], "materials"),
@@ -624,10 +627,12 @@ fn main() {
             book.preview_materials();
         }
         if let Some(r) = show.strip_prefix("recipe:") {
-            book.preview_recipe(r.parse().unwrap(), false);
+            book.preview_recipe(r.parse().unwrap(), None);
         }
         if let Some(r) = show.strip_prefix("made:") {
-            book.preview_recipe(r.parse().unwrap(), true);
+            // made:<recipe>[@<seconds since the craft>] (round 34 CR1: the panel's fade and the stamp)
+            let (r, ago) = r.split_once('@').map_or((r, 0.0), |(r, a)| (r, a.parse().unwrap()));
+            book.preview_recipe(r.parse().unwrap(), Some(ago));
         }
         let load = show.strip_prefix("load:");
         if load.is_some() || show.starts_with("poof") || show.starts_with("wisp:") || show.starts_with("fairy:") {
