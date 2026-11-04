@@ -1059,6 +1059,8 @@ impl Book {
         self.sight.update(&self.nav, player, ui.time() as f32);
         plates.extend(markers::npc_plates(&camera, &markers::locate(&camera, game.position(), &entities), &self.sight,
                                           screen));
+        // Round 33 (NP2): NPC and enemy plates as one list, farthest first (occlusion::order_start sorts across passes).
+        plates.sort_by(|a, b| b.z.total_cmp(&a.z));
         if plates.is_empty() {
             return;
         }

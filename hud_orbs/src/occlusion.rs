@@ -268,6 +268,7 @@ fn margin(z: f32, extra: f32) -> f32 {
 /// what follows is hidden wherever the game's scene is nearer (`extra` metres more leeway: a wisp's cloud radius).
 /// `name` (empty: not logged) and `point` (screen) put it in the next depth read for the log.
 pub fn begin(z: f32, extra: f32, name: &str, point: [f32; 2]) {
+    order_at(z);
     if !name.is_empty() {
         let mut guard = STATE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(s) = guard.as_mut() {
@@ -285,6 +286,54 @@ pub fn begin(z: f32, extra: f32, name: &str, point: [f32; 2]) {
 pub fn end() {
     if active() {
         callback(depth::DEPTH_OFF);
+    }
+}
+
+/// Round 33 (NP2, Ryan: a far name covers a near one): between order_start and order_finish the background list is
+/// split into channels by view depth, and every tag (quest signs, name plates, floaters: each starts with `begin`)
+/// goes into its depth's channel, so after the merge they draw far-to-near as one list whatever pass drew them.
+/// Channel 0 keeps what was drawn before; the last channel is for screen-fixed things (order_top).
+const ORDER_STEP: f32 = 0.25;
+const ORDER_BUCKETS: i32 = 256;
+static ORDERING: AtomicBool = AtomicBool::new(false);
+
+pub fn order_start() {
+    if !ORDERING.swap(true, Ordering::Relaxed) {
+        use hudhook::imgui::sys;
+        unsafe { sys::ImDrawList_ChannelsSplit(sys::igGetBackgroundDrawList(), ORDER_BUCKETS + 2) };
+    }
+}
+
+fn order_set(channel: i32) {
+    use hudhook::imgui::sys;
+    unsafe { sys::ImDrawList_ChannelsSetCurrent(sys::igGetBackgroundDrawList(), channel) };
+}
+
+/// The channel for a tag `z` metres away: 1 (64 m and farther) .. ORDER_BUCKETS (nearest).
+fn order_at(z: f32) {
+    if ORDERING.load(Ordering::Relaxed) {
+        let far = if z.is_finite() { (z / ORDER_STEP).floor().clamp(0.0, (ORDER_BUCKETS - 1) as f32) as i32 } else { 0 };
+        order_set(ORDER_BUCKETS - far);
+    }
+}
+
+/// Screen-fixed drawing in the ordered stretch (Quest Helper, VICTORY!): over every tag, depth test off.
+pub fn order_top() {
+    if ORDERING.load(Ordering::Relaxed) {
+        order_set(ORDER_BUCKETS + 1);
+        if active() {
+            callback(depth::DEPTH_OFF);
+        }
+    }
+}
+
+pub fn order_finish() {
+    if ORDERING.swap(false, Ordering::Relaxed) {
+        use hudhook::imgui::sys;
+        unsafe { sys::ImDrawList_ChannelsMerge(sys::igGetBackgroundDrawList()) };
+        if active() {
+            callback(depth::DEPTH_OFF);
+        }
     }
 }
 

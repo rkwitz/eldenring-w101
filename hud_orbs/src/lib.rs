@@ -395,13 +395,17 @@ impl ImguiRenderLoop for Orbs {
         occlusion::frame(game, game.and_then(|g| g.camera()), ui.io().display_size,
                          cx.gameplay && !self.book.blocking() && !self.loadscreen.holding(), cx.settings.depth_occlusion);
         if !self.loadscreen.holding() {
+            // Round 33 (NP2): signs, plates and floaters drawn far-to-near as one list (occlusion::order_start).
+            occlusion::order_start();
             self.book.draw_markers(ui, &cx);
+            occlusion::order_top();
             self.book.draw_quest_helper(ui, &cx);
             self.book.draw_goal_popup(ui, &cx);
             if cx.settings.nameplates {
                 self.book.draw_nameplates(ui, &cx);
             }
             self.book.draw_floaters(ui, &cx);
+            occlusion::order_finish();
             let wisp_play = cx.gameplay && !self.book.blocking();
             self.wisps.frame(ui, &mut self.book.textures, game, wisp_play, street, &self.book.nav);
             self.fairies.frame(ui, &mut self.book.textures, game, wisp_play, street);

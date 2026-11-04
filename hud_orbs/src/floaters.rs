@@ -48,7 +48,8 @@ const CAP: f32 = 0.62;
 /// Layout pixels (768-high screen, times the size factor) it rises over its life, and its life: full for HOLD
 /// seconds, then fading out over FADE. Not in Wizard101's data (see above).
 /// Round 31 (FT6, Ryan: "rise faster; the fade time is fine"): 40 -> 100 over the same life.
-const RISE: f32 = 100.0;
+/// Round 33 (FT7): 1.3x again, 100 -> 130, same HOLD / FADE.
+const RISE: f32 = 130.0;
 const HOLD: f32 = 1.2;
 const FADE: f32 = 0.8;
 const VICTORY_HOLD: f32 = 2.0;
@@ -240,6 +241,7 @@ impl Floaters {
         let Some(font) = fonts.get("WizardFancy").filter(|_| visible) else { return };
         let top_of_player = self.player_top();
         // Round 32 (U7): VICTORY! is fixed on the screen, not over anyone.
+        crate::occlusion::order_top();
         for f in self.live.iter().filter(|f| f.kind == Kind::Victory) {
             let age = (now - f.born).as_secs_f32();
             let alpha = if age < VICTORY_HOLD { 1.0 } else { (1.0 - (age - VICTORY_HOLD) / VICTORY_FADE).clamp(0.0, 1.0) };
