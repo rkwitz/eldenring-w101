@@ -362,9 +362,10 @@ impl Game {
             if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6) {
                 let top = self.model_top(chr, [x, y, z]);
                 log_model_top(model, [x, y, z], top);
-                log_first_frames(chr, model, [x, y, z], top);
+                // Round 31 (NT1): nothing until the anchor has settled (settle).
+                let Some(top) = settle(chr, model, [x, y, z], top.map(|t| t.0)) else { continue };
                 out.push((model, [x, y, z], if height.is_finite() && (0.2..30.0).contains(&height) { height } else { 0.0 },
-                          top.map(|t| t.0)));
+                          top));
             }
         }
         out
@@ -1238,46 +1239,59 @@ const _: () = {
     }
 };
 
-/// Round 26 (O3): logs a model's box against its physics position, once per model and then every 20 s (proof the
-/// plate follows the pose: "tags: c4960 box top ...").
-/// Round 30 (NT1, Ryan: "enemy name plates sometimes all flicker when a group first loads in, then settle"): what a
-/// creature's plate anchor does in its first FIRST_SECONDS after it is first seen, logged on its first frame and on
-/// every change: the anchor source (the posed box in world space, the box read as model space, or none: the capsule /
-/// fixed height, model_top), a jump of the anchor height over 0.2 m, or of the position over 1 m. Three sources that
-/// can alternate frame to frame while a character finishes loading would move the plate up and down (and into the
-/// model's own head, where the depth test hides it); this log is to prove or rule that out.
-fn log_first_frames(chr: usize, model: u32, at: [f32; 3], top: Option<([f32; 3], bool)>) {
-    const FIRST_SECONDS: f32 = 3.0;
-    static SEEN: std::sync::Mutex<Vec<(usize, std::time::Instant, u32, i8, f32, [f32; 3])>> = std::sync::Mutex::new(Vec::new());
-    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+/// Round 31 (NT1, Ryan: "enemy name plates flicker when a group first loads; they must have the right position and
+/// opacity from the first frame"). Round 30's "tags first frames" log (w101_orbs.log.round31_input, the group loads
+/// at 23:02:14, 23:04:48 and 23:05:52, 53 characters each in one frame) proves what the plate anchor does then:
+/// - the posed box is not readable on a character's first frames: 28 of 30 Dark Sprites, 52 of 76 Skeletal Pirates,
+///   18 of 60 Lost Souls and 2 of 3 Rattlebones start with no box (plate from the capsule / fixed height); where it
+///   turns up within 3 s it does so 0.02-0.18 s later (far ones, not animated, stay without one);
+/// - the first box is the spawn pose, not the idle one: Dark Sprites read 2.53 m at +0.07 s, then 1.99 m at
+///   +0.47-0.55 s; Lost Souls 3.00 -> 3.33 m at +0.08 s; Fear of Fire 7.19 -> 7.41 -> 7.61 m by +0.68 s.
+/// So a Dark Sprite's plate stood at 1.80 m (fixed), jumped to 2.88 m, then dropped to 2.34 m inside half a second
+/// (nameplates::anchor: box + 0.35), and Rattlebones' moves from 5.95 m to 10.60 m when his box is first read: the
+/// flicker. Now each character's anchor settles first: for SETTLE seconds
+/// after it is first seen it is not passed on (no plate, no floater anchor), so the first frame drawn has the
+/// settled pose; after that, a box that can't be read for a frame keeps the last box's offset from the character
+/// instead of falling back to the capsule height (the log also shows box -> none at +2.41 s for a Skeletal Pirate).
+/// The state of a character not seen for FORGET seconds is dropped (a reload or respawn settles again).
+/// Returns None while settling, else the box top to use (or None for the capsule / fixed height).
+fn settle(chr: usize, model: u32, at: [f32; 3], top: Option<[f32; 3]>) -> Option<Option<[f32; 3]>> {
+    const SETTLE: f32 = 0.75;
+    const FORGET: f32 = 2.0;
+    struct State { chr: usize, first: std::time::Instant, last: std::time::Instant, held: Option<[f32; 3]>, logged: bool }
+    static STATES: std::sync::Mutex<Vec<State>> = std::sync::Mutex::new(Vec::new());
+    let mut states = STATES.lock().unwrap_or_else(|e| e.into_inner());
     let now = std::time::Instant::now();
-    seen.retain(|e| now.duration_since(e.1).as_secs_f32() < 60.0);
-    let source: i8 = match top { Some((_, true)) => 2, Some((_, false)) => 1, None => 0 };
-    let height = top.map_or(0.0, |t| t.0[1] - at[1]);
-    let name = |s: i8| ["none (capsule / fixed height)", "box as model space", "box in world space"][s as usize];
-    match seen.iter_mut().find(|e| e.0 == chr) {
+    states.retain(|s| now.duration_since(s.last).as_secs_f32() < FORGET);
+    let i = match states.iter().position(|s| s.chr == chr) {
+        Some(i) => i,
         None => {
-            seen.push((chr, now, 0, source, height, at));
-            tracing::info!("tags first frames: c{model} {chr:#x} first seen at [{:.1}, {:.1}, {:.1}], anchor {} {height:.2} m",
-                           at[0], at[1], at[2], name(source));
+            states.push(State { chr, first: now, last: now, held: None, logged: false });
+            states.len() - 1
         }
-        Some(e) => {
-            let age = now.duration_since(e.1).as_secs_f32();
-            e.2 += 1;
-            if age > FIRST_SECONDS {
-                return;
-            }
-            let moved = ((at[0] - e.5[0]).powi(2) + (at[1] - e.5[1]).powi(2) + (at[2] - e.5[2]).powi(2)).sqrt();
-            if source != e.3 || (height - e.4).abs() > 0.2 || moved > 1.0 {
-                tracing::info!("tags first frames: c{model} {chr:#x} +{age:.2} s (read {}): anchor {} {height:.2} m \
-                                (was {} {:.2} m), moved {moved:.1} m", e.2, name(source), name(e.3), e.4);
-                (e.3, e.4) = (source, height);
-            }
-            e.5 = at;
+    };
+    let s = &mut states[i];
+    s.last = now;
+    if let Some(t) = top {
+        s.held = Some([t[0] - at[0], t[1] - at[1], t[2] - at[2]]);
+    }
+    let age = now.duration_since(s.first).as_secs_f32();
+    if age < SETTLE {
+        return None;
+    }
+    if !s.logged {
+        s.logged = true;
+        match s.held {
+            Some(h) => tracing::info!("tags settled: c{model} {chr:#x} after {age:.2} s, box top {:.2} m{}", h[1],
+                                      if top.is_none() { " (held: box not readable this frame)" } else { "" }),
+            None => tracing::info!("tags settled: c{model} {chr:#x} after {age:.2} s, no box yet: capsule / fixed height"),
         }
     }
+    Some(top.or(s.held.map(|h| [at[0] + h[0], at[1] + h[1], at[2] + h[2]])))
 }
 
+/// Round 26 (O3): logs a model's box against its physics position, once per model and then every 20 s (proof the
+/// plate follows the pose: "tags: c4960 box top ...").
 fn log_model_top(model: u32, at: [f32; 3], top: Option<([f32; 3], bool)>) {
     static LOGGED: std::sync::Mutex<Vec<(u32, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
     let mut logged = LOGGED.lock().unwrap_or_else(|e| e.into_inner());
