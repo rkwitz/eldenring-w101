@@ -386,6 +386,7 @@ impl ImguiRenderLoop for Orbs {
             hud,
             faded,
             position,
+            street,
             settings: &mut self.settings,
             settings_path: &settings_path,
         };

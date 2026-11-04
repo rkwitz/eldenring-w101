@@ -462,6 +462,39 @@ def boss_bar(d, event_id=BOSS_BAR_EVENT, boss=RATTLEBONES, arena=RATTLEBONES_ARE
     return build(e, events)
 
 
+# Round 33 (U6b): the street mobs drop nothing on the ground any more (their own NpcParam rows without the enemy lot,
+# er_regulation.py U6B); each one's event gives the same lot straight into the inventory when it dies.
+# (first entity, last entity, ItemLotParam_map lot) from the MSB (round 29, 61ba28c3: c4180_90NN / c3500 / c3450).
+DROPS = (
+    (1042360860, 1042360863, 1042368600), (1042360870, 1042360885, 1042368600),  # Lost Souls (c4180)
+    (1042360864, 1042360867, 1042368610), (1042360886, 1042360901, 1042368610),  # Skeletal Pirates (c3500)
+    (1042360868, 1042360869, 1042368620), (1042360902, 1042360909, 1042368620),  # Dark Sprites (c3450)
+)
+DROP_EVENT = 1042368700  # + (entity - 1042360860): 1042368700..1042368749, free in m60_42_36_00
+
+
+def drops(d, drops=DROPS, first_event=DROP_EVENT):
+    """One new event per street mob (rest 1, started from the top of event 0): wait until it is alive, then until it
+    is dead (as boss_bar: 4[0] group 1 alive, group -1 dead), 2003[4] Award Item Lot (ItemLotParam_map; the lot rolls
+    as the enemy lot it copies), restart. Waiting for alive first means a mob still dead when the map loads again
+    gives nothing twice; it gives again once it is back after a rest. Rerunning replaces the events."""
+    e = Emevd(d)
+    events = events_of(e)
+    for lo, hi, lot in drops:
+        for entity in range(lo, hi + 1):
+            event_id = first_event + entity - 1042360860
+            _start_once(events, event_id)
+            events.append({"id": event_id, "rest": 1, "pars": [], "ins": [
+                _i(4, 0, "<bxxxIBBxxf", 1, entity, 0, 0, 1.0),  # IF alive (group 1)
+                _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
+                _i(4, 0, "<bxxxIBBxxf", -1, entity, 1, 0, 1.0),  # IF dead (OR group -1)
+                _i(0, 0, "<bBbx", 0, 1, -1),  # IF condition group -1
+                _i(2003, 4, "<i", lot),  # Award Item Lot
+                _i(1000, 4, "<Bxxx", 1),  # restart
+            ]})
+    return build(e, events)
+
+
 HIDDEN_AT_LOAD = (SERAPH,)  # bosses kept disabled until the player walks into their arena
 
 
@@ -1102,6 +1135,9 @@ if __name__ == "__main__":
         sys.exit()
     if sys.argv[1] == "--garden-doors":  # emevd.py --garden-doors in.emevd[.dcx] out.emevd[.dcx] (round 32 G7)
         _dcx_apply(sys.argv[2], sys.argv[3], lambda raw: rattlebones_doors(raw, GARDEN_DOORS))
+        sys.exit()
+    if sys.argv[1] == "--drops":  # emevd.py --drops in.emevd[.dcx] out.emevd[.dcx] (round 33 U6b, er_regulation.py)
+        _dcx_apply(sys.argv[2], sys.argv[3], drops)
         sys.exit()
     if sys.argv[1] == "--sidewalk":  # emevd.py --sidewalk in.emevd[.dcx] out.emevd[.dcx] (round 24 M1)
         _dcx_apply(sys.argv[2], sys.argv[3], sidewalk)

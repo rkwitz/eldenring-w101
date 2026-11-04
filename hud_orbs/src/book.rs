@@ -185,6 +185,8 @@ pub struct Book {
     /// source last logged (U1).
     held_items: Option<(Instant, HashMap<u32, u32>)>,
     head_logged: String,
+    /// Round 33 (MAP1): the map page's last logged place (logged when the page shows and when it changes).
+    map_logged: String,
     /// Round 25 (H2): Wizard101's quest picker (picker.rs) while one NPC's events ask for several conversations.
     picker: Option<crate::picker::Picker>,
     /// The picker's rows follow the mouse once it moves (else the controller's focus row is lit).
@@ -281,6 +283,9 @@ pub struct Context<'a> {
     /// ER's fade-to-black, 0 to 1 (loading screens).
     pub faded: f32,
     pub position: Option<([f32; 3], i32, i32)>,
+    /// Round 33 (MAP1): the player's MSB position on the street's tile (lib.rs: from the loaded street NPCs first,
+    /// then the block origin), for the map page's arrow.
+    pub street: Option<[f32; 3]>,
     pub settings: &'a mut crate::Settings,
     pub settings_path: &'a Path,
 }
@@ -424,6 +429,7 @@ impl Book {
             floaters: Default::default(),
             held_items: None,
             head_logged: String::new(),
+            map_logged: String::new(),
             picker: None,
             picker_mouse: false,
             picker_pinned: false,
@@ -1768,10 +1774,29 @@ impl Book {
             // hole the map is the real one at its own scale: what the cursor points at is what Elden Ring clicks.
             map_picture: None,
             position: cx.position,
+            street: cx.street,
             achieved: &self.achieved,
             gear_sets: &gear_sets,
             map_bosses: self.map_bosses(),
         };
+        if tab == Tab::Map && !map_view {
+            let place = pages::map_place(cx.position, cx.street);
+            let uv = match place {
+                pages::MapPlace::Street(Some(uv)) => format!("uv [{:.3}, {:.3}] = page ({:.0}, {:.0})", uv[0], uv[1],
+                                                             uv[0] * 720.0, uv[1] * 600.0),
+                other => format!("{other:?}"),
+            };
+            let from = if cx.street.is_some() { "street NPCs / block origin" } else { "block origin" };
+            let msb = cx.street.map(|p| format!("[{:.0}, {:.0}, {:.0}]", p[0], p[1], p[2]));
+            let note = format!("player MSB {msb:?} ({from}), garden {}, {uv}",
+                               cx.street.is_some_and(crate::questhelper::in_garden));
+            if note != self.map_logged {
+                tracing::info!("map page: {note}");
+                self.map_logged = note;
+            }
+        } else if !self.map_logged.is_empty() {
+            self.map_logged.clear();
+        }
         if let Some(page) = self.layouts.get(page_name) {
             pages::bind(tab, page, &data, &mut self.state, &mut view);
         }

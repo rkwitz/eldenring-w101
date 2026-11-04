@@ -186,6 +186,8 @@ pub struct Data<'a> {
     pub map_picture: Option<f32>,
     /// The player's place (Game::position: chunk position, block, block origin), for the map page.
     pub position: Option<([f32; 3], i32, i32)>,
+    /// Round 33 (MAP1): the player's MSB position (book::Context::street).
+    pub street: Option<[f32; 3]>,
     /// Per ACHIEVEMENTS entry: earned (its event flag), or None when not tracked / not readable.
     pub achieved: &'a [Option<bool>],
     /// Round 26 (W8): which of MAP_BOSSES the map shows (Ryan: a boss only once its quest is assigned or done;
@@ -2345,15 +2347,38 @@ pub enum MapPlace {
     WizardCity,
 }
 
-/// The map for a Game::position (chunk position, block, block origin).
-pub fn map_place(position: Option<([f32; 3], i32, i32)>) -> MapPlace {
-    let Some((chunk, block, origin)) = position else { return MapPlace::Street(None) };
-    let b = block as u32;
-    if [b >> 24, b >> 16 & 0xFF] == ROUNDTABLE {
-        return MapPlace::WizardCity;
+/// Round 33 (MAP1): the street's double door into the hedge maze (MSB region W101_Garden_door, x z). Wizard101 has
+/// no map of its own for the maze (GUI-WorldData.wad's Maps/ hold none: Map_WC_* are the streets, caves and
+/// districts), and the maze is its own zone behind that door, so inside it the arrow stands on the door, under the
+/// painting's "Hedge Maze" label.
+const MAP_MAZE_DOOR: [f32; 2] = [-360.22, -36.28];
+
+/// The map for the player's place: `street` = the MSB position (book::Context::street, from the loaded street NPCs,
+/// which is right after grace warps and world shifts), else `position` (Game::position: chunk position, block,
+/// block origin; the block origin reads garbage after grace warps, w101-music). The Roundtable Hold by its block.
+///
+/// Round 33 (MAP1, Ryan: the arrow is often in the wrong place, always in the hedge maze): the page used only the
+/// block origin, and the maze (beside the street, around (-328, 89)) went through street_uv onto the painting's
+/// right edge. Checked spots (page pixels of 720 x 600): Rattlebones' tower door (503, 260) and Lady Blackhope's
+/// (252, 254) by their portraits (518..567 x 273..322, 203..252 x 216..265); the maze door (571, 122) at the
+/// "Hedge Maze" label (512..578 x 68..128); the grace (198, 366) and Diego at the street's east end (192, 396)
+/// by the Commons and Arena labels.
+pub fn map_place(position: Option<([f32; 3], i32, i32)>, street: Option<[f32; 3]>) -> MapPlace {
+    if let Some((_, block, _)) = position {
+        let b = block as u32;
+        if [b >> 24, b >> 16 & 0xFF] == ROUNDTABLE {
+            return MapPlace::WizardCity;
+        }
     }
-    let Some(o) = crate::markers::tile(origin) else { return MapPlace::Street(None) };
-    let local = [chunk[0] + o[0] - STREET_TILE[0] as f32 * 256.0, chunk[2] + o[1] - STREET_TILE[1] as f32 * 256.0];
+    let local = match (street, position) {
+        (Some(p), _) => [p[0], p[2]],
+        (None, Some((chunk, _, origin))) => {
+            let Some(o) = crate::markers::tile(origin) else { return MapPlace::Street(None) };
+            [chunk[0] + o[0] - STREET_TILE[0] as f32 * 256.0, chunk[2] + o[1] - STREET_TILE[1] as f32 * 256.0]
+        }
+        (None, None) => return MapPlace::Street(None),
+    };
+    let local = if crate::questhelper::in_garden([local[0], 0.0, local[1]]) { MAP_MAZE_DOOR } else { local };
     let uv = street_uv(local[0], local[1]);
     let i = MAP_INSIDE;
     let inside = uv[0] > i[0] && uv[0] < i[2] && uv[1] > i[1] && uv[1] < i[3];
@@ -2434,7 +2459,7 @@ fn map(l: &Layout, d: &Data, v: &mut View, st: &mut State) {
         return;
     }
     // Wizard101's map under the page's own controls: the page's root window draws it in MAP_AREA.
-    let place = map_place(d.position);
+    let place = map_place(d.position, d.street);
     let (zone, picture) = match place {
         MapPlace::WizardCity => ("Wizard City", MAP_WIZARD_CITY),
         MapPlace::Street(_) => ("Unicorn Way", MAP_UNICORN_WAY),

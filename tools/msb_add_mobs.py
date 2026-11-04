@@ -43,10 +43,12 @@ from msb_add_ghost import (ENEMIES, PART_ENEMY, SUFFIX, STREET, TEMPLATE_PART, T
                            street_surface, to_world, u32)
 from msb_floor import _list, _set_name, entry_name, read_msb, write_msb  # noqa: E402
 
+# Round 33 (U6b): the street's own NpcParam rows (er_regulation.py U6B: copies of 41800010 / 35004010 / 34500012
+# without the enemy drop, which vanilla enemies elsewhere share); they need the U6b regulation.bin.
 MOBS = {  # W101 mob template -> (model, Think, NpcParam)
-    "Ghost-Blue-L01": ("c4180", 41800000, 41800010),
-    "Skeleton-Pirate-L01": ("c3500", 35004000, 35004010),
-    "Sprite-Dark-L01": ("c3450", 34500000, 34500012),
+    "Ghost-Blue-L01": ("c4180", 41800000, 41800090),
+    "Skeleton-Pirate-L01": ("c3500", 35004000, 35004090),
+    "Sprite-Dark-L01": ("c3450", 34500000, 34500092),
 }
 GHOST_PATH = "Path Ghost 01"  # the route msb_add_ghost.py gave the ghost
 FIRST_REGION_ID = 9100

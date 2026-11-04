@@ -301,6 +301,10 @@ fn main() {
         // grace), and at the Roundtable Hold.
         ("6c_map_street", pages::Tab::Map, 0, [0.344, 0.586], "place:street"),
         ("6d_map_roundtable", pages::Tab::Map, 0, [0.5, 0.5], "place:roundtable"),
+        ("33map1_maze", pages::Tab::Map, 0, [0.99, 0.99], "place:maze"),
+        ("33map1_rattlebones_door", pages::Tab::Map, 0, [0.99, 0.99], "place:rbdoor"),
+        ("33map1_blackhope_door", pages::Tab::Map, 0, [0.99, 0.99], "place:bhdoor"),
+        ("33map1_diego", pages::Tab::Map, 0, [0.99, 0.99], "place:diego"),
         ("6b_map_open", pages::Tab::Map, 0, [0.0, 0.0], "map"),
         // Round 16 (map): the bosses' plates, the magnifier's plain tooltip on both maps.
         ("6e_map_rattlebones", pages::Tab::Map, 0, [0.6044, 0.4967], "place:street"),
@@ -666,6 +670,13 @@ fn main() {
                     "place:street" => Some(([-80.0, 94.0, -30.0], 0x3C2A_2400, 0x3C2A_2400)),
                     "place:roundtable" => Some(([0.0, 0.0, 0.0], 0x0B0A_0000, 0x0B0A_0000)),
                     _ => Some(([0.0, 0.0, 0.0], 0, 0)),
+                },
+                street: match show {
+                    "place:maze" => Some([-327.6, 94.0, 88.9]),
+                    "place:rbdoor" => Some([-242.68, 95.0, 20.25]),
+                    "place:bhdoor" => Some([-110.92, 95.0, -106.58]),
+                    "place:diego" => Some([5.0, 94.2, -44.08]),
+                    _ => None,
                 },
                 settings: &mut settings,
                 settings_path: Path::new("/tmp/book_preview_settings.ini"),
