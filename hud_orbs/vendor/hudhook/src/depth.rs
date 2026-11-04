@@ -743,7 +743,15 @@ struct Choice {
     watch: std::collections::VecDeque<bool>,
     rounds: u32,
     given_up: bool,
+    /// Round 31 (W1): when the choice gave up (END copies until then); it starts over RETRY_SECS later.
+    given_up_at: Option<std::time::Instant>,
+    /// Round 31 (W1): the last boundary that was locked (it held the player), kept when later trials fail.
+    last_good: Option<u32>,
 }
+
+/// Round 31 (W1): giving up is no longer for good. Round 30's log gave up once during a Torrent ride (23:09:30) and
+/// stayed on END copies for the rest of the session, which flashed wisps and tags behind walls.
+const RETRY_SECS: u64 = 60;
 
 static CHOICE: Mutex<Option<Choice>> = Mutex::new(None);
 /// The boundary the copy is made after this frame (u32::MAX: none; END copies).
@@ -938,11 +946,11 @@ pub fn report_check(ok: bool) {
         let good = c.watch.iter().filter(|x| **x).count();
         if c.watch.len() == WATCH && good * 2 < WATCH {
             info!("depth: boundary {k} passed only {good} of the last {WATCH} player checks; trying every boundary again");
+            // Round 31 (W1): the frame's call count is measured again first (it was 4 at the first trial and 6
+            // later in round 30's log, and the trials never covered calls 4 and 5); present_copy restarts the trial.
             c.locked = None;
-            c.trial = 0;
-            c.scores = vec![(0, 0); c.boundaries as usize];
-            c.drop_next = true;
-            BOUNDARY.store(0, Ordering::Relaxed);
+            c.boundaries = 0;
+            c.rounds = 0;
         }
         return;
     }
@@ -974,13 +982,27 @@ pub fn report_check(ok: bool) {
             info!("depth: boundary copy LOCKED after ExecuteCommandLists call {b} of {} (player checks passed: {})",
                   c.boundaries, table.join(", "));
             c.locked = Some(b as u32);
+            c.last_good = Some(b as u32);
             c.watch.clear();
             BOUNDARY.store(b as u32, Ordering::Relaxed);
         },
+        // Round 31 (W1): back to the boundary that held before, not END copies. Round 30's END copies held an
+        // empty depth (value 0.000000, "scene 10000.0 m") in 157 of 365 tag lines and in every player miss while
+        // Ryan stood still (5 of 5), and each such frame shows every wisp and tag behind every wall; boundary 3 had
+        // none in 21. It is watched like a lock (a failing watch starts the trials again).
+        _ if c.rounds >= 3 && c.last_good.is_some_and(|k| k < c.boundaries) => {
+            let k = c.last_good.unwrap_or(0);
+            info!("depth: no boundary holds the player in 3 rounds ({}); back to call {k}, which held before \
+                   (watched as a locked one)", table.join(", "));
+            c.locked = Some(k);
+            c.watch.clear();
+            BOUNDARY.store(k, Ordering::Relaxed);
+        },
         _ if c.rounds >= 3 => {
-            info!("depth: no boundary holds the player in 3 rounds ({}); copies after a depth-pass end from now on",
-                  table.join(", "));
+            info!("depth: no boundary holds the player in 3 rounds ({}); copies after a depth-pass end, trying again \
+                   in {RETRY_SECS} s", table.join(", "));
             c.given_up = true;
+            c.given_up_at = Some(std::time::Instant::now());
             BOUNDARY.store(u32::MAX, Ordering::Relaxed);
         },
         _ => {
@@ -1034,8 +1056,22 @@ pub(crate) unsafe fn present_copy(_list: &ID3D12GraphicsCommandList, queue: usiz
     {
         let mut cg = CHOICE.lock();
         let c = cg.get_or_insert_with(Choice::default);
-        if scene && c.boundaries == 0 && t.clean_frames >= CLEAN_FRAMES && t.frame_ecls > 0 {
-            c.boundaries = (t.frame_ecls as usize).min(MAX_ECLS) as u32;
+        if c.given_up_at.is_some_and(|t| t.elapsed().as_secs() >= RETRY_SECS) {
+            info!("depth: {RETRY_SECS} s on END copies since the boundary choice gave up; measuring the frame and \
+                   trying every boundary again");
+            c.given_up = false;
+            c.given_up_at = None;
+            c.boundaries = 0;
+            c.rounds = 0;
+        }
+        if scene && c.boundaries == 0 && !c.given_up && t.clean_frames >= CLEAN_FRAMES && t.frame_ecls > 0 {
+            c.rounds = 0;
+            c.locked = None;
+            c.trial = 0;
+            // Round 31 (W1): the most calls any frame of this log window had, not just this frame's (round 30's
+            // first trial took 4 from one frame while frames averaged 4.5 and later 6).
+            let seen = t.win_ecl.iter().rposition(|w| w.0 > 0).map_or(0, |i| i as u32 + 1);
+            c.boundaries = (t.frame_ecls.max(seen) as usize).min(MAX_ECLS) as u32;
             c.scores = vec![(0, 0); c.boundaries as usize];
             c.drop_next = true;
             BOUNDARY.store(0, Ordering::Relaxed);

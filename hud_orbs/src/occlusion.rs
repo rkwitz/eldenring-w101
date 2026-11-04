@@ -62,6 +62,9 @@ struct State {
     mode_checks: [[u32; 2]; 2],
     flips: u32,
     stale_logged: bool,
+    /// Round 31 (W1): player checks not given to the copy-point choice since the last summary (on Torrent).
+    riding_skips: u32,
+    riding: bool,
 }
 
 /// Whether the game's depth test is in use this frame (the CPU sight tests stand down).
@@ -167,7 +170,21 @@ fn read_probe(s: &mut State, depth_values: &[f32], tags: &[(String, f32)], playe
             let good = if s.validated { ok[s.reversed as usize ^ 1] } else { ok[0] || ok[1] };
             s.mode_checks[info.present_mode as usize][(!good) as usize] += 1;
             // Round 29 (W1): every check also scores the copy point on trial or in use (depth::report_check).
-            if info.age <= 1 {
+            // Round 31 (W1): not while riding. Ryan's round 30 log (w101_orbs.log.round31_input): on Torrent the
+            // physics position is the rider in the saddle, so player + 1.1 m is over the rider's head and the depth
+            // there is whatever is behind him (70.26 / 12.86 m with the player 4 m away). Every check failed from the
+            // first riding prompt line, the locked boundary was dropped (23:09:12, 11 of 24) and all three re-trial
+            // rounds failed (23:09:21-30), so the choice gave up for good and END copies were used from then on.
+            let riding = crate::game::event_flag(crate::prompt::RIDING_FLAG) == Some(true);
+            if riding != s.riding {
+                s.riding = riding;
+                tracing::info!("depth: player checks {} the copy-point choice ({})",
+                               if riding { "no longer scored for" } else { "scored for" },
+                               if riding { "riding Torrent: the chest point is over the rider's head" } else { "on foot" });
+            }
+            if riding {
+                s.riding_skips += 1;
+            } else if info.age <= 1 {
                 depth::report_check(good);
             }
             if !ok[0] && !ok[1] {
@@ -208,13 +225,14 @@ fn read_probe(s: &mut State, depth_values: &[f32], tags: &[(String, f32)], playe
                 s.last_summary = Some(Instant::now());
                 tracing::info!("depth: player check {} (passes reversed {} / normal {}, fails {}): {line}; {} copies \
                                 in {} frames ({} at a boundary); since the last summary: END-copy checks ok/missed {}/{}, \
-                                BOUNDARY-copy checks ok/missed {}/{}, tag state changes {}; copy mode now {}, {} frames old",
+                                BOUNDARY-copy checks ok/missed {}/{}, tag state changes {}, checks skipped on Torrent {}; copy mode now {}, {} frames old",
                                if ok[0] || ok[1] { "ok" } else { "MISSED" }, s.passes[0], s.passes[1],
                                s.fails, info.copies, info.frames, info.present_copies, s.mode_checks[0][0],
-                               s.mode_checks[0][1], s.mode_checks[1][0], s.mode_checks[1][1], s.flips,
+                               s.mode_checks[0][1], s.mode_checks[1][0], s.mode_checks[1][1], s.flips, s.riding_skips,
                                if info.present_mode { "BOUNDARY" } else { "END" }, info.age);
                 s.mode_checks = [[0; 2]; 2];
                 s.flips = 0;
+                s.riding_skips = 0;
             }
             s.last_check = Some(line);
         }
