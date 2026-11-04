@@ -85,7 +85,10 @@ SKY_MATERIAL = "emissive"  # "emissive": unshaded (see above); "lit": the street
 # colours". Read as sRGB the same values come out much darker, so SKY_BRIGHTNESS 0.6 keeps the sky's mean on-screen
 # light where slice 6.5 had it (compared offline), with the colour and swirls back. Brighter: raise SKY_BRIGHTNESS
 # (up to 1.0), then SKY_GLOW; darker: lower SKY_BRIGHTNESS.
-SKY_GLOW = 0.0743
+# Round 34 (G4b, round34/color_ref w101.png vs er.png, same spot): sky W101 255,244,255 (saturation 0.04), ours
+# 164,137,163 (saturation 0.16, purple): linear gain 2.7 / 3.65 / 2.72 to reach W101 (whose sky is clipped at 255, so
+# that is a lower bound). The glow scales the emissive light linearly: 0.0743 x 3 = 0.223. SKY_SATURATION 1.3 -> 1.0.
+SKY_GLOW = 0.223  # was 0.0743 (round 9 calibration, slice 6.5)
 SKY_BRIGHTNESS = 0.6
 SKY_SRGB = True  # DX10 BC1_UNORM_SRGB texture, like vanilla colour maps (False: the old legacy DXT1, read as linear)
 # SKY_CALIBRATE: instead of one brightness, the dome is cut into 8 slices around (45 degrees each, numbered 1 to 8 in
@@ -96,7 +99,7 @@ SKY_SRGB = True  # DX10 BC1_UNORM_SRGB texture, like vanilla colour maps (False:
 SKY_CALIBRATE = False  # done 2026-10-26: slice 6-7
 CALIBRATION_GLOW = 0.5
 CALIBRATION_SLICES = 8
-SKY_SATURATION = 1.3  # pushes the colours away from grey (1.0 = as graded); a bit above the reference for the tone map
+SKY_SATURATION = 1.0  # round 34: was 1.3 (sky purple 0.16 vs W101 0.04); pushes the colours away from grey (1.0 = as graded); a bit above the reference for the tone map
 # Ryan's Wizard101 screenshot of the Unicorn Way sky (2026-10-25), as mean colour by elevation: lavender above,
 # pink-white wisps, pale blue at the bottom. The bake is recoloured to it (sky_bake.grade) keeping SKY_DETAIL of its
 # swirls; None keeps the bake's own colours. Elevations are Wizard101's (the dome shows W101 15 deg at 34 deg up, 28 at
@@ -128,7 +131,7 @@ FLAT_LIGHTING = True
 # 2026-10-26: the Wizard101 textures are now sRGB at their true colours (tpf.build_tpf; before they were read as
 # linear with a 1.3/1.1 boost), which decodes about 2.5x darker on average (street 2.5, room 2.6, garden 2.25,
 # interiors 2.5), so both lights are 2.5x what they were (1.5, 0.8) to keep the zone as bright as Ryan last saw it.
-AMBIENT = 2.6  # 3.3 "still too bright" (2026-10-27 round 9, ~21% down); 3.75 "a little too bright" (2026-10-27); 0.5 looked very dark (2026-10-23), 0.8 still "like lighting is off" (2026-10-25)
+AMBIENT = 4.05  # round 34 (see OVERHEAD): was 2.6. 3.3 "still too bright" (2026-10-27 round 9, ~21% down); 3.75 "a little too bright" (2026-10-27); 0.5 looked very dark (2026-10-23), 0.8 still "like lighting is off" (2026-10-25)
 # Round 33 (G4, Ryan's same-spot screenshots round33/ref/2 (W101) and 3 (ours)): measured on the near flagstone path
 # (texture WC_Street30, sRGB mean 117,112,91): W101 shows 140,134,71, we showed 220,206,173. In linear light that is
 # a gain of 4.0 (all channels) for us against 1.49 / 1.31 / 0.61 for W101: ours 2.7x too bright on the ground and
@@ -138,7 +141,12 @@ AMBIENT = 2.6  # 3.3 "still too bright" (2026-10-27 round 9, ~21% down); 3.75 "a
 # share: 0.42 of the 4.0, so 1 unit of OVERHEAD gave the ground 2.56. Ground target R 1.49 = 0.42 + 2.56 x O x 0.965:
 # O = 0.43, which predicts the path at 140,127,84 (W101 140,134,71). Was 1.4 white ("1.75 with AMBIENT 3.3, 2.0 with
 # AMBIENT 3.75"). A soft, shadowless light straight down (directional light 1), 0 = none.
-OVERHEAD = 0.43
+# Round 34 (G4b, round34/color_ref): the lit flagstones (brightest 10% of the ground, both sides of the player) are
+# W101 212,179,104 and ours 171,147,87: the same hue and saturation (0.51 / 0.49) but 1.57 / 1.55 / 1.55x darker in
+# linear light; the ground's median luminance is 0.136 vs 0.085 (1.6x). So both lights go up 1.56x, colour unchanged:
+# AMBIENT 2.6 -> 4.05, OVERHEAD 0.43 -> 0.67 (ground light 2.31 / 2.04 / 1.34 per channel, still below the round 32
+# 4.0 white that Ryan found washed out).
+OVERHEAD = 0.67  # round 33: 0.43
 OVERHEAD_COLOUR = (0.965, 0.805, 0.400)
 # Elden Ring's eye adaptation (auto exposure) re-exposes the screen by what fills the view: with a big glowing sky it
 # darkened everything, and the same glow looked different by where you looked. FIXED_EXPOSURE turns it off in every
