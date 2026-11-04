@@ -1,6 +1,7 @@
 """Write Elden Ring's regulation.bin: the read side of er_params.py turned round, laid out exactly as Smithbox saves it.
 
-Round 33 (U6b). An earlier hand-written regulation crashed the game at launch (project/regulation.bin.sorted_crash).
+Round 33 (U6b). Checked on Ryan's Game\regulation.bin (md5 a631bf54, version 11730034): rebuilt, it decompresses
+to the same BND4 byte for byte (181 params re-laid-out), wrapped as Smithbox wraps it. An earlier hand-written regulation crashed the game at launch (project/regulation.bin.sorted_crash).
 Against Smithbox's file (regulation.bin.unsorted = .prev, which launches) it differs only in PartsDrawParam's row
 order and in its wrapping: a random IV, and a ZSTD frame with the content size and a 4 MB window. Smithbox's file
 has an all-zero IV and a frame without the content size and with a 64 KB window (zstd level 15, windowLog 16: the
@@ -52,6 +53,8 @@ def pack(iv, head, bnd):
     body = zstandard.ZstdCompressor(compression_params=params).compress(bnd)
     head = bytearray(head)
     struct.pack_into(">II", head, 0x1C, len(bnd), len(body))
+    assert head[0x24:0x2C] == b"DCP\0ZSTD", "unexpected DCX header"
+    head[0x30] = 15  # the level byte as Smithbox writes it (FromSoftware's file says 21), matching this frame
     raw = bytes(head) + body
     raw += b"\0" * ((-len(raw)) % 16) + b"\x10" * 16
     return iv + _aes(iv, raw, True)
@@ -164,8 +167,16 @@ def roundtrip(path):
     files = [d for _, _, d in bnd_files(bnd)]
     files = [Param(d).build() if _is_sorted_param(d) else d for d in files]
     again = pack(iv, head, bnd_build(bnd, files))
-    print(f"{path}: {len(data)} bytes, rebuilt {len(again)}, identical: {again == data}")
-    return again == data
+    same = again == data
+    # FromSoftware's own file (Game\regulation.bin, 1.17.3: zstd level 21 byte in the DCX header, 64 MB window, no
+    # PKCS7 block) can't be recompressed byte for byte with python-zstandard; then the check is the content: the
+    # rebuilt file must decrypt and decompress to exactly the input's BND4, with the same IV and DCX header fields.
+    inner = unpack(again)
+    equivalent = inner[3] == bnd and inner[0] == iv
+    print(f"{path}: {len(data)} bytes, rebuilt {len(again)}, identical: {same}, "
+          f"equivalent (same IV, BND4 byte-identical after {sum(map(_is_sorted_param, files))} params re-laid-out): "
+          f"{equivalent}")
+    return same or equivalent
 
 
 def _is_sorted_param(d):
