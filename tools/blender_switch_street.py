@@ -89,6 +89,45 @@ def tunnel_inside(positions, face):
     return abs(x) < 4.0 and 11.35 < z < 16.0 and y < 5.5
 
 
+# Round 35 (G12, Ryan: "this part of the Wizard101 map is still clipping through behind the door you pull up, from the
+# abandoned graveyard; on the opposite side of the door too"): the round 33 tunnel_inside box (|x| < 4, z 11.35-16,
+# y < 5.5) was in the build Ryan ran (aeg030_518 2026-11-04 13:14), but the Stranded Graveyard behind the door is
+# wider and deeper: a corridor about 7 m wide from the door to 5 m back, then a room 4.4 m lower with pillars at
+# |x| 6-8, back to 26 m (m18 parts, door frame). Your edited OBJ still had 898 triangles behind the door plane there:
+# the archway's teal WC_Wall_01 slabs (x -8.5..13.5, up to 13.5 m, 15 m back), its stone and grass (to 16 m up),
+# roof undersides, a sign and the street floor reaching 1 m under the door. graveyard_side cuts every triangle behind
+# the door plane within GRAVEYARD_HALF_WIDTH of the door's axis on both sides, from GRAVEYARD_BELOW to
+# GRAVEYARD_TOP: the street's own facade in front of the door plane stands at least 15.4 m tall over that whole
+# width, so nothing cut can be seen from the street (except through the open gate, which shows the graveyard).
+# Points are in the door's frame (AEG110_064_1000, x across, y up, z out of the graveyard onto the street), from the
+# placed street part AEG030_518_9000 and the door in msb 714f8bc4 (FLVER = OBJ with z negated).
+STREET_PART = (-8.561904907226562, 93.99879455566406, -75.91121673583984, -27.011917114257812)  # position, yaw
+DOOR_PART = (-3.522, 93.956, -86.030, -27.887)
+GRAVEYARD_HALF_WIDTH, GRAVEYARD_BELOW, GRAVEYARD_TOP, GRAVEYARD_DEPTH = 12.0, -10.0, 15.0, 30.0
+
+
+def door_frame(point):
+    """An OBJ point in the graveyard door's frame (see above)."""
+    import math
+    sx, sy, sz, syaw = STREET_PART
+    dx, dy, dz, dyaw = DOOR_PART
+    fx, fy, fz = point[0], point[1], -point[2]
+    a, b = math.radians(syaw), math.radians(dyaw)
+    wx, wz = sx + fx * math.cos(a) + fz * math.sin(a) - dx, sz - fx * math.sin(a) + fz * math.cos(a) - dz
+    return wx * math.cos(b) - wz * math.sin(b), sy + fy - dy, wx * math.sin(b) + wz * math.cos(b)
+
+
+def graveyard_side(positions, face):
+    """Round 35 (G12): the triangle lies behind the graveyard door (centre behind the door plane, or reaching 0.25 m
+    behind it while ending less than 0.5 m in front), within the box described above."""
+    points = [door_frame(positions[v]) for v, _ in face[1]]
+    x, z = (sum(p[i] for p in points) / 3 for i in (0, 2))
+    ys, zs = [p[1] for p in points], [p[2] for p in points]
+    behind = z < 0.0 or (min(zs) < -0.25 and max(zs) < 0.5)
+    return (behind and z > -GRAVEYARD_DEPTH and abs(x) < GRAVEYARD_HALF_WIDTH
+            and max(ys) < GRAVEYARD_TOP and min(ys) > GRAVEYARD_BELOW)
+
+
 def hd_copy(path):
     return path.with_name(path.name + ".hd")
 
@@ -109,7 +148,7 @@ def build_classic():
     # (WC_Z06_Unicorn_Way_Classic_edited.obj, 2026-10-21) still has 69 triangles inside the archway box (30 grass,
     # 30 street, 9 WC_Wall_01), the ramp and walls that stick into the Stranded Graveyard's lift landing behind the
     # door. Both OBJs get it cut now.
-    cut = lambda f: tunnel_inside(positions, f)
+    cut = lambda f: tunnel_inside(positions, f) or graveyard_side(positions, f)  # round 35 (G12): graveyard_side too
     tunnel = [f for f in faces if cut(f)]
     faces = [f for f in faces if not backdrop(positions, f) and not cut(f)]
     print(f"Left out {len(walls)} triangles of the zone's backdrop walls and {len(tunnel)} inside the Commons archway")
