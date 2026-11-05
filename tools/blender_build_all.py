@@ -25,10 +25,14 @@ import runpy
 import time
 import traceback
 from pathlib import Path
+try:  # config.toml at the repo root (tools/w101er_config.py), then the default
+    from w101er_config import setting as _setting
+except ImportError:
+    _setting = os.environ.get
 
 SKIP = set()
 
-TOOLS = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding")) / "eldenring-w101" / "tools"
+TOOLS = Path(os.environ.get("W101ER_TOOLS", Path(_setting("W101ER_ROOT", Path.home() / "Documents" / "game_modding")) / "eldenring-w101" / "tools"))
 STEPS = [
     ("street", "blender_switch_street.py"),
     ("footprint", "blender_clear_footprint.py"),

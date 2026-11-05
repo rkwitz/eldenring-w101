@@ -14,12 +14,16 @@ import importlib
 import shutil
 import sys
 from pathlib import Path
+try:  # config.toml at the repo root (tools/w101er_config.py), then the default
+    from w101er_config import setting as _setting
+except ImportError:
+    _setting = os.environ.get
 
 from soulstruct.containers import Binder
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
-sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
+ROOT = Path(_setting("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
+sys.path.insert(0, str(Path(os.environ.get("W101ER_TOOLS", ROOT / "eldenring-w101" / "tools"))))
 import flver_fix  # noqa: E402
 import flver_textures  # noqa: E402
 import tpf  # noqa: E402
@@ -28,7 +32,7 @@ for module in (flver_fix, flver_textures, tpf):
     importlib.reload(module)
 
 PROJECT = ROOT / "reference" / "eldenring" / "project"
-GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game"))
+GAME = Path(_setting("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game"))
 GEOMBND = PROJECT / "asset" / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx"
 VANILLA = GAME / "asset" / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx"
 AET = PROJECT / "asset" / "aet" / "aet030"

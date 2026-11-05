@@ -15,16 +15,20 @@ import os
 import shutil
 import struct
 from pathlib import Path
+try:  # config.toml at the repo root (tools/w101er_config.py), then the default
+    from w101er_config import setting as _setting
+except ImportError:
+    _setting = os.environ.get
 
 from soulstruct.containers import Binder
 
 MODE = globals().get("MODE", "pad")  # blender_collision_trim.py runs this with "trim"
 PAD_TO = 8 * 1024 * 1024  # bytes; ~15k triangles need roughly 1 MB
 
-ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
+ROOT = Path(_setting("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 NAME = "aeg030_518_l.geomhkxbnd.dcx"
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset" / "aeg" / "aeg030" / NAME
-GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"asset\aeg\aeg030" / NAME
+GAME = Path(_setting("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"asset\aeg\aeg030" / NAME
 
 
 def tag_length(data):

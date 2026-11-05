@@ -18,12 +18,16 @@ import shutil
 import sys
 import time
 from pathlib import Path
+try:  # config.toml at the repo root (tools/w101er_config.py), then the default
+    from w101er_config import setting as _setting
+except ImportError:
+    _setting = os.environ.get
 
 from soulstruct.containers import Binder
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
-sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
+ROOT = Path(_setting("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
+sys.path.insert(0, str(Path(os.environ.get("W101ER_TOOLS", ROOT / "eldenring-w101" / "tools"))))
 import dds_color  # noqa: E402
 import flver_build  # noqa: E402
 import flver_fix  # noqa: E402
@@ -55,7 +59,7 @@ BRIGHTNESS = 1.0
 OPAQUE_BRIGHTNESS = 1.12
 
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset"
-GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"asset"
+GAME = Path(_setting("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"asset"
 GEOMBND = PROJECT / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx"
 SINGLE_MESH = GEOMBND.with_name(GEOMBND.name + ".before_textures")  # our HD export: layout, bone and binder template
 COLLISION = PROJECT / "aeg" / "aeg030" / "aeg030_518_l.geomhkxbnd.dcx"

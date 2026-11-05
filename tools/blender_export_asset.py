@@ -13,6 +13,10 @@ import re
 import runpy
 import sys
 from pathlib import Path
+try:  # config.toml at the repo root (tools/w101er_config.py), then the default
+    from w101er_config import setting as _setting
+except ImportError:
+    _setting = os.environ.get
 
 import bpy
 
@@ -40,4 +44,4 @@ for _ in range(8):
         print(f"Removing UV layer '{unused.group(1)}', which the material doesn't use, and exporting again")
         mesh.uv_layers.remove(mesh.uv_layers[unused.group(1)])
 
-runpy.run_path(str(Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding")) / "eldenring-w101" / "tools" / "blender_fix_asset.py"))
+runpy.run_path(str(Path(os.environ.get("W101ER_TOOLS", Path(_setting("W101ER_ROOT", Path.home() / "Documents" / "game_modding")) / "eldenring-w101" / "tools")) / "blender_fix_asset.py"))

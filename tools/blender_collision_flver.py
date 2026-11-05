@@ -10,15 +10,19 @@ import importlib
 import re
 import sys
 from pathlib import Path
+try:  # config.toml at the repo root (tools/w101er_config.py), then the default
+    from w101er_config import setting as _setting
+except ImportError:
+    _setting = os.environ.get
 
 import bpy
 
 TEMPLATE = "aeg030_518"
 TARGET_TRIANGLES = 15000
 
-ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
+ROOT = Path(_setting("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 OUTPUT = ROOT / "reference" / "eldenring" / "work" / f"{TEMPLATE}_collision.flver"
-sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
+sys.path.insert(0, str(Path(os.environ.get("W101ER_TOOLS", ROOT / "eldenring-w101" / "tools"))))
 import flver_fix  # noqa: E402
 
 importlib.reload(flver_fix)

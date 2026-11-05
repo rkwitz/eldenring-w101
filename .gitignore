@@ -43,3 +43,6 @@ unicorn_way_quests.json
 *.msbpatch.gz
 !patches/**/*.objpatch.gz
 !patches/**/*.msbpatch.gz
+
+# Your own paths (copy config.example.toml)
+config.toml

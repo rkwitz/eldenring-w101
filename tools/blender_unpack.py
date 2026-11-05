@@ -6,11 +6,15 @@ the game folder. Nothing in the game or the Smithbox project is changed.
 
 import os
 from pathlib import Path
+try:  # config.toml at the repo root (tools/w101er_config.py), then the default
+    from w101er_config import setting as _setting
+except ImportError:
+    _setting = os.environ.get
 
 from soulstruct.dcx import decompress
 
-GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game"))
-OUT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding")) / "reference" / "eldenring" / "unpacked"
+GAME = Path(_setting("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game"))
+OUT = Path(_setting("W101ER_ROOT", Path.home() / "Documents" / "game_modding")) / "reference" / "eldenring" / "unpacked"
 FILES = [
     "map/mapstudio/m60_42_36_00.msb.dcx",
     "map/mapstudio/m60_21_18_01.msb.dcx",
@@ -28,6 +32,7 @@ FILES = [
     "msg/engus/item.msgbnd.dcx",
     "msg/engus/item_dlc02.msgbnd.dcx",
     "msg/engus/menu.msgbnd.dcx",
+    "msg/engus/menu_dlc02.msgbnd.dcx",
     "event/common_func.emevd.dcx",
 ]
 
