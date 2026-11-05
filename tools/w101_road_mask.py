@@ -107,7 +107,7 @@ def main(obj_path, pathing_path, msb_path, out_path, check=False):
         lines.append(f"C {mx:.3f} {mz:.3f} {SIGIL_RADIUS}")
     xs, zs = [p[0] for p in corners], [p[1] for p in corners]
     lines.append(f"B {min(xs) - MARGIN:.3f} {min(zs) - MARGIN:.3f} {max(xs) + MARGIN:.3f} {max(zs) + MARGIN:.3f}")
-    Path(out_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    Path(out_path).write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     print(f"{out_path}: {len(road)} road triangles, {len(sigils)} sigils, box {lines[-1][2:]}")
 
 

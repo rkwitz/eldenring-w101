@@ -58,7 +58,8 @@ def source_md5(path):
     with open(path, "rb") as f:
         for line in f:
             if not line.startswith(b"#vc "):
-                h.update(line)
+                # Windows line endings (an OBJ written by Python on Windows before nif2obj fixed them) hash as Unix.
+                h.update(line.replace(b"\r\n", b"\n"))
     return h.hexdigest()
 
 

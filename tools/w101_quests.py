@@ -566,4 +566,4 @@ def flag_table():
 if __name__ == "__main__":
     import json
     import sys
-    json.dump(flag_table(), open(sys.argv[1], "w") if len(sys.argv) > 1 else sys.stdout, indent=1)
+    json.dump(flag_table(), open(sys.argv[1], "w", newline="\n") if len(sys.argv) > 1 else sys.stdout, indent=1)

@@ -581,7 +581,7 @@ def map_ranges(bhd, ranges):
         score = (mask < 1 << 15, bin(mask).count("1"), -mask)
         if key not in best or score > best[key][0]:
             best[key] = (score, offset, size, name.replace("\\", "/").rsplit("/", 1)[-1])
-    with open(ranges, "w") as f:
+    with open(ranges, "w", newline="\n") as f:
         for _, offset, size, name in (best[k] for k in sorted(best)):
             f.write(f"{offset} {size} {name}\n")
     print(f"{len(best)} tiles, {sum(v[2] for v in best.values())} bytes")

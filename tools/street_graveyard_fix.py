@@ -303,7 +303,7 @@ def solve(positions, faces, walls, log=print):
 def write(path, positions, moves):
     fmt = lambda p: " ".join(f"{c:.6f}" for c in p)  # noqa: E731
     lines = [f"v {fmt(positions[v])} {fmt(door_to_obj(moves[v]))}" for v in sorted(moves)]
-    Path(path).write_text("\n".join(lines) + "\n")
+    Path(path).write_text("\n".join(lines) + "\n", newline="\n")
 
 
 def main():

@@ -71,7 +71,7 @@ def main():
             sells.append(("wand", WEAPON | wid, row["sellValue"]))
     for k, (cat, item, runes) in enumerate(sells):
         lines.append(f"S\t{SELL_BASE + k}\t{cat}\t{item}\t{runes}")
-    Path(out).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    Path(out).write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     print(f"{out}: {len(STOCK)} to buy, {len(sells)} to sell "
           f"({', '.join(f'{c} {sum(1 for s in sells if s[0] == c)}' for c in ('hat', 'robe', 'boots', 'wand'))})")
 

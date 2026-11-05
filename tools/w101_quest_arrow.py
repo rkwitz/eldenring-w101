@@ -188,13 +188,13 @@ def main(argv):
     lines += [f"T\t{a}\t{b}\t{c}" for a, b, c in tris]
     out = book / "Quest" / "WC_QuestArrow.tsv"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("\n".join(lines) + "\n")
+    out.write_text("\n".join(lines) + "\n", newline="\n")
     print(f"{out}: {len(verts)} vertices, {len(tris)} triangles")
     verts, tris = slab(book / "art" / "Quest" / "Quest_Arrow.png")
     lines = [f"V\t{x:.4f}\t{y:.4f}\t{z:.4f}\t{u:.5f}\t{v:.5f}" for x, y, z, u, v in verts]
     lines += [f"T\t{a}\t{b}\t{c}" for a, b, c in tris]
     out = book / "Quest" / "Quest_Arrow_Slab.tsv"
-    out.write_text("\n".join(lines) + "\n")
+    out.write_text("\n".join(lines) + "\n", newline="\n")
     print(f"{out}: {len(verts)} vertices, {len(tris)} triangles (flat arrow extruded {SLAB_THICK} units)")
     picture = book / "art" / "GUI" / "QuestButtons" / "Art_Quest_AV_WalledGarden.png"
     picture.parent.mkdir(parents=True, exist_ok=True)

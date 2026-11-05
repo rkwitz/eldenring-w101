@@ -589,7 +589,7 @@ def main():
             "nav": {"nodes": nav_pts, "edges": nav_edges}, "volumes": volumes, "templates": templates}
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "unicorn_way_pathing.json").write_text(json.dumps(data, indent=1, default=str))
+    (out / "unicorn_way_pathing.json").write_text(json.dumps(data, indent=1, default=str), newline="\n")
 
     path_by_id = {p["id"]: p for p in paths}
     print(f"{len(paths)} paths, {len(nodes)} nodes, {len(groups)} spawn groups, {len(sigils)} sigils, "

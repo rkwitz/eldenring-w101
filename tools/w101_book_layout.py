@@ -373,7 +373,7 @@ def main():
         root = ET.fromstring(data.decode("utf-8", "replace"))
         lines = conv.page(root)
         pages[page] = lines
-        (out / f"{page}.lay").write_text("\n".join(line_text(l) for l in lines) + "\n", encoding="utf-8")
+        (out / f"{page}.lay").write_text("\n".join(line_text(l) for l in lines) + "\n", encoding="utf-8", newline="\n")
         print(f"{page}.lay: {len(lines)} nodes")
     for path in EXTRA_ART:
         conv.image(path)

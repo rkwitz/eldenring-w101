@@ -105,7 +105,7 @@ def convert(src, dst, scale=0.01):
     mtl_path = dst.with_suffix(".mtl")
     materials = {}
     exported = skipped = 0
-    with open(dst, "w") as obj:
+    with open(dst, "w", newline="\n") as obj:
         obj.write(f"mtllib {mtl_path.name}\n")
         v_base = vt_base = 1
         for mesh, matrix in meshes:
@@ -149,7 +149,7 @@ def convert(src, dst, scale=0.01):
             if uv:
                 vt_base += len(uv)
             exported += 1
-    with open(mtl_path, "w") as mtl:
+    with open(mtl_path, "w", newline="\n") as mtl:
         for mat, tex in materials.items():
             # textures/<name>.dds is what tex2dds.py writes next to the OBJ
             mtl.write(f"newmtl {mat}\nmap_Kd textures/{mat}.dds\n\n")
