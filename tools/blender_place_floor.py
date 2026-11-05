@@ -8,6 +8,7 @@ m18_00_00_00.msb.dcx.before_floor.
 Close Smithbox first (or reload the map afterwards), then run in Blender's Scripting tab.
 """
 
+import os
 import importlib
 import shutil
 import sys
@@ -16,7 +17,7 @@ from pathlib import Path
 from soulstruct.containers import Binder
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path.home() / "Documents" / "game_modding"
+ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
 import flver_floor  # noqa: E402
 import msb_floor  # noqa: E402

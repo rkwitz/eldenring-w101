@@ -17,6 +17,7 @@ Run in Blender's Scripting tab like blender_build_room.py (it only uses Soulstru
 binder), then relaunch the game.
 """
 
+import os
 import importlib
 import re
 import sys
@@ -26,7 +27,7 @@ from pathlib import Path
 from soulstruct.containers import Binder
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path.home() / "Documents" / "game_modding"
+ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
 import dds_color  # noqa: E402
 import flver_build  # noqa: E402
@@ -43,7 +44,7 @@ SATURATION, BRIGHTNESS = 1.4, 1.0  # sRGB textures (tpf.build_tpf) at 1.4x satur
 # looked right but "crank up the saturation" (the old 1.3, 1.1 made up for textures read as linear)
 
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset"
-GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset")
+GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"asset"
 STREET_GEOMBND = PROJECT / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx.before_textures"  # single-mesh FLVER template
 VANILLA = GAME / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx"  # its plain lit materials
 AET_TEMPLATE = GAME / "aet" / "aet030" / "aet030_000.tpf.dcx"  # for its DCX type

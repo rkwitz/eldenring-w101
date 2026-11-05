@@ -36,14 +36,14 @@ from pathlib import Path
 import bpy
 import numpy as np
 
-ROOT = Path.home() / "Documents" / "game_modding"
+ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 TOOLS = Path(os.environ.get("PORTRAIT_TOOLS", ROOT / "eldenring-w101" / "tools"))
 sys.path.insert(0, str(TOOLS))
 import er_portrait_scene as scene  # noqa: E402
 
 importlib.reload(scene)
 
-GAME = Path(os.environ.get("PORTRAIT_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game"))
+GAME = Path(os.environ.get("PORTRAIT_GAME", os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")))
 DEC = os.environ.get("PORTRAIT_DEC")
 BOOK = Path(os.environ.get("PORTRAIT_BOOK", ROOT / "reference" / "eldenring" / "orbs" / "w101_orbs" / "book"))
 OUT = Path(os.environ.get("PORTRAIT_OUT", BOOK / "art" / "GUI" / "NpcPortraits" / "ER"))

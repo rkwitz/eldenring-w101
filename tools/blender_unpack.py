@@ -4,12 +4,13 @@ Run in Blender's Scripting tab (it only uses Soulstruct's DCX support). Edit FIL
 the game folder. Nothing in the game or the Smithbox project is changed.
 """
 
+import os
 from pathlib import Path
 
 from soulstruct.dcx import decompress
 
-GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")
-OUT = Path.home() / "Documents" / "game_modding" / "reference" / "eldenring" / "unpacked"
+GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game"))
+OUT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding")) / "reference" / "eldenring" / "unpacked"
 FILES = [
     "map/mapstudio/m60_42_36_00.msb.dcx",
     "map/mapstudio/m60_21_18_01.msb.dcx",

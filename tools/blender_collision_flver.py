@@ -5,6 +5,7 @@ copy to about TARGET_TRIANGLES, exports it as an uncompressed loose .flver to re
 flver_fix.py and deletes the copy. In Smithbox, use "Select External FLVER" on the written file.
 """
 
+import os
 import importlib
 import re
 import sys
@@ -15,7 +16,7 @@ import bpy
 TEMPLATE = "aeg030_518"
 TARGET_TRIANGLES = 15000
 
-ROOT = Path.home() / "Documents" / "game_modding"
+ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 OUTPUT = ROOT / "reference" / "eldenring" / "work" / f"{TEMPLATE}_collision.flver"
 sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
 import flver_fix  # noqa: E402

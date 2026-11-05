@@ -6,3 +6,35 @@ tools/*/
 *.mtl
 __pycache__/
 hud_orbs/target/
+
+# Round 35 (R-DOC): nothing derived from Wizard101 or Elden Ring is ever committed.
+# Game data and anything our tools write from it:
+*.dds
+*.tpf
+*.png
+*.tsv
+*.normals
+*.mp3
+*.ogg
+*.wav
+*.dcx
+*.bnd
+*.flver
+*.hkx
+*.msb
+*.emevd
+*.gfx
+*.fmg
+*.bin
+*.sl2
+*.tar
+*.zip
+*.dll
+*.exe
+# Built tools and personal data folders
+tools/recast_bake
+w101_orbs/
+npc_dialogue.json
+uw_lang.json
+wizqst*.json
+unicorn_way_quests.json

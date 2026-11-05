@@ -15,11 +15,12 @@ template with its name changed.
 Run in Blender's Scripting tab like blender_build_interiors.py, then relaunch the game.
 """
 
+import os
 import re
 import tempfile
 from pathlib import Path
 
-ROOT = Path.home() / "Documents" / "game_modding"
+ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 TOOLS = ROOT / "eldenring-w101" / "tools"
 CAGE = ROOT / "reference" / "w101" / "converted_bonecage"
 BUILDS = [("aeg030_558", CAGE / "WC_BoneCage.obj"), ("aeg030_559", CAGE / "WC_BoneCage_open.obj")]

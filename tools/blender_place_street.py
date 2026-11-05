@@ -8,6 +8,7 @@ GRACE or the offsets below to move it.
 Close Smithbox first (or reload the map afterwards), then run in Blender's Scripting tab.
 """
 
+import os
 import importlib
 import shutil
 import sys
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path.home() / "Documents" / "game_modding"
+ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
 import msb_floor  # noqa: E402
 
@@ -24,7 +25,7 @@ importlib.reload(msb_floor)
 MAP_NAME = "m60_42_36_00"
 MAPSTUDIO = Path("map") / "mapstudio" / f"{MAP_NAME}.msb.dcx"
 TARGET = ROOT / "reference" / "eldenring" / "project" / MAPSTUDIO
-GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game") / MAPSTUDIO
+GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / MAPSTUDIO
 GRACE = (-12.83, 90.7, -54.5)  # The First Step grace (AEG099_090_9011, entity 1042361981)
 # The point of the street model that lands on the grace, in the model's own coordinates. It is the model's origin
 # (which is on the road): the game seems to hide assets by the distance from the player to their origin, and with

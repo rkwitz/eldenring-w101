@@ -20,6 +20,7 @@ the rest still run. Map placement, events and the navmesh are not rebuilt here; 
 Reload the maps in Smithbox before saving them after a run.
 """
 
+import os
 import runpy
 import time
 import traceback
@@ -27,7 +28,7 @@ from pathlib import Path
 
 SKIP = set()
 
-TOOLS = Path.home() / "Documents" / "game_modding" / "eldenring-w101" / "tools"
+TOOLS = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding")) / "eldenring-w101" / "tools"
 STEPS = [
     ("street", "blender_switch_street.py"),
     ("footprint", "blender_clear_footprint.py"),

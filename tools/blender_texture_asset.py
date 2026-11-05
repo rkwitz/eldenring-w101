@@ -9,6 +9,7 @@
 Run in Blender's Scripting tab; watch Window > Toggle System Console.
 """
 
+import os
 import importlib
 import shutil
 import sys
@@ -17,7 +18,7 @@ from pathlib import Path
 from soulstruct.containers import Binder
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path.home() / "Documents" / "game_modding"
+ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
 import flver_fix  # noqa: E402
 import flver_textures  # noqa: E402
@@ -27,7 +28,7 @@ for module in (flver_fix, flver_textures, tpf):
     importlib.reload(module)
 
 PROJECT = ROOT / "reference" / "eldenring" / "project"
-GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")
+GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game"))
 GEOMBND = PROJECT / "asset" / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx"
 VANILLA = GAME / "asset" / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx"
 AET = PROJECT / "asset" / "aet" / "aet030"

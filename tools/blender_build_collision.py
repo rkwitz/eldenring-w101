@@ -14,6 +14,7 @@ only that many street triangles nearest the road centre.
 Run in Blender's Scripting tab. It takes about a minute; watch Window > Toggle System Console.
 """
 
+import os
 import importlib
 import shutil
 import sys
@@ -23,7 +24,7 @@ from pathlib import Path
 from soulstruct.containers import Binder
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path.home() / "Documents" / "game_modding"
+ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
 import flver_fix  # noqa: E402
 import flver_floor  # noqa: E402
@@ -36,7 +37,7 @@ for module in (flver_fix, flver_floor, hkx_tag, hkx_collision):
 ASSETS = ROOT / "reference" / "eldenring" / "project" / "asset" / "aeg" / "aeg030"
 GEOMBND = ASSETS / "aeg030_518.geombnd.dcx"
 TARGET = ASSETS / "aeg030_518_l.geomhkxbnd.dcx"
-GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset\aeg\aeg030") / TARGET.name
+GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"asset\aeg\aeg030" / TARGET.name
 SOURCE = "street"  # "street" (the exported Unicorn Way), or a test: "passthrough", "body" or "vanilla"
 LIMIT = None  # e.g. 2000: keep only the street triangles nearest ROAD_CENTER
 ROAD_CENTER = (-126.4, 0.0, 116.2)

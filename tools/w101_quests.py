@@ -1,5 +1,5 @@
 """The Unicorn Way quest line as game logic: quests, goals, event flags, entity ids (no Wizard101 text; the client's
-quest text is merged in by slug outside the repo, see /mnt/project-files/unicorn_way_quests).
+quest text is merged in by slug outside the repo, see tools/w101_quests_json.py).
 
 Event flags (round 21: saved quest state in 1042360xxx, see QUEST_BASE; the rest in the 1042362xxx group; 1042362900-999 is reserved for the door /
 loading-screen flags). The group matters: Elden Ring keeps event flags in blocks of 1000 (flag id / 1000) and only

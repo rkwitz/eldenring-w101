@@ -8,6 +8,7 @@ doesn't use, so those layers are removed and the export retried. Afterwards blen
 leaves out of Elden Ring FLVERs, so set Soulstruct's Project Root to reference/eldenring/project.
 """
 
+import os
 import re
 import runpy
 import sys
@@ -39,4 +40,4 @@ for _ in range(8):
         print(f"Removing UV layer '{unused.group(1)}', which the material doesn't use, and exporting again")
         mesh.uv_layers.remove(mesh.uv_layers[unused.group(1)])
 
-runpy.run_path(str(Path.home() / "Documents" / "game_modding" / "eldenring-w101" / "tools" / "blender_fix_asset.py"))
+runpy.run_path(str(Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding")) / "eldenring-w101" / "tools" / "blender_fix_asset.py"))

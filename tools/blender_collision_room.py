@@ -11,6 +11,7 @@ MODE = "trim": after saving in Smithbox, cut the HKX back to the length its TAG0
 Run in Blender's Scripting tab (Soulstruct handles the Oodle compression).
 """
 
+import os
 import shutil
 import struct
 from pathlib import Path
@@ -20,10 +21,10 @@ from soulstruct.containers import Binder
 MODE = globals().get("MODE", "pad")  # blender_collision_trim.py runs this with "trim"
 PAD_TO = 8 * 1024 * 1024  # bytes; ~15k triangles need roughly 1 MB
 
-ROOT = Path.home() / "Documents" / "game_modding"
+ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 NAME = "aeg030_518_l.geomhkxbnd.dcx"
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset" / "aeg" / "aeg030" / NAME
-GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset\aeg\aeg030") / NAME
+GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"asset\aeg\aeg030" / NAME
 
 
 def tag_length(data):

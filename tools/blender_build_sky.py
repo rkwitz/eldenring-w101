@@ -36,6 +36,7 @@ Run in Blender's Scripting tab like blender_switch_street.py (it only uses Souls
 binder, and Blender's numpy), then relaunch the game.
 """
 
+import os
 import importlib
 import math
 import re
@@ -46,7 +47,7 @@ import numpy as np
 from soulstruct.containers import Binder
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path.home() / "Documents" / "game_modding"
+ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
 import flver_build  # noqa: E402
 import flver_fix  # noqa: E402
@@ -64,7 +65,7 @@ flver_textures.AET = ASSET.replace("aeg", "AET").upper()
 flver_textures.FLAT_NORMAL = f"{flver_textures.AET}_n"
 
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset"
-GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset")
+GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"asset"
 STREET_GEOMBND = PROJECT / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx.before_textures"  # single-mesh FLVER template
 VANILLA = GAME / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx"  # its plain lit material
 EMISSIVE_VANILLA = GAME.parent / flver_textures.EMISSIVE_ASSET  # the vanilla emissive material we copy (path starts at asset\)

@@ -5,13 +5,14 @@ and writes it to the Smithbox project's chr folder (ModEngine loads it over the 
 compression. Deleting project/chr/c4960.anibnd.dcx gives back the vanilla one. Run by blender_build_all.py (step
 "boss") or alone in Blender's Scripting tab; relaunch the game afterwards.
 """
+import os
 import importlib
 import sys
 from pathlib import Path
 
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path.home() / "Documents" / "game_modding"
+ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
 import er_chr_opaque  # noqa: E402
 import er_text  # noqa: E402
@@ -19,7 +20,7 @@ import er_text  # noqa: E402
 for module in (er_text, er_chr_opaque):
     importlib.reload(module)
 
-GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\chr")
+GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"chr"
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "chr"
 CHARACTERS = ["c4960"]  # Rattlebones (msb_add_boss.BOSSES)
 
