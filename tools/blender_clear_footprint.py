@@ -14,18 +14,22 @@ import struct
 import sys
 import zlib
 from pathlib import Path
+try:  # config.toml at the repo root (tools/w101er_config.py), then the default
+    from w101er_config import setting as _setting
+except ImportError:
+    _setting = os.environ.get
 
 from soulstruct.dcx import decompress
 
-ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
-sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
+ROOT = Path(_setting("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
+sys.path.insert(0, str(Path(os.environ.get("W101ER_TOOLS", ROOT / "eldenring-w101" / "tools"))))
 import msb_floor  # noqa: E402
 import footprint_clear  # noqa: E402
 
 for module in (msb_floor, footprint_clear):
     importlib.reload(module)
 
-GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / "map" / "mapstudio"
+GAME = Path(_setting("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / "map" / "mapstudio"
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "map" / "mapstudio"
 CLASSIC = ROOT / "reference" / "w101" / "converted_classic"
 OBJ = next(p for p in (CLASSIC / "WC_Z06_Unicorn_Way_Classic_edited.obj", CLASSIC / "WC_Z06_Unicorn_Way_Classic.obj")

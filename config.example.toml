@@ -1,0 +1,19 @@
+# Copy this file to config.toml (git ignores it) and set the paths for your PC.
+# Leave a line commented out to use its default. Environment variables of the same
+# name (ER_GAME, W101_INSTALL, W101ER_ROOT, SMITHBOX, MODENGINE, BLENDER) override this file.
+# Use single quotes so backslashes stay as they are.
+
+[paths]
+# ELDEN RING\Game, unpacked with UXM Selective Unpacker
+game = 'C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game'
+
+# The Wizard101 install (the folder holding Data\GameData)
+wizard101 = 'C:\ProgramData\KingsIsle Entertainment\Wizard101'
+
+# Where the build writes everything; build.py creates the folders inside it (default: Documents\game_modding)
+# work_root = 'D:\w101er'
+
+# The apps can live anywhere (defaults: <work_root>\tools\Smithbox and <work_root>\tools\ModEngine)
+# smithbox = 'C:\Tools\Smithbox'
+# modengine = 'C:\Tools\ModEngine-2.1.0.0-win64'
+# blender = 'C:\Program Files\Blender Foundation\Blender 4.2\blender.exe'

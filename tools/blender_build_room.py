@@ -31,12 +31,16 @@ import re
 import sys
 import time
 from pathlib import Path
+try:  # config.toml at the repo root (tools/w101er_config.py), then the default
+    from w101er_config import setting as _setting
+except ImportError:
+    _setting = os.environ.get
 
 from soulstruct.containers import Binder
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
-sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
+ROOT = Path(_setting("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
+sys.path.insert(0, str(Path(os.environ.get("W101ER_TOOLS", ROOT / "eldenring-w101" / "tools"))))
 import dds_color  # noqa: E402
 import room_light  # noqa: E402
 import flver_build  # noqa: E402
@@ -62,7 +66,7 @@ SPOT_GAIN = 1.25  # floor light spots: floor + window colour x vertex colour x t
 GLASS_OBJECT, FLOOR_OBJECT, SPOTS = "Window01", "Object01", re.compile(r"(?i)window_floor")
 
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset"
-GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"asset"
+GAME = Path(_setting("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"asset"
 STREET_GEOMBND = PROJECT / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx.before_textures"  # single-mesh FLVER template
 VANILLA = GAME / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx"  # its plain lit materials
 GAME_COLLISION = GAME / "aeg" / "aeg030" / f"{ASSET}_l.geomhkxbnd.dcx"

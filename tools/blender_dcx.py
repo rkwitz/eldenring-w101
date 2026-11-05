@@ -8,15 +8,19 @@ Other scripts set MODE, SOURCE, TARGET and REFERENCE through runpy's init_global
 
 import os
 from pathlib import Path
+try:  # config.toml at the repo root (tools/w101er_config.py), then the default
+    from w101er_config import setting as _setting
+except ImportError:
+    _setting = os.environ.get
 
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
+ROOT = Path(_setting("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 MAP_NAME = "m60_42_36_00"  # The First Step's Limgrave tile; the Stranded Graveyard is m18_00_00_00
 MAPSTUDIO = Path("map") / "mapstudio" / f"{MAP_NAME}.msb.dcx"
 PROJECT_MAP = ROOT / "reference" / "eldenring" / "project" / MAPSTUDIO
 if not PROJECT_MAP.exists():
-    PROJECT_MAP = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / MAPSTUDIO
+    PROJECT_MAP = Path(_setting("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / MAPSTUDIO
 
 MODE = globals().get("MODE", "unpack")
 SOURCE = Path(globals().get("SOURCE", PROJECT_MAP))

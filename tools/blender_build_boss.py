@@ -9,18 +9,22 @@ import os
 import importlib
 import sys
 from pathlib import Path
+try:  # config.toml at the repo root (tools/w101er_config.py), then the default
+    from w101er_config import setting as _setting
+except ImportError:
+    _setting = os.environ.get
 
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
-sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
+ROOT = Path(_setting("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
+sys.path.insert(0, str(Path(os.environ.get("W101ER_TOOLS", ROOT / "eldenring-w101" / "tools"))))
 import er_chr_opaque  # noqa: E402
 import er_text  # noqa: E402
 
 for module in (er_text, er_chr_opaque):
     importlib.reload(module)
 
-GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"chr"
+GAME = Path(_setting("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"chr"
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "chr"
 CHARACTERS = ["c4960"]  # Rattlebones (msb_add_boss.BOSSES)
 

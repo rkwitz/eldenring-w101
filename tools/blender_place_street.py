@@ -13,11 +13,15 @@ import importlib
 import shutil
 import sys
 from pathlib import Path
+try:  # config.toml at the repo root (tools/w101er_config.py), then the default
+    from w101er_config import setting as _setting
+except ImportError:
+    _setting = os.environ.get
 
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
-sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
+ROOT = Path(_setting("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
+sys.path.insert(0, str(Path(os.environ.get("W101ER_TOOLS", ROOT / "eldenring-w101" / "tools"))))
 import msb_floor  # noqa: E402
 
 importlib.reload(msb_floor)
@@ -25,7 +29,7 @@ importlib.reload(msb_floor)
 MAP_NAME = "m60_42_36_00"
 MAPSTUDIO = Path("map") / "mapstudio" / f"{MAP_NAME}.msb.dcx"
 TARGET = ROOT / "reference" / "eldenring" / "project" / MAPSTUDIO
-GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / MAPSTUDIO
+GAME = Path(_setting("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / MAPSTUDIO
 GRACE = (-12.83, 90.7, -54.5)  # The First Step grace (AEG099_090_9011, entity 1042361981)
 # The point of the street model that lands on the grace, in the model's own coordinates. It is the model's origin
 # (which is on the road): the game seems to hide assets by the distance from the player to their origin, and with

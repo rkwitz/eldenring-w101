@@ -20,12 +20,16 @@ import shutil
 import sys
 import time
 from pathlib import Path
+try:  # config.toml at the repo root (tools/w101er_config.py), then the default
+    from w101er_config import setting as _setting
+except ImportError:
+    _setting = os.environ.get
 
 from soulstruct.containers import Binder
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
-sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
+ROOT = Path(_setting("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
+sys.path.insert(0, str(Path(os.environ.get("W101ER_TOOLS", ROOT / "eldenring-w101" / "tools"))))
 import flver_fix  # noqa: E402
 import flver_floor  # noqa: E402
 import hkx_collision  # noqa: E402
@@ -37,7 +41,7 @@ for module in (flver_fix, flver_floor, hkx_tag, hkx_collision):
 ASSETS = ROOT / "reference" / "eldenring" / "project" / "asset" / "aeg" / "aeg030"
 GEOMBND = ASSETS / "aeg030_518.geombnd.dcx"
 TARGET = ASSETS / "aeg030_518_l.geomhkxbnd.dcx"
-GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"asset\aeg\aeg030" / TARGET.name
+GAME = Path(_setting("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"asset\aeg\aeg030" / TARGET.name
 SOURCE = "street"  # "street" (the exported Unicorn Way), or a test: "passthrough", "body" or "vanilla"
 LIMIT = None  # e.g. 2000: keep only the street triangles nearest ROAD_CENTER
 ROAD_CENTER = (-126.4, 0.0, 116.2)
