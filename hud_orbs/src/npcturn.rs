@@ -4,7 +4,16 @@
 //! ends it turns back to the yaw it had when the talk began, then is left to its AI again.
 //!
 //! The turn is written into the NPC's physics orientation every frame (Game::set_yaw, the orientation and the
-//! interpolated one), so its AI can't turn it away mid-talk. Facing convention: Game::yaw_of (forward = -(sin a,
+//! interpolated one), so its AI can't turn it away mid-talk.
+//!
+//! Round 35 (N3, Ryan: "Private Conley kind of like glitches when he tries to turn to talk to you ... he can't like
+//! fully turn around"): each frame's step used to start from the yaw read back from the game. Connelly is the one
+//! street NPC on his default idle (animation 0, not a forced loop, w101_quests.IDLE_BY_SLUG), so his AI keeps turning
+//! him back toward his own heading between our writes; starting every step from the read-back yaw let the two
+//! cancel out partway (he stopped short and jittered there). The turn is now driven by our own yaw (`yaw`), written
+//! every frame whatever the game did to it in between, so he reaches the player and comes back like the others.
+//! Where the read-back yaw differs from what we wrote the frame before by over 1 degree, that is logged (at most
+//! twice a second): "npc turn: X was turned N deg away from our yaw". Facing convention: Game::yaw_of (forward = -(sin a,
 //! cos a)): the prompt's calibrated "-z" and the MSB door regions (W101_Garden_in faces away from W101_Garden_exit
 //! with rot 153 only under -z) agree on it. Log: "npc turn: X turns to face the player" / "turned back".
 
@@ -21,6 +30,9 @@ pub struct NpcTurn {
     /// The NPC being turned: entity id, name, its yaw when the talk began.
     npc: Option<(u32, &'static str, f32)>,
     last: Option<Instant>,
+    /// Round 35 (N3): the yaw we set last frame (the turn is integrated from this, not from the game's yaw).
+    yaw: f32,
+    logged: Option<Instant>,
 }
 
 fn wrap(a: f32) -> f32 {
@@ -46,6 +58,7 @@ impl NpcTurn {
                     tracing::info!("npc turn: {} ({:.1} m away) turns to face the player (yaw now {:.0} deg)", npc.1,
                                    d(at), home.to_degrees());
                     self.npc = Some((id, npc.1, home));
+                    self.yaw = home;
                 }
             }
         }
@@ -56,10 +69,17 @@ impl NpcTurn {
         };
         // forward = -(sin a, cos a) toward the player: a = atan2(-dx, -dz)
         let want = if talking { (at[0] - player[0]).atan2(at[2] - player[2]) } else { home };
-        let Some(now_yaw) = game.yaw_of(Some(id)) else { return };
-        let diff = wrap(want - now_yaw);
+        let Some(read_back) = game.yaw_of(Some(id)) else { return };
+        let drift = wrap(read_back - self.yaw);
+        if drift.abs() > 1.0f32.to_radians() && self.logged.map_or(true, |t| (now - t).as_secs_f32() > 0.5) {
+            self.logged = Some(now);
+            tracing::info!("npc turn: {name} was turned {:.1} deg away from our yaw (ours {:.0}, game {:.0})",
+                           drift.to_degrees(), self.yaw.to_degrees(), read_back.to_degrees());
+        }
+        let diff = wrap(want - self.yaw);
         let step = TURN_RATE * dt;
-        let next = if diff.abs() <= step { want } else { now_yaw + step * diff.signum() };
+        let next = if diff.abs() <= step { want } else { wrap(self.yaw + step * diff.signum()) };
+        self.yaw = next;
         game.set_yaw(Some(id), next);
         if !talking && diff.abs() <= step {
             tracing::info!("npc turn: {name} turned back to {:.0} deg", home.to_degrees());
