@@ -194,7 +194,10 @@ fn poll(d: &Data, st: &mut State) {
     }
     st.craft.pending = None;
     let flag = |f: u32| game::event_flag(f) == Some(true);
-    let text = if flag(DONE) {
+    // Round 35 (Ryan: "a little banner on the bottom that says you made a blank ... I never asked for that"): a
+    // finished craft shows only the "You made a" panel and the "Crafted!" stamp, as in Wizard101; no note.
+    let done = flag(DONE);
+    let text = if done {
         st.craft.made = Some((recipe, Instant::now()));
         format!("You made {name}")
     } else if flag(FULL) {
@@ -208,7 +211,9 @@ fn poll(d: &Data, st: &mut State) {
     for f in [DONE, FAILED, FULL] {
         game::set_event_flag(f, false);
     }
-    st.note = Some((text, Instant::now()));
+    if !done {
+        st.note = Some((text, Instant::now()));
+    }
 }
 
 /// Asks the recipe's event to make it (Create).
