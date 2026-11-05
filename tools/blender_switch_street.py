@@ -100,20 +100,29 @@ def tunnel_inside(positions, face):
 
 
 # Round 35 (G12, Ryan: "this part of the Wizard101 map is still clipping through behind the door you pull up, from the
-# abandoned graveyard; on the opposite side of the door too"): the round 33 tunnel_inside box (|x| < 4, z 11.35-16,
-# y < 5.5) was in the build Ryan ran (aeg030_518 2026-11-04 13:14), but the Stranded Graveyard behind the door is
-# wider and deeper: a corridor about 7 m wide from the door to 5 m back, then a room 4.4 m lower with pillars at
-# |x| 6-8, back to 26 m (m18 parts, door frame). Your edited OBJ still had 898 triangles behind the door plane there:
-# the archway's teal WC_Wall_01 slabs (x -8.5..13.5, up to 13.5 m, 15 m back), its stone and grass (to 16 m up),
-# roof undersides, a sign and the street floor reaching 1 m under the door. graveyard_side cuts every triangle behind
-# the door plane within GRAVEYARD_HALF_WIDTH of the door's axis on both sides, from GRAVEYARD_BELOW to
-# GRAVEYARD_TOP: the street's own facade in front of the door plane stands at least 15.4 m tall over that whole
-# width, so nothing cut can be seen from the street (except through the open gate, which shows the graveyard).
-# Points are in the door's frame (AEG110_064_1000, x across, y up, z out of the graveyard onto the street), from the
-# placed street part AEG030_518_9000 and the door in msb 714f8bc4 (FLVER = OBJ with z negated).
+# abandoned graveyard"; G12b: "you removed a lot of stuff you weren't supposed to remove", round35/ref/commons_holes.png,
+# and one teal strip still poking through, door_clip2.png). The street is placed with the Stranded Graveyard (m18)
+# door in the Commons gatehouse, and much of the gatehouse itself lies behind the door plane: its side walls, the
+# lower towers, the walls under the roofs. The first G12 cut took every triangle behind the plane within 12 m of the
+# door (804, 129 of them drawn), and 63 of the drawn ones were in plain view from the street (the holes in the
+# screenshot): it had judged the facade by the untextured ground and street layers of your edit (AET501 grass,
+# Unicorn_Way_street), which the build drops. It also kept the tower plinths' sloped faces that cross the plane at
+# the door posts (|x| 4.1-5.1, 0.5-1.3 m back, floor to 2.8 m): the strip in door_clip2.png.
+# Now only what lies inside the graveyard's hollow spaces is cut, and triangles crossing into them are clipped at
+# their walls (new corners interpolated, UVs too), so everything outside them stays whole. The boxes, in the door's
+# frame (x across, y up from the door's floor, z out of the graveyard onto the street, from the placed street part
+# AEG030_518_9000 and the door AEG110_064_1000 in msb 714f8bc4; FLVER = OBJ with z negated): the corridor behind the
+# door (props at |x| 2.5-3.7) to 10 m back; beside the door posts from the plane itself (|x| > 3.4, so the archway's
+# own jambs, which sit around the posts, stay); the room 4.4 m lower with pillars at |x| 6-8, 9-27 m back. A street-
+# side projection (10 viewpoints from the gate to 45 m out, eye height and 8 m up) finds nothing drawn from the street
+# inside the corridor boxes; the room box takes the far ends of the gatehouse's two side walls (x +-7, 9-14 m back).
 STREET_PART = (-8.561904907226562, 93.99879455566406, -75.91121673583984, -27.011917114257812)  # position, yaw
 DOOR_PART = (-3.522, 93.956, -86.030, -27.887)
-GRAVEYARD_HALF_WIDTH, GRAVEYARD_BELOW, GRAVEYARD_TOP, GRAVEYARD_DEPTH = 12.0, -10.0, 15.0, 30.0
+GRAVEYARD_HOLLOWS = [  # (x, y, z) minimum and maximum
+    ((-6.5, -1.0, -10.0), (6.5, 8.0, -0.9)),  # the corridor
+    ((-6.5, -1.0, -0.9), (-3.4, 8.0, 0.0)), ((3.4, -1.0, -0.9), (6.5, 8.0, 0.0)),  # beside the door posts
+    ((-9.5, -6.0, -27.0), (9.5, 6.0, -9.0)),  # the room
+]
 
 
 def door_frame(point):
@@ -127,15 +136,69 @@ def door_frame(point):
     return wx * math.cos(b) - wz * math.sin(b), sy + fy - dy, wx * math.sin(b) + wz * math.cos(b)
 
 
-def graveyard_side(positions, face):
-    """Round 35 (G12): the triangle lies behind the graveyard door (centre behind the door plane, or reaching 0.25 m
-    behind it while ending less than 0.5 m in front), within the box described above."""
-    points = [door_frame(positions[v]) for v, _ in face[1]]
-    x, z = (sum(p[i] for p in points) / 3 for i in (0, 2))
-    ys, zs = [p[1] for p in points], [p[2] for p in points]
-    behind = z < 0.0 or (min(zs) < -0.25 and max(zs) < 0.5)
-    return (behind and z > -GRAVEYARD_DEPTH and abs(x) < GRAVEYARD_HALF_WIDTH
-            and max(ys) < GRAVEYARD_TOP and min(ys) > GRAVEYARD_BELOW)
+def _split(polygon, axis, value, keep_below):
+    """Sutherland-Hodgman: the part of `polygon` (corners (door point, OBJ position, UV)) on one side of a plane."""
+    def side(c):
+        return (c[0][axis] <= value) == keep_below
+
+    def mix(c, d):
+        t = (value - c[0][axis]) / (d[0][axis] - c[0][axis])
+        lerp = lambda p, q: tuple(a + (b - a) * t for a, b in zip(p, q))
+        return lerp(c[0], d[0]), lerp(c[1], d[1]), None if c[2] is None or d[2] is None else lerp(c[2], d[2])
+    out = []
+    for c, d in zip(polygon, polygon[1:] + polygon[:1]):
+        if side(c):
+            out.append(c)
+        if side(c) != side(d):
+            out.append(mix(c, d))
+    return out if len(out) >= 3 else []
+
+
+def graveyard_cut(positions, uvs, faces):
+    """Round 35 (G12b): `faces` without what lies inside GRAVEYARD_HOLLOWS; crossing triangles are clipped and
+    re-triangulated, their new corners appended to `positions` and `uvs`. Returns (faces, removed, clipped)."""
+    out, removed, clipped = [], 0, 0
+    for face in faces:
+        material, corners = face
+        polygon = [(door_frame(positions[v]), tuple(positions[v]), None if t is None else tuple(uvs[t]))
+                   for v, t in corners]
+        pieces = [polygon]
+        for low, high in GRAVEYARD_HOLLOWS:
+            rest = []
+            for piece in pieces:
+                if any(max(c[0][a] for c in piece) <= low[a] or min(c[0][a] for c in piece) >= high[a]
+                       for a in range(3)):
+                    rest.append(piece)
+                    continue
+                inside = piece
+                for a in range(3):
+                    for value, below in ((low[a], True), (high[a], False)):
+                        part = _split(inside, a, value, below)
+                        if part:
+                            rest.append(part)
+                        inside = _split(inside, a, value, not below)
+                        if not inside:
+                            break
+                    if not inside:
+                        break
+            pieces = rest
+        if pieces == [polygon]:
+            out.append(face)
+            continue
+        if not pieces:
+            removed += 1
+            continue
+        clipped += 1
+        for piece in pieces:
+            index = []
+            for _, p, uv in piece:
+                positions.append(p)
+                if uv is not None:
+                    uvs.append(uv)
+                index.append((len(positions) - 1, None if uv is None else len(uvs) - 1))
+            for k in range(1, len(index) - 1):
+                out.append((material, (index[0], index[k], index[k + 1])))
+    return out, removed, clipped
 
 
 def hd_copy(path):
@@ -158,10 +221,11 @@ def build_classic():
     # (WC_Z06_Unicorn_Way_Classic_edited.obj, 2026-10-21) still has 69 triangles inside the archway box (30 grass,
     # 30 street, 9 WC_Wall_01), the ramp and walls that stick into the Stranded Graveyard's lift landing behind the
     # door. Both OBJs get it cut now.
-    cut = lambda f: tunnel_inside(positions, f) or graveyard_side(positions, f)  # round 35 (G12): graveyard_side too
-    tunnel = [f for f in faces if cut(f)]
-    faces = [f for f in faces if not backdrop(positions, f) and not cut(f)]
+    tunnel = [f for f in faces if tunnel_inside(positions, f)]
+    faces = [f for f in faces if not backdrop(positions, f) and not tunnel_inside(positions, f)]
     print(f"Left out {len(walls)} triangles of the zone's backdrop walls and {len(tunnel)} inside the Commons archway")
+    faces, removed, clipped = graveyard_cut(positions, uvs, faces)  # round 35 (G12b)
+    print(f"Stranded Graveyard behind the door: {removed} triangles inside it left out, {clipped} clipped at its walls")
     # Round 26 (W2): one window state per building (w101_window_states.py): lit (_on) where a door leads in, dark
     # (_off) elsewhere, no blue _quest copies (that is asset aeg030_529, switched by its event).
     if WINDOW_STATES.exists():
