@@ -150,16 +150,29 @@ pub fn on_unicorn_way(p: [f32; 3]) -> bool {
 /// Game::entities): each one's MSB spot (markers::NPCS) plus the player's offset from it in the physics space,
 /// averaged. Needs no block origin (Ryan's round 20 helper never showed; the block-origin path is the fallback).
 pub fn player_msb_from_npcs(camera: &Camera, entities: &[(u32, [f32; 3])]) -> Option<[f32; 3]> {
+    player_msb_consensus(camera, entities).map(|(p, _, _)| p)
+}
+
+/// How close two NPCs' estimates of the player's MSB position must be to agree (m).
+const AGREE: f32 = 2.0;
+
+/// Round 35 (Ryan: "going through the gate to the hedge maze on Torrent caused me to fall out of the map and die"):
+/// each loaded street NPC gives one estimate (its MSB home + the player's offset from it). The plain average used
+/// until now let one NPC away from its home (walking back, pushed, turned to talk, or a home that isn't where it
+/// stands) pull the result many metres off, and the ride warp put Torrent there, off the maze floor. Now the
+/// largest group of estimates that agree within AGREE m is averaged. Returns (position, agreeing, loaded).
+pub fn player_msb_consensus(camera: &Camera, entities: &[(u32, [f32; 3])]) -> Option<([f32; 3], usize, usize)> {
     let p = camera.player;
-    let (mut sum, mut n) = ([0.0f32; 3], 0.0f32);
-    for (id, at) in entities {
-        let Some(npc) = crate::markers::NPCS.iter().find(|n| n.2 == *id) else { continue };
-        for k in 0..3 {
-            sum[k] += npc.4[k] + p[k] - at[k];
-        }
-        n += 1.0;
-    }
-    (n > 0.0).then(|| sum.map(|v| v / n))
+    let est: Vec<[f32; 3]> = entities.iter().filter_map(|(id, at)| {
+        let npc = crate::markers::NPCS.iter().find(|n| n.2 == *id)?;
+        Some(std::array::from_fn(|k| npc.4[k] + p[k] - at[k]))
+    }).collect();
+    let near = |a: &[f32; 3], b: &[f32; 3]| (a[0] - b[0]).hypot(a[2] - b[2]) < AGREE && (a[1] - b[1]).abs() < AGREE;
+    let best = est.iter().max_by_key(|a| est.iter().filter(|b| near(a, b)).count())?;
+    let group: Vec<&[f32; 3]> = est.iter().filter(|b| near(best, b)).collect();
+    let n = group.len() as f32;
+    let avg = std::array::from_fn(|k| group.iter().map(|g| g[k]).sum::<f32>() / n);
+    Some((avg, group.len(), est.len()))
 }
 
 /// Round 22 S1: the player's MSB position from the loaded street NPCs (player_msb_from_npcs), when it is on the tile.
