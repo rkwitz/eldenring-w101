@@ -4,7 +4,7 @@ A personal, offline Elden Ring mod. You leave the Stranded Graveyard and walk ou
 
 This repository holds **code only**: Python tools, a Rust DLL and a small C++ navmesh baker. It does not contain anything from either game. You make every model, texture, sound and game file yourself, from your own installs of Wizard101 and Elden Ring.
 
-> **Status.** Steps 1 to 6 and 8 to 10 are scripted. They were checked against the files the author is running (see *Verification* below). Step 7 (the map and event files) is **not fully scripted yet**. Read *Known gaps* before you start.
+> **Status.** Every step is scripted, and the results were checked against the files the author is running (see *Verification*). Steps 3 and 7 also need two patch files that are not in this repository yet. Read *Known gaps* before you start.
 
 ---
 
@@ -100,8 +100,9 @@ Run the commands from `eldenring-w101\tools`. `GD` means `…\Wizard101\Data\Gam
 1. Copy `GD\WizardCity-WC_Streets-WC_Unicorn.wad`, `WizardCity-WorldData.wad` and `ClassicMode-WC_Streets-WC_Unicorn.wad` into `reference\w101\wads\`. Unpack them with wizwad (`pip install wizwad`, then run `wizwad extract`) into `reference\w101\extracted\`.
 2. Convert the classic street:
    ```
-   python nif2obj.py  <extracted>\WC_Z06_Unicorn_Way_Classic.nif  reference\w101\converted_classic\WC_Z06_Unicorn_Way_Classic.obj
-   python nif_normals.py <same .nif> reference\w101\converted_classic\WC_Z06_Unicorn_Way_Classic.normals
+   python nif2obj.py  <ClassicMode-WC_Streets-WC_Unicorn.wad>\WC_Z06_Unicorn_Way.nif  reference\w101\converted_classic\WC_Z06_Unicorn_Way_Classic.obj
+   python nif2obj.py  <WizardCity-WC_Streets-WC_Unicorn.wad>\WC_Z06_Unicorn_Way.nif  reference\w101\converted\WC_Z06_Unicorn_Way.obj
+   python nif_normals.py <classic .nif> reference\w101\converted_classic\WC_Z06_Unicorn_Way_Classic.normals
    python tex2dds.py  <folder of texture .nif files> reference\w101\converted_classic\textures
    python w101_window_states.py <WC_Z06_Unicorn_Way.nif> reference\w101\converted_classic\window_states.tsv
    ```
@@ -112,14 +113,33 @@ Run the commands from `eldenring-w101\tools`. `GD` means `…\Wizard101\Data\Gam
    - the Bone Cage: `w101_bone_cage.py`;
    - the quest window: `w101_quest_window.py`;
    - the clubhouse interior.
-4. Write the mob paths: `python w101_pathing.py --wad <zone>.wad --wad <ClassicMode zone>.wad --obj <street .obj> --out reference\w101\converted_classic`. This writes `unicorn_way_pathing.json`.
-5. Dump the quest text you will see in game: `python -I w101_lang.py dump GD\Root.wad reference\w101\extracted\quests\uw_lang.json`.
+4. Write the mob paths. Put `TemplateManifest.xml` from `Root.wad` (wizwad) alone in a folder, then run:
+   ```
+   python w101_pathing.py --wad GD\WizardCity-WC_Streets-WC_Unicorn.wad --wad GD\ClassicMode-WC_Streets-WC_Unicorn.wad --obj reference\w101\converted_classic\WC_Z06_Unicorn_Way_Classic.obj --out reference\w101\converted_classic --root <that folder>
+   ```
+   This writes `unicorn_way_pathing.json` (md5 `c80a0277…`). Adding the mobs' `ObjectData` xmls to the folder adds their walk speeds to the file, which changes its md5. The picture it draws at the end needs matplotlib.
+5. Dump the quest text you will see in game:
+   ```
+   python -I w101_lang.py dump GD\Root.wad reference\w101\extracted\quests\uw_lang.json "WizQst.*|WizardShops"
+   ```
 
 **Expected:** `WC_Z06_Unicorn_Way_Classic.obj` (about 117,000 vertices), its `.mtl`, `.normals` and `textures\*.dds`.
 
-### Step 3: Hand edit of the street OBJ (manual, see Known gaps)
+### Step 3: The author's edit of the street OBJ
 
-The author edited the converted OBJ in Blender: he removed the Commons archway's tunnel and tidied some geometry. He exported it as `WC_Z06_Unicorn_Way_Classic_edited.obj` and `.mtl` (Blender 5.1.2, OBJ export, `-Z` forward and `Y` up as the importer gives it). `blender_switch_street.py` uses `_edited.obj` when it exists and the converted OBJ otherwise. Without the edit, the script cuts the tunnel itself, but the result is not byte-identical.
+The author edited the street in Blender and exported his whole scene as `WC_Z06_Unicorn_Way_Classic_edited.obj` (Blender 5.1.2). The scene holds:
+
+- the classic street with his deletions (the archway tunnel and some props);
+- the HD street, twice;
+- our invisible floor.
+
+`blender_switch_street.py` uses `_edited.obj` when it exists and the converted OBJ otherwise. `obj_patch.py` recreates his file from your two converted OBJs:
+
+```
+python obj_patch.py apply WC_Z06_Unicorn_Way_Classic_edited.objpatch.gz reference\w101\converted_classic\WC_Z06_Unicorn_Way_Classic_edited.obj reference\w101\converted_classic\WC_Z06_Unicorn_Way_Classic.obj reference\w101\converted\WC_Z06_Unicorn_Way.obj
+```
+
+The result is byte for byte his file (md5 `f6aab2eb…`). Copy `WC_Z06_Unicorn_Way_Classic.mtl` to `_edited.mtl`; the build fills in missing materials from the original MTL. The patch file is not in this repository (see Known gaps). Without it, delete `_edited.obj` and the build cuts the tunnel itself.
 
 Then move the street's vertices out of the Stranded Graveyard. This needs only the game files and your OBJ:
 
@@ -176,51 +196,33 @@ These commands do three jobs:
 
 Run the same commands on `item.msgbnd` and `menu.msgbnd` as well. The game reads the `_dlc02` files when the DLC is installed.
 
-### Step 7: Map and events (msb, emevd, navmesh): partly manual
+### Step 7: Map and events (msb, emevd, navmesh)
 
-The map `project\map\mapstudio\m60_42_36_00.msb.dcx` and the events (`project\event\m60_42_36_00.emevd.dcx`, `m18_00_00_00.emevd.dcx`, `common.emevd.dcx`) were built up over many rounds. Two kinds of change went into them:
+Run this step after step 8: it needs `npc_dialogue.json`, `er_recipes.tsv` and `shop.tsv` from that step.
 
-- **Hand placement in Smithbox:**
-  - the street part `AEG030_518_9000` at (6.13, 89.59, -86.64), rotation Y 4;
-  - the First Step grace parts moved onto the street;
-  - terrain `m423600` lowered by 6.4 m;
-  - a few rocks and the tunnel rock behind the graveyard door deleted.
-- **The scripts below**, each applied to the map the previous one wrote. Every script's docstring gives its usage. The order is:
-  1. `msb_move_street.py`
-  2. `msb_level_grace.py` (one-off)
-  3. `msb_name_region.py`
-  4. `msb_add_room.py`
-  5. `msb_add_sky.py`
-  6. `msb_add_garden.py`
-  7. `msb_add_interiors.py`
-  8. `msb_add_indoor.py`
-  9. `msb_add_mobs.py`, then `msb_more_mobs.py`
-  10. `msb_add_ghost.py`
-  11. `msb_add_boss.py`
-  12. `msb_add_npcs.py`
-  13. `msb_npc_seats.py`
-  14. `msb_add_quests.py`
-  15. `msb_fog_gate.py`
-  16. `msb_door_spawns.py`
-  17. `msb_doors_garden.py`
-  18. `msb_audit.py --apply`
-  19. `footprint_clear.py` and `dome_clear.py` (these edit every neighbouring m60 map)
-- **Events:**
-  1. `emevd.py` on `m18_00_00_00.emevd` (door reset)
-  2. `emevd_quests.py --dialogue …\npc_dialogue.json` on `m60_42_36_00.emevd.dcx`
-  3. `emevd.py --doors`
-  4. `emevd.py --sidewalk`
-  5. `emevd.py --boss-watchdog`
-  6. `emevd.py --garden-doors`
-  7. `emevd_quests.py --cage-ride-press`
+```
+python build_map.py <out folder> --dialogue npc_dialogue.json --recipes ORBS\book\er\er_recipes.tsv --shop ORBS\book\er\shop.tsv --patches <folder of *.msbpatch.gz> [--compare <project>]
+```
+
+Then copy `<out folder>\event` and `<out folder>\map` over the project folder.
+
+- **Events** are replayed from the vanilla files with the event scripts, in the order they were first run. The order is listed in `build_map.py`. The output is byte for byte the deployed `m60_42_36_00.emevd.dcx` (`b19bcc3a…`), `common.emevd.dcx` and `m60.emevd.dcx`.
+- **Maps** are the vanilla maps plus a recorded patch per map (`msb_patch.py`). This covers `m60_42_36_00` (`d4a5029e…`) and the 44 neighbouring m60 tiles that the footprint step edits. It also covers `m18_00_00_00`, whose content is vanilla.
+
+  The maps need a patch because the author's own Smithbox edits are mixed into the script chain:
+  - he placed the street part `AEG030_518_9000` at (6.13, 89.59, -86.64), rotation Y 4, by hand;
+  - he moved the First Step grace onto the street;
+  - he lowered terrain `m423600` by 6.4 m;
+  - he deleted rocks and the tunnel rock behind the graveyard door.
+
+  Smithbox saves and the Blender footprint step also came in between the script runs.
+- **The map scripts** (`msb_move_street.py`, `msb_add_*.py`, `msb_npc_seats.py`, `msb_fog_gate.py`, `msb_door_spawns.py`, `msb_doors_garden.py`, `msb_audit.py`, `footprint_clear.py`, `dome_clear.py`) are how the content was authored. Use them to change the map, then record a new patch with `python msb_patch.py make VANILLA.msb.dcx NEW.msb.dcx NEW.msbpatch.gz`.
 - **Navmesh:**
   ```
   g++ -O2 -I<recast>/Recast/Include recast_bake.cpp <recast>/Recast/Source/*.cpp -o recast_bake
   python er_navmesh.py <map>.msb.dcx GAME\map\m60 <out> --append --asset AEG030_518_9000=aeg030_518_l.geomhkxbnd.dcx
   ```
-  Only **appended** navmeshes load. Check the result with `navmesh_check.py`.
-
-The order above is the author's best reconstruction. **It has not been replayed from vanilla** to the deployed md5. See Known gaps.
+  Only **appended** navmeshes load. Check the result with `navmesh_check.py`. This was not rerun for the verification.
 
 ### Step 8: HUD DLL data folder (`ORBS`)
 
@@ -321,15 +323,16 @@ Start the game with `launchmod_eldenring.bat`. Back up your save first (`%APPDAT
 
 ---
 
-## 6. Known gaps (not reproducible by script today)
+## 6. Known gaps
 
-1. **Map and events (step 7).** Smithbox hand edits and many rounds of incremental script runs produced the deployed `m60_42_36_00.msb.dcx` and the emevds. Nobody has replayed them from vanilla. *Proposal:* add a `build_map.py` that runs the step 7 chain from vanilla, adds the Smithbox moves as explicit script edits, and checks the result part by part against a known-good map.
-2. **The edited street OBJ (step 3).** The author's Blender export does not share a vertex order with `nif2obj.py`'s output: it has 327,728 vertices against 117,562. *Proposal:* an `obj_patch.py` that records the edit as "triangles deleted" (by their position) plus "vertices moved" against the converted OBJ, applied by `blender_switch_street.py`. The patch would contain only numbers that point at your own converted file.
-3. **Voice lines.** These exist only after the Wizard101 client has played them (step 2 prerequisite).
-4. **`unicorn_way_pathing.json`.** The copy in use was written by `w101_pathing.py` on 2026-10-22. It was not regenerated from the WADs for this check. Its node positions feed `quest_nav.tsv` and `road_mask.tsv`.
-5. **Portraits and the fairy sheet.** Blender renders these. The output depends on Blender and Cycles versions.
+1. **The two patch files are not in this repository yet:** `WC_Z06_Unicorn_Way_Classic_edited.objpatch.gz` (about 6.7 MB, or 3.8 MB with `--no-normals`) and the `*.msbpatch.gz` map patches (about 330 KB for all 46 maps). Their contents:
+   - The OBJ patch holds references into your own converted OBJs plus Blender's float noise. Its only literal geometry is our floor and 12 other values.
+   - The map patches hold byte edits to vanilla map entries, plus our own entries.
 
----
+   The author still has to decide whether they may be published. Until he does, steps 3 and 7 can be rebuilt only with a copy from him.
+2. **Voice lines** exist only after the Wizard101 client has played them (step 2 prerequisite).
+3. **Blender renders and the navmesh** (portraits, fairy sheet, every Blender build step, `er_navmesh.py`) were not rerun for the verification. Renders also depend on the Blender and Cycles versions.
+4. **The DLL** builds with the same code and imports, but not byte for byte (PE timestamp and import order).
 
 ## 7. Verification
 
@@ -346,4 +349,10 @@ The author's tree was checked on 2026-11-05 (repo commit 8e633a5, then this READ
 | `road_mask.tsv` | `c9306eb1…` = deployed |
 | voice (step 8, `w101_voice.py`) | 55/55 found. 44 byte-identical to the deployed copies. 6 differ only in their ID3 tag (the audio frames are identical). 5 are lines not yet deployed. |
 | DLL (step 9) | builds. It differs from the deployed DLL only in the PE timestamp, the import-table order and the call references into that table: same imports, same size. |
-| Blender steps 4 and 8 (fairies), msb/emevd/navmesh (step 7), launch (step 10) | not run here (they need Blender or the game) |
+| `unicorn_way_pathing.json` (step 2, from the WADs) | `c80a0277…` = the copy in use |
+| classic and HD street OBJs (step 2, `nif2obj.py` from the WADs) | equal to the author's files apart from the `#vc` comment lines that `nif2obj.py` added later (`obj_patch.py` ignores those lines) |
+| `_edited.obj` (step 3, `obj_patch.py apply` on those OBJs) | `f6aab2eb…` = the author's file, byte for byte. With `--no-normals` the data `parse_obj` reads is identical, and `street_sight.bin` built from it is again `4598d7eb…`. |
+| events (step 7) | `m60_42_36_00.emevd.dcx` `b19bcc3a…`, `common.emevd.dcx` and `m60.emevd.dcx` = deployed, byte for byte |
+| maps (step 7) | 45 of 46 = deployed, byte for byte, including `m60_42_36_00.msb.dcx` `d4a5029e…`. `m18_00_00_00` has identical content but was compressed differently. |
+| `dialogue.tsv` / `voice.tsv` (step 8) | `e9406a1b…` / `cbdad56d…` = deployed |
+| Blender steps 4 and 8 (fairies), navmesh (step 7), launch (step 10) | not run here (they need Blender or the game) |
