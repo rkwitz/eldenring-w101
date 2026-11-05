@@ -217,13 +217,13 @@ def main(argv):
             out.append([speaker or (Q.BY_SLUG[key.split("|")[1]]["giver"] if own == "intro" else own), tidy(rows[n])])
         pages[key] = out
     data = {"version": 2, "personal_use_only": True, "pages": pages}
-    Path(argv[2]).write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
+    Path(argv[2]).write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8", newline="\n")
     total = sum(map(len, pages.values()))
     print(f"{argv[2]}: {len(pages)} conversations, {total} pages "
           f"({len(keys) - len(pages)} keys without lines: {', '.join(k for k in keys if k not in pages)})")
     if len(argv) > 3:
         head = "# dialogue key<TAB>page (0-based)<TAB>file in w101_orbs/voice/ (tools/w101_npc_dialogue.py VOICE)\n"
-        Path(argv[3]).write_text(head + "".join(f"{k}\t{p}\t{f}\n" for k, p, f in voiced), encoding="utf-8")
+        Path(argv[3]).write_text(head + "".join(f"{k}\t{p}\t{f}\n" for k, p, f in voiced), encoding="utf-8", newline="\n")
         print(f"{argv[3]}: {len(voiced)} of {total} pages voiced, {len({f for *_, f in voiced})} files")
 
 

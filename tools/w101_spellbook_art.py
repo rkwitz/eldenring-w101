@@ -56,7 +56,7 @@ def main():
     for page in pages:
         text = read(*lookup[page.lower()]).decode("utf-8", "replace")
         (out / "gui").mkdir(parents=True, exist_ok=True)
-        (out / "gui" / Path(page).name).write_text(text, encoding="utf-8")
+        (out / "gui" / Path(page).name).write_text(text, encoding="utf-8", newline="\n")
         for filename in FILENAME.findall(text):
             path = filename if filename.lower().startswith("gui/") else f"GUI/{filename}"
             art.setdefault(path, set()).add(Path(page).stem)
@@ -79,7 +79,7 @@ def main():
             continue
         image.save(target)
         lines.append(f"{hit[1]}\t{image.size[0]}x{image.size[1]}\t{', '.join(sorted(art[path]))}")
-    (out / "index.txt").write_text("\n".join(lines + ["", "MISSING:"] + missing) + "\n", encoding="utf-8")
+    (out / "index.txt").write_text("\n".join(lines + ["", "MISSING:"] + missing) + "\n", encoding="utf-8", newline="\n")
     print(f"{len(pages)} layouts, {len(lines)} images, {len(missing)} missing -> {out}")
 
 

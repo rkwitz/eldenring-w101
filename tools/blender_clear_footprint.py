@@ -73,5 +73,5 @@ for name in footprint_clear.tiles_to_edit(small):
         backup.write_bytes(target.read_bytes())
     write_dflt(target, raw, header)
     print(f"{name}: moved {len(report)} parts down ({'project' if source == target else 'new from game'})")
-(PROJECT / "footprint_clear.txt").write_text("\n".join(lines) + "\n")
+(PROJECT / "footprint_clear.txt").write_text("\n".join(lines) + "\n", newline="\n")
 print(f"Done: {len(lines)} parts moved. List in {PROJECT / 'footprint_clear.txt'}. Relaunch the game.")

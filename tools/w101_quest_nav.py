@@ -28,7 +28,7 @@ print('fit max error m', err, 'flip', flip, 'rotation deg', np.degrees(np.arctan
 nav = json.load(open(sys.argv[1]))['nav']
 pts = np.array([(n[0] / 100, n[1] / 100) for n in nav['nodes']]) * [1, flip]
 m = pts @ r.T + t
-with open(sys.argv[2], 'w') as f:
+with open(sys.argv[2], 'w', newline="\n") as f:
     f.write('# Unicorn Way walk graph (Wizard101 zone.nav) in m60_42_36_00 MSB x, z; E = edge\n')
     for x, z in m:
         f.write(f'N\t{x:.2f}\t{z:.2f}\n')

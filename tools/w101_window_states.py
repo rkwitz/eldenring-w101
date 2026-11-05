@@ -105,5 +105,5 @@ def window_filter(positions, uvs, faces, rows, enterable=ENTERABLE):
 
 if __name__ == "__main__":
     out = extract(sys.argv[1])
-    Path(sys.argv[2]).write_text("".join("\t".join([b, s] + [f"{x:.5f}" for x in n]) + "\n" for b, s, *n in out))
+    Path(sys.argv[2]).write_text("".join("\t".join([b, s] + [f"{x:.5f}" for x in n]) + "\n" for b, s, *n in out), newline="\n")
     print(f"{len(out)} window triangles of {len({r[0] for r in out})} buildings -> {sys.argv[2]}")

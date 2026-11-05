@@ -214,7 +214,7 @@ for q in out["quests"]:
             for k in ("flag", "counter", "talk_flag"):
                 g.pop(k, None)
 out["flags"] = {k: v for k, v in WQ.flag_table().items() if k != "quests"}
-json.dump(out, open(OUT, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+json.dump(out, open(OUT, "w", encoding="utf-8", newline="\n"), ensure_ascii=False, indent=1)
 print("quests", len(out["quests"]), "classic", len(out["classic_retired"]), "counter flags up to", counter - 1)
 for q in out["quests"]:
     print(q["flags"], q["w101_quest_id"], q["title"], len(q["text"]), [ (x["type"], x["target"], x["count"]) for x in q["goals"]])

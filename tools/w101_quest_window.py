@@ -88,8 +88,8 @@ def write_obj(triangles, centre, texture, dst):
     for k in range(len(triangles)):
         a = 3 * k + 1
         lines.append(f"f {a}/{a} {a + 1}/{a + 1} {a + 2}/{a + 2}")
-    dst.write_text("\n".join(lines) + "\n")
-    dst.with_suffix(".mtl").write_text(f"newmtl {texture}\nmap_Kd textures/{texture}.dds\n")
+    dst.write_text("\n".join(lines) + "\n", newline="\n")
+    dst.with_suffix(".mtl").write_text(f"newmtl {texture}\nmap_Kd textures/{texture}.dds\n", newline="\n")
 
 
 if __name__ == "__main__":

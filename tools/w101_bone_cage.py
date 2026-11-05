@@ -43,8 +43,8 @@ def open_cage(src, dst):
         nx, nz = hinge_x + dx * math.cos(a) - dz * math.sin(a), hinge_z + dx * math.sin(a) + dz * math.cos(a)
         lines[vertices[k]] = f"v {nx:.6f} {y:.6f} {nz:.6f}"
     text = "\n".join(lines) + "\n"
-    Path(dst).write_text(text.replace(f"mtllib {Path(src).stem}.mtl", f"mtllib {Path(dst).stem}.mtl"))
-    Path(dst).with_suffix(".mtl").write_text(Path(src).with_suffix(".mtl").read_text())
+    Path(dst).write_text(text.replace(f"mtllib {Path(src).stem}.mtl", f"mtllib {Path(dst).stem}.mtl"), newline="\n")
+    Path(dst).with_suffix(".mtl").write_text(Path(src).with_suffix(".mtl").read_text(), newline="\n")
     print(f"door: {len(door)} vertices swung {OPEN_DEGREES} deg about x {hinge_x:.3f}, z {hinge_z:.3f} -> {dst}")
 
 

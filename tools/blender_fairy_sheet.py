@@ -268,7 +268,7 @@ def render(D, TEX, OUT):
             for o, (name, v, uv, tris) in zip(objs, pose):
                 co = (v - centre).ravel().tolist(); o.data.vertices.foreach_set("co", co); o.data.update()
             sc.render.filepath = f"{OUT}/v{vi}_f{fi:02d}.png"; bpy.ops.render.render(write_still=True)
-    open(f"{OUT}/meta.txt", "w").write(f"centre {centre.tolist()}\nradius {radius}\nlo {lo.tolist()}\nhi {hi.tolist()}\nseconds {a.stop - a.start}\n")
+    open(f"{OUT}/meta.txt", "w", newline="\n").write(f"centre {centre.tolist()}\nradius {radius}\nlo {lo.tolist()}\nhi {hi.tolist()}\nseconds {a.stop - a.start}\n")
     print("done", lo, hi, radius)
     return VIEWS, FRAMES, CELL, centre, radius
 

@@ -200,7 +200,7 @@ def main():
         lines += [f"P\t{p[0] / 80:.4f}\t{-p[2] / 60:.4f}\t{-p[1] / 60:.4f}" for p in pos]
         if preview is not None:
             draw_preview(preview / f"flip_{f:02}.png", pos, tris)
-    out.write_text("\n".join(lines) + "\n")
+    out.write_text("\n".join(lines) + "\n", newline="\n")
     print(f"{out}: {frames} frames over {duration:.3f} s, {len(verts)} vertices, {len(tris)} triangles")
 
 

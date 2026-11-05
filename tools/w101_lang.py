@@ -109,7 +109,7 @@ def main(argv):
     cmd = argv[1]
     if cmd == "dump":
         tables = lang_tables(argv[2], argv[4] if len(argv) > 4 else None)
-        with open(argv[3], "w", encoding="utf-8") as f:
+        with open(argv[3], "w", encoding="utf-8", newline="\n") as f:
             json.dump(tables, f, ensure_ascii=False)
         print(len(tables), "tables,", sum(len(r) for r in tables.values()), "entries")
     elif cmd == "grep":

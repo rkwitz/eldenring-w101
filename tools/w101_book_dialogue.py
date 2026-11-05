@@ -52,7 +52,7 @@ def main(argv):
                               Q.PORTRAITS.get(who, "") if other else ""])
             else:
                 lines.append(["P", flag, clean(text), "", ""])
-    Path(argv[-1]).write_text("".join("\t".join(map(str, l)) + "\n" for l in lines), encoding="utf-8")
+    Path(argv[-1]).write_text("".join("\t".join(map(str, l)) + "\n" for l in lines), encoding="utf-8", newline="\n")
     print(f"{argv[-1]}: {sum(l[0] == 'R' for l in lines)} conversations, {sum(l[0] == 'P' for l in lines)} pages")
 
 

@@ -147,7 +147,7 @@ def main():
         print(f"{png} {image.size[0]}x{image.size[1]}")
     if effect is None:
         sys.exit(f"{EFFECT} not found in {source}")
-    (out / "fx_disappear.tsv").write_text(effect_shape(effect))
+    (out / "fx_disappear.tsv").write_text(effect_shape(effect), newline="\n")
     print("fx_disappear.tsv")
 
 

@@ -174,7 +174,7 @@ class Build:
             if not self.a.dry_run:
                 pj.write_text('{\n  "ProjectName": "eldenring-w101",\n  "GameRoot": ' + jstr(self.game) +
                               ',\n  "GameType": 8,\n  "PinnedParams": [],\n  "PinnedRows": {},\n  "PinnedFields": {},\n'
-                              '  "UseLooseParams": false,\n  "PartialParams": false,\n  "LastFmgLanguageUsed": "engus"\n}\n')
+                              '  "UseLooseParams": false,\n  "PartialParams": false,\n  "LastFmgLanguageUsed": "engus"\n}\n', newline="\n")
         vanilla = self.project / "regulation.bin.vanilla"
         if not vanilla.exists():
             print(f"    copying the game's regulation.bin to {vanilla}")
@@ -343,7 +343,7 @@ class Build:
         if not ini.exists() and not self.a.dry_run:
             ini.write_text("left = 0\nbottom = 0\nscale = 1\ndebug = 0\n"
                            "loadscreen_image = w101_orbs/book/art/GUI/LoadScreen_W01_WC_01.png\n"
-                           "music_battle = w101_orbs/music/WC_HauntedWay_Combat.ogg\n")
+                           "music_battle = w101_orbs/music/WC_HauntedWay_Combat.ogg\n", newline="\n")
 
     def modengine_config(self):
         cfg = self.modengine / "config_eldenring.toml"
@@ -358,7 +358,7 @@ class Build:
         if not self.a.dry_run:
             if cfg.exists() and not cfg.with_name(cfg.name + ".before_build").exists():
                 shutil.copy2(cfg, cfg.with_name(cfg.name + ".before_build"))
-            cfg.write_text(text)
+            cfg.write_text(text, newline="\n")
 
     def verify(self):
         good = bad = absent = 0
