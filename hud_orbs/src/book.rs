@@ -2564,8 +2564,7 @@ impl Book {
             return;
         }
         let key = |k: Key| ui.is_key_pressed_no_repeat(k);
-        // Round 31 (SH3): A / Enter clicks what the cursor is on, as in the book; over nothing it still buys or
-        // sells the lit row (below).
+        // Round 31 (SH3): A / Enter clicks what the cursor is on, as in the book; over nothing it does nothing.
         let a_press = pressed & input::A != 0 || key(Key::Enter);
         let clicked = |hits: layout::Hits, l: &Layout, is_top: bool| {
             hits.button.filter(|_| pointer.clicked || a_press).and_then(|b| crate::shop::click(&l.nodes[b].name, is_top))
@@ -2576,8 +2575,9 @@ impl Book {
         let act = clicked(top_hits, top, true).or_else(|| clicked(page_hits, page, false)).or_else(|| {
             if pressed & (input::B | input::BACK) != 0 || key(Key::Escape) {
                 Some(Act::Close)
-            } else if pressed & input::A != 0 || key(Key::Enter) || key(Key::Space) {
-                Some(Act::Trade)
+            // Round 35 (Ryan: "on the sell tab ... you press anywhere on the screen, it'll sell the item, not just
+            // the button"): A / Enter / Space over nothing used to buy or sell the lit row. As in Wizard101, only the
+            // Buy / Sell button trades now; A over a button still clicks it (above).
             } else if pressed & input::Y != 0 || key(Key::Tab) {
                 Some(Act::Tab(!shop.selling))
             } else if pressed & input::LB != 0 || pressed & input::RB != 0 {
