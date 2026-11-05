@@ -145,7 +145,10 @@ class Build:
         else:
             targets = subprocess.run(["rustup", "target", "list", "--installed"], capture_output=True, text=True).stdout
             if "x86_64-pc-windows-gnu" not in targets:
-                problems.append("Rust target missing: `rustup target add x86_64-pc-windows-gnu`")
+                print("    adding the Rust target: rustup target add x86_64-pc-windows-gnu")
+                added = subprocess.run(["rustup", "target", "add", "x86_64-pc-windows-gnu"]).returncode == 0
+                if not added:
+                    problems.append("Rust target missing: `rustup target add x86_64-pc-windows-gnu` failed")
             linker = "gcc" if platform.system() == "Windows" else "x86_64-w64-mingw32-gcc"
             if shutil.which(linker) is None:
                 problems.append(f"MinGW-w64 not found ({linker}): install it (MSYS2 on Windows) for the DLL")
