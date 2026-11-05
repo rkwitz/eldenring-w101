@@ -1,3 +1,5 @@
+<img width="2560" height="1440" alt="20261105005507_1" src="https://github.com/user-attachments/assets/eed363a7-0b73-407c-9178-bb5d0601d691" />
+
 # Elden Ring on Unicorn Way
 
 A personal, offline Elden Ring mod. You leave the Stranded Graveyard and walk out onto Wizard101's Unicorn Way, which has been rebuilt at The First Step (map tile `m60_42_36_00`). The street has its classic look, its sky, its NPCs and its quest line up to Rattlebones. A HUD DLL draws Wizard101's globes, spellbook, dialogue, shop and music over the game.
