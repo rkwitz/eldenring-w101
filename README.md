@@ -11,7 +11,6 @@ This repository holds **code only**: Python tools, a Rust DLL and a small C++ na
 ## 1. Legal note (read first)
 
 - You must own both games. Neither game's files are, or ever will be, in this repository. Do not publish anything the tools write.
-- The Wizard101 Terms of Use (wizard101.com, *Terms of Use*) forbid reverse engineering the client and making derivative works. Following this README extracts and converts Wizard101 files, and that may break those terms even for private use. KingsIsle could ask for this project to be taken down. This is not legal advice. Decide for yourself.
 - Elden Ring mods are only for **offline** play. Turn Easy Anti-Cheat off (Mod Engine 2 does this). Never take a modded game online.
 - Tools from third parties keep their own licences. hudhook is vendored under `hud_orbs/vendor/hudhook` with its LICENSE. Recast is zlib-licensed and is not included.
 
