@@ -23,11 +23,13 @@ This repository holds **code only**: Python tools, a Rust DLL and a small C++ na
 1. **Install the apps:** Python 3.10+, Blender with the Soulstruct for Blender add-on (`io_soulstruct`), Smithbox, UXM Selective Unpacker, Mod Engine 2, Rust with the `x86_64-pc-windows-gnu` target, and MinGW-w64 (MSYS2). The versions used are in [docs/BUILD_DETAILS.md](docs/BUILD_DETAILS.md#prerequisites). build.py installs the Python packages it needs.
 2. **Unpack Elden Ring with UXM Selective Unpacker:** at least `asset`, `chr`, `event`, `map`, `material`, `menu`, `msg`, `param` and `sfx`.
 3. **Prepare Wizard101:** install it, turn on **Classic Mode**, and play the Unicorn Way quest line up to Rattlebones once, talking to the NPCs. The client only downloads some files and voice lines the first time it needs them.
-4. **Run the build**, then start the game with Mod Engine 2's `launchmod_eldenring.bat`. Back up your save first (`%APPDATA%\EldenRing\<id>\ER0000.sl2`).
+4. **Back up your save:** `%APPDATA%\EldenRing\<id>\ER0000.sl2`.
+5. **Build:** in the repository folder, copy the config, set your paths in it, then run the build:
    ```
-   copy config.example.toml config.toml     (then set your paths in it)
+   copy config.example.toml config.toml
    python build.py
    ```
+6. **Play:** once the build has finished, start the game with Mod Engine 2's `launchmod_eldenring.bat`. Run the build again only after you change something.
 
 `python build.py --dry-run` shows what would run. `--only STEP` and `--from STEP` run part of the build, `--force` redoes steps that are up to date, and `--list` names the steps. Each step and the command it runs are in [docs/BUILD_DETAILS.md](docs/BUILD_DETAILS.md).
 
