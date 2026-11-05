@@ -8,12 +8,15 @@ pub struct Game;
 /// A giver's MSB position to put the preview camera in front of (11b/11c_markers_close).
 pub static CLOSE: std::sync::Mutex<Option<[f32; 3]>> = std::sync::Mutex::new(None);
 
+/// Round 30: a third-person view (camera, look-at point, player's feet) for the floater shots (30*).
+pub static VIEW: std::sync::Mutex<Option<([f32; 3], [f32; 3], [f32; 3])>> = std::sync::Mutex::new(None);
+
 /// The camera turned this far (radians, clockwise from up the street): the quest helper shots (14_quest_helper*).
 pub static TURN: std::sync::Mutex<f32> = std::sync::Mutex::new(0.0);
 
 /// Quest flags the preview pretends are on.
-const FLAGS: &[u32] = &[10000800, 14000800, 105, 110, 1042362000, 1042362001, 1042362009, 1042362010, 1042362500 + 2, 1042362040, 1042362540,
-                        1042362541, 1042362100, 1042362011, 1042362109,
+const FLAGS: &[u32] = &[10000800, 14000800, 105, 110, 1042360300, 1042360301, 1042360309, 1042360310, 1042360500 + 2, 1042360340, 1042360540,
+                        1042360541, 1042360400, 1042360311, 1042360409,
                         67000, 67010, 67210]; // and three cookbooks (crafting page)
 
 pub fn event_flag(flag: u32) -> Option<bool> {
@@ -25,11 +28,21 @@ pub fn set_event_flag(_flag: u32, _on: bool) {}
 static SPELLS: std::sync::Mutex<[i32; 14]> = std::sync::Mutex::new([4010, 4200, 4361, 4430, 4301, 6600, -1, -1, -1, -1, -1, -1, -1, -1]);
 
 impl Game {
+    /// Round 29 (T1): no Torrent in the preview.
+    pub fn fade_torrent(&self, _out: bool) -> Option<usize> {
+        None
+    }
+
     /// A Lost Soul and Rattlebones up the street, a Dark Sprite nearer.
-    pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3], f32)> {
+    pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3], f32, Option<[f32; 3]>)> {
         [(4180, [-23.0, 93.5, -100.0], 1.6), (4960, [-5.0, 93.5, -86.0], 0.0), (3450, [-17.5, 94.0, -106.0], 1.4),
          (3500, [-21.0, 93.5, -104.0], 1.7)]
-            .into_iter().filter(|e| models.contains(&e.0)).collect()
+            .into_iter().filter(|e| models.contains(&e.0)).map(|(m, p, h)| (m, p, h, None)).collect()
+    }
+
+    /// Round 26 (O1): no camera planes in the preview.
+    pub fn clip_planes(&self) -> Option<(f32, f32)> {
+        None
     }
 
     /// The street NPCs the game "has loaded": all but Lady Oriel (who then takes the MSB-spot fallback), at their MSB
@@ -37,6 +50,9 @@ impl Game {
     pub fn entities(&self, models: &[u32], ids: &[u32]) -> Vec<(u32, [f32; 3])> {
         crate::markers::NPCS.iter().filter(|n| n.0 != "lady_oriel" && models.contains(&n.3) && ids.contains(&n.2))
             .map(|n| (n.2, n.4)).collect()
+    }
+    pub fn entity_render_bits(&self, _models: &[u32], _ids: &[u32]) -> Vec<(u32, u8, u8, u32)> {
+        Vec::new()
     }
 
     pub fn set_spell(&self, index: usize, spell: i32) -> bool {
@@ -48,8 +64,32 @@ impl Game {
         Err("preview")
     }
 
+    pub fn add_runes(&self, _runes: u32) -> Option<u32> {
+        None
+    }
+
+    pub fn spend_runes(&self, _runes: u32) -> Option<u32> {
+        None
+    }
+
     pub fn equip(&self, _slot: u32, _item_id: Option<u32>) -> Result<(), &'static str> {
         Ok(())
+    }
+
+    pub fn add_player_stat(&self, _fp: bool, _percent: f32) -> Option<(i32, i32)> {
+        None
+    }
+
+    pub fn player_yaw(&self) -> Option<f32> {
+        None
+    }
+
+    pub fn action_button(&self, _row: u32) -> Option<ActionButton> {
+        None
+    }
+
+    pub fn set_action_button_text(&self, _row: u32, _text_id: i32) -> bool {
+        false
     }
 
     pub fn fake() -> Game {
@@ -71,6 +111,16 @@ impl Game {
 
     /// A camera behind the player looking up the street at the quest givers (physics space = chunk space here).
     pub fn camera(&self) -> Option<crate::markers::Camera> {
+        if let Some((pos, look, player)) = *VIEW.lock().unwrap() {
+            let f = [look[0] - pos[0], look[1] - pos[1], look[2] - pos[2]];
+            let l = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt();
+            let f = [f[0] / l, f[1] / l, f[2] / l];
+            let rl = (f[2] * f[2] + f[0] * f[0]).sqrt();
+            let r = [f[2] / rl, 0.0, -f[0] / rl];
+            let u = [f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]];
+            let matrix = [[r[0], r[1], r[2], 0.0], [u[0], u[1], u[2], 0.0], [f[0], f[1], f[2], 0.0], [pos[0], pos[1], pos[2], 1.0]];
+            return Some(crate::markers::Camera { matrix, fov: 0.85, player });
+        }
         let turn = *TURN.lock().unwrap();
         let f = [if CLOSE.lock().unwrap().is_some() { 0.0f32 } else { 0.02 } + turn.sin(), 0.0, turn.cos()];
         let n = (f[0] * f[0] + f[2] * f[2]).sqrt();
@@ -78,6 +128,11 @@ impl Game {
         let (c, player) = self.spot();
         let matrix = [[f[2], 0.0, -f[0], 0.0], [0.0, 1.0, 0.0, 0.0], [f[0], 0.0, f[2], 0.0], [c[0], c[1], c[2], 1.0]];
         Some(crate::markers::Camera { matrix, fov: 0.85, player })
+    }
+
+    /// Round 32 (U1): no model box in the preview (PLAYER_TOP).
+    pub fn player_head(&self) -> Option<f32> {
+        None
     }
 
     pub fn sheet(&self) -> Option<Sheet> {
@@ -145,6 +200,10 @@ impl Game {
     pub fn player_address(&self) -> Option<usize> {
         Some(1)
     }
+    /// Round 30: no live HP in the preview (floaters come from the "float:" scenes).
+    pub fn combatants(&self, _models: &[u32]) -> Vec<(usize, u32, [f32; 3], i32)> {
+        Vec::new()
+    }
 }
 
 /// Ryan's GraphicsConfig.xml (2026-10-30) as CSWindowScreenConfig's fields.
@@ -166,4 +225,16 @@ pub fn quit_to_title() -> bool {
 }
 pub fn close_window() -> bool {
     false
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ActionButton {
+    pub region: u8,
+    pub radius: f32,
+    pub angle: i32,
+    pub height: f32,
+    pub base: f32,
+    pub angle_check: u8,
+    pub allow_angle: i32,
+    pub text_id: i32,
 }

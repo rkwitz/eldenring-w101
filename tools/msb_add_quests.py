@@ -5,8 +5,9 @@
   - the quest givers: one invisible asset each (w101_quests.GIVER_MODEL, vanilla's empty AEG099_990), with the
     entity id the talk action button uses. The visible placeholders of earlier rounds (OLD_GIVER_MODELS) are turned
     into it in place: same-length part name, model index, instance counts (the old models stay listed, unused)
-  - the four Bone Cages (placeholder prison cage asset, w101_quests.CAGES), which the cage events keep disabled
-    except while their goal is current
+  - the four Bone Cages (w101_quests.CAGES; round 22: Wizard101's lamp-post bone cage, a closed and an open model at
+    each spot, blender_build_cage.py; the cage events show one of them). Round 21's AEG270_120 placeholders are
+    turned into the closed model in place
   - the goal spheres (w101_quests.REGIONS), Other-type regions like the door regions
 
 Assets are copies of the street part (as msb_add_garden.put_asset) placed in the frame of the street, the garden or an
@@ -78,6 +79,20 @@ def place_quests(raw):
         parts.entries[i] = bytes(e)
         names[i] = new
         print(f"{old} -> {new} ({slug})")
+    # 1c. (round 22) the old vanilla cage placeholders -> Wizard101's closed cage model, in place (same-length names)
+    for c in range(len(Q.CAGES)):
+        old, new = f"{Q.OLD_CAGE_MODEL}_{9100 + c}", f"{Q.CAGE_MODEL}_{9100 + c}"
+        if old not in names:
+            continue
+        assert new not in names and len(new) == len(old), (old, new)
+        i = names.index(old)
+        e = bytearray(parts.entries[i])
+        touched.add(struct.unpack_from("<i", e, 0x14)[0])
+        _set_name(e, new)
+        struct.pack_into("<i", e, 0x14, add_model(lists, Q.CAGE_MODEL, STREET_MODEL))
+        parts.entries[i] = bytes(e)
+        names[i] = new
+        print(f"{old} -> {new} (cage {c})")
     for m in touched:
         e = bytearray(models[m])
         struct.pack_into("<i", e, 0x18, sum(struct.unpack_from("<i", x, 0x14)[0] == m for x in parts.entries))

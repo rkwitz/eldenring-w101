@@ -8,6 +8,15 @@ changed, so deleting the copies undoes it. The hidden placements get a colour tr
 script still updates them but they are drawn invisibly:
 - 01_000_fe.gfx, PlayerHUD > Gauge: HP, MP (FP), HPRegain (the recoverable-HP sliver) and SP (stamina). Enemy and
   ally tags also have placements named HP, so only the sprite that places SP is touched.
+  Gauge's Equip is the row of buff / equipment-effect icons under the bars (top left); hidden for now (round 29 E1).
+- 01_000_fe.gfx, PlayerHUD > ItemPanel > Arts > Fade > Text: the weapon skill name above the right-hand slot
+  ("Blood Boon Ritual"); hidden for now (round 29 E2). The sprite is found by its MpShortage placement.
+- 01_000_fe.gfx, the same Arts > Fade: the strip behind that name. Round 32 (U5, Ryan: "the bar above the item HUD
+  where the skill name was is still there"): Fade's three unnamed PlaceObject3 images, depth 1
+  MENU_FL_Arts_waku4 (the strip, 754x80 at half scale), depth 2 MENU_FL_Arts (the skill mark at its left end) and
+  depth 7 MENU_PossessionWaku, and its MpShortage (the not-enough-FP mark drawn on the strip). The sprite is the one
+  placing both MpShortage and Text (each item slot's sprite places an MpShortage too, with no Text).
+- 01_000_fe.gfx, PlayerHUD > PersonalCompass: the compass bar at the top centre (round 34 CR2).
 - 01_001_fe_soul.gfx: the root's Soul clip (rune counter).
 The quick slots are PlayerHUD's ItemPanel and ItemPanel2 (pouch); in the 1920x1080 movie the slot cross reaches down
 to about y 1045, and the globes' tops (Wizard101 y 570 of 768 at hud_orbs scale 1, bottom 723) are at y 865, so both
@@ -21,12 +30,19 @@ from pathlib import Path
 
 HIDE = "hide"
 ITEM_RAISE = 200.0  # movie pixels; the cross then ends at about y 845, just above the globes
-# movie: [(a name that marks the right sprite or root timeline, {placement name: edit}, placements to expect)];
+# movie: [(a name, or a tuple of names all placed there, that marks the right sprite or root timeline,
+#          {placement name or ("depth", n) for an unnamed one: edit}, placements to expect)];
 # an edit is HIDE or (dx, dy) in movie pixels.
 TARGETS = {
     "01_000_fe.gfx": [
-        (b"SP", {b"HP": HIDE, b"MP": HIDE, b"HPRegain": HIDE, b"SP": HIDE}, 4),
+        (b"SP", {b"HP": HIDE, b"MP": HIDE, b"HPRegain": HIDE, b"SP": HIDE, b"Equip": HIDE}, 5),
+        (b"MpShortage", {b"Text": HIDE}, 1),  # Arts > Fade: the skill (Ash of War) name; Item/weapon Fades place no MpShortage+Text pair
+        # Round 32 (U5): the strip under that name, its mark and the FP-shortage mark on it (Arts > Fade only).
+        ((b"MpShortage", b"Text"), {("depth", 1): HIDE, ("depth", 2): HIDE, ("depth", 7): HIDE, b"MpShortage": HIDE}, 4),
         (b"ItemPanel", {b"ItemPanel": (0.0, -ITEM_RAISE), b"ItemPanel2": (0.0, -ITEM_RAISE)}, 2),
+        # Round 34 (CR2, Ryan: Wizard101 has no compass): PlayerHUD's PersonalCompass (the bar of ticks and the
+        # E / N letters at the top centre; its markers are inside it).
+        (b"PersonalCompass", {b"PersonalCompass": HIDE}, 1),
     ],
     "01_001_fe_soul.gfx": [(b"Soul", {b"Soul": HIDE}, 2)],  # root Soul and the Soul inside it
 }
@@ -131,8 +147,31 @@ for value, width in [(0, 1), (1, 1), (10, 4), (256, 10), (256, 10), (256, 10), (
 INVISIBLE = (INVISIBLE << 2).to_bytes(6, "big")  # 46 bits, padded to 48
 
 
-def placed_name(body):
-    """Instance name of a PlaceObject2 body, or None."""
+def po3_fields(body):
+    """PlaceObject3 body: (flags, depth, position after the character id or None, matrix end, name or None)."""
+    flags, flags2 = body[0], body[1]
+    depth = struct.unpack_from("<H", body, 2)[0]
+    pos = 4
+    if flags2 & 0x08:  # class name
+        pos = body.index(b"\0", pos) + 1
+    if flags & 0x02:
+        pos += 2
+    matrix_at = pos
+    if flags & 0x04:
+        pos = matrix_end(body, pos)
+    matrix_stop = pos
+    if flags & 0x08:
+        pos = cxform_end(body, pos)
+    if flags & 0x10:
+        pos += 2
+    name = body[pos:body.index(b"\0", pos)] if flags & 0x20 else None
+    return flags, depth, matrix_at, matrix_stop, name
+
+
+def placed_name(body, code=26):
+    """Instance name of a PlaceObject2 (or, `code` 70, PlaceObject3) body, or None."""
+    if code == 70:
+        return po3_fields(body)[4]
     flags = body[0]
     pos = 3
     if flags & 0x02:
@@ -144,6 +183,19 @@ def placed_name(body):
     if flags & 0x10:
         pos += 2
     return body[pos:body.index(b"\0", pos)] if flags & 0x20 else None
+
+
+def edit3(body, edits):
+    """A PlaceObject3 body hidden when `edits` hides its name or ("depth", its depth), or None."""
+    flags, depth, _, matrix_stop, name = po3_fields(body)
+    change = edits.get(name) if name else None
+    if change is None:
+        change = edits.get(("depth", depth))
+    if change is None:
+        return None
+    if change != HIDE or flags & 0x08:
+        sys.exit(f"PlaceObject3 at depth {depth}: only hiding one without a colour transform is supported")
+    return bytes([flags | 0x08]) + body[1:matrix_stop] + INVISIBLE + body[matrix_stop:]
 
 
 def edit(body, edits):
@@ -182,14 +234,16 @@ def tag_bytes(code, body):
 
 def edit_in(tag_list, data, marker, edits, done):
     """Bytes of the tags with matching placements edited, if `marker` is placed among them, else None."""
-    placed = {placed_name(data[p + h:p + h + l]) for c, p, h, l in tag_list if c == 26}
-    if marker not in placed:
+    placed = {placed_name(data[p + h:p + h + l], c) for c, p, h, l in tag_list if c in (26, 70)}
+    if not all(m in placed for m in (marker if isinstance(marker, tuple) else (marker,))):
         return None
     out = bytearray()
     for code, pos, header, length in tag_list:
-        changed = edit(data[pos + header:pos + header + length], edits) if code == 26 else None
+        body = data[pos + header:pos + header + length]
+        changed = edit(body, edits) if code == 26 else edit3(body, edits) if code == 70 else None
         if changed:
-            done.append(placed_name(changed).decode())
+            name = placed_name(changed, code)
+            done.append(name.decode() if name else f"depth {po3_fields(changed)[1]}")
         out += tag_bytes(code, changed) if changed else data[pos:pos + header + length]
     return bytes(out)
 
@@ -221,7 +275,7 @@ def patch(data, marker, edits, expected, movie):
     if len(done) != expected:
         sys.exit(f"{movie}: expected to edit {expected} placements, edited {done}")
     struct.pack_into("<I", out, 4, len(out))
-    print(f"{movie}: {', '.join(f'{n} {edits[n.encode()]}' for n in done)}")
+    print(f"{movie}: {', '.join(done)}")
     return bytes(out)
 
 

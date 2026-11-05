@@ -42,6 +42,10 @@ pub struct TextStyle {
     /// Line pitch in line heights (1.0 unless a caller sets it: the spell cards set their lines closer, as
     /// Wizard101's three card text lines sit in the card's parchment box).
     pub leading: f32,
+    /// Round 24 (B1): a line drawn on the line right after this (wrapped) text's last one, never below the box's
+    /// bottom: (text, its left and right x, its style). The spell cards' slots and needs line follows a one-line
+    /// description on the second line instead of leaving it empty.
+    pub then: Option<Box<(String, [f32; 2], TextStyle)>>,
 }
 
 impl TextStyle {
@@ -59,6 +63,7 @@ impl TextStyle {
             tracking: 0.0,
             picture: PICTURE_SIZE,
             leading: 1.0,
+            then: None,
         }
     }
 
@@ -168,6 +173,7 @@ impl Layout {
                 tracking: get("ka").and_then(|v| v.parse().ok()).unwrap_or(0.0),
                 picture: PICTURE_SIZE,
                 leading: 1.0,
+                then: None,
             });
             let frame = |key: &str| get(key).and_then(floats::<4>);
             nodes.push(Node {
@@ -215,7 +221,7 @@ impl Layout {
         out
     }
 
-    fn is_under(&self, mut id: usize, ancestor: usize) -> bool {
+    pub fn is_under(&self, mut id: usize, ancestor: usize) -> bool {
         while let Some(p) = self.nodes[id].parent {
             if p == ancestor {
                 return true;
@@ -273,11 +279,24 @@ pub struct View {
     pub checked: HashSet<usize>,
     /// Nodes drawn greyed out (Wizard101's disabled frame and alpha).
     pub greyed: HashSet<usize>,
+    /// Round 28 (B7): greyed nodes drawn in their disabled frame at full opacity (Wizard101's grey page arrows are
+    /// a solid grey picture, not a see-through one).
+    pub opaque: HashSet<usize>,
+    /// Round 28 (B3): pictures drawn right after node `.0` (over its own art, under everything after it in the
+    /// layout's painter's order): (node, rect, image, uv). The shop's Buy window covers the backpack bar of its
+    /// background with the plain parchment of the Sell window's at the same spot.
+    pub patches: Vec<(usize, [f32; 4], String, [f32; 4])>,
     /// Nodes moved to another rectangle (the tab marker under the chosen tab).
     pub rect: HashMap<usize, [f32; 4]>,
     pub extra: Vec<([f32; 4], String, TextStyle)>,
     /// Images drawn over a node, right after its own (in the layout's painter's order).
     pub node_images: HashMap<usize, String>,
+    /// Round 22 (H8): an alpha for a node image (default 1): the tracked quest card's pulsing light.
+    pub node_image_alpha: HashMap<usize, f32>,
+    /// Round 34 (CR1): an alpha for a node and everything under it (the "You made a" panel fading out).
+    pub subtree_alpha: HashMap<usize, f32>,
+    /// Round 34 (CR1): a node drawn with everything under it after the view's extras (draw_late), over the page.
+    pub late: Option<usize>,
     /// Another picture for a node's own art (same frames).
     pub node_art: HashMap<usize, String>,
     /// Images drawn after the nodes, under the fills (backgrounds): (rect, image, uv).
@@ -287,6 +306,8 @@ pub struct View {
     /// Filled triangles and rectangles drawn over the images, under the text.
     pub over_tris: Vec<([[f32; 2]; 3], ImColor32)>,
     pub over_fills: Vec<([f32; 4], ImColor32)>,
+    /// Filled circles (the ellipse in each rect) drawn over the images, under the text.
+    pub over_discs: Vec<([f32; 4], ImColor32)>,
     /// Nine-piece frames (tl, t, tr, l, r, bl, b, br, centre) drawn over the fills, under the images.
     pub frames: Vec<([f32; 4], [Option<String>; 9])>,
     /// Images drawn after the nodes: (rect, image, uv).
@@ -356,9 +377,14 @@ impl View {
 #[derive(Default)]
 pub struct Textures {
     map: HashMap<String, (TextureId, [f32; 2])>,
-    failed: HashSet<String>,
+    /// Round 25 (H8/H9): files that failed to load and when; tried again after RETRY seconds (Ryan's 14:38 log: the
+    /// ER portraits deployed at 14:40 never showed, the first failure was kept for the whole session).
+    failed: HashMap<String, std::time::Instant>,
     wanted: Vec<String>,
 }
+
+/// Seconds before a picture that failed to load is tried again (round 25).
+const RETRY: f32 = 20.0;
 
 impl Textures {
     pub fn get(&self, name: &str) -> Option<(TextureId, [f32; 2])> {
@@ -377,7 +403,8 @@ impl Textures {
             if name.starts_with('@') && !name.starts_with("@er/") {
                 continue;
             }
-            if !self.map.contains_key(&name) && !self.failed.contains(&name) && !self.wanted.contains(&name) {
+            let failed = self.failed.get(&name).is_some_and(|t| t.elapsed().as_secs_f32() < RETRY);
+            if !self.map.contains_key(&name) && !failed && !self.wanted.contains(&name) {
                 self.wanted.push(name);
             }
         }
@@ -406,11 +433,14 @@ impl Textures {
                 });
             match loaded {
                 Ok(t) => {
+                    self.failed.remove(&name);
                     self.map.insert(name, t);
                 }
                 Err(e) => {
-                    tracing::warn!("spellbook art {}: {e}", path.display());
-                    self.failed.insert(name);
+                    if !self.failed.contains_key(&name) {
+                        tracing::warn!("spellbook art {}: {e}", path.display());
+                    }
+                    self.failed.insert(name, std::time::Instant::now());
                 }
             }
         }
@@ -621,6 +651,16 @@ impl Canvas<'_, '_> {
         let pitch = line_h * style.leading;
         let total = pitch * lines.len() as f32;
         let mut y = if style.middle && total < height { r[1] + (height - total) / 2.0 } else { r[1] };
+        // Round 24 (B1): the following line goes where the next line would (on the first if there is no text).
+        if let Some(then) = &style.then {
+            // The lines the loop below draws (a wrapped text stops at its box's bottom); none for an empty text.
+            let fit = if style.wrap { ((r[3] + pitch * 0.25 - y) / pitch).floor().max(0.0) as usize } else { usize::MAX };
+            let used = if lines.iter().all(|l| l.trim().is_empty()) { 0 } else { lines.len().min(fit) };
+            let next = (y + pitch * used as f32).min(r[3]);
+            let (text, x, follow) = then.as_ref();
+            let line = font_line_height(self.fonts, &follow.font) * follow.scale;
+            self.text(text, [x[0], next, x[1], next + line], follow, hovered);
+        }
         let colour = if hovered { style.hover.unwrap_or(style.colour) } else { style.colour };
         let colour = fade(colour, self.alpha);
         let dark = fade(ImColor32::from_rgba(0, 0, 0, 200), self.alpha * colour.a as f32 / 255.0);
@@ -679,6 +719,11 @@ impl Canvas<'_, '_> {
     }
 }
 
+/// A font's line height (font pixels; 0 when it isn't loaded).
+fn font_line_height(fonts: &HashMap<String, BitmapFont>, name: &str) -> f32 {
+    fonts.get(name).map_or(0.0, |f| f.line_height)
+}
+
 /// An inline picture's side (line heights) and the space each side of it (font pixels).
 const PICTURE_SIZE: f32 = 1.0;
 const PICTURE_GAP: f32 = 1.0;
@@ -728,6 +773,11 @@ pub fn shown(layout: &Layout, view: &View) -> Vec<bool> {
     out
 }
 
+/// Round 34 (CR1): whether node `i` is drawn late (View::late or under it).
+pub fn is_late(layout: &Layout, view: &View, i: usize) -> bool {
+    view.late.is_some_and(|r| i == r || layout.is_under(i, r))
+}
+
 /// Draws the nodes `filter` accepts, in order; returns the button under the mouse.
 pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize) -> bool) -> Hits {
     let visible = shown(layout, view);
@@ -739,12 +789,16 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
             && !view.greyed.contains(&i)
             && inside(canvas.mouse, view.rect.get(&i).copied().unwrap_or(layout.nodes[i].rect))
     });
+    let mut sub = vec![1.0f32; layout.nodes.len()];
+    for (i, n) in layout.nodes.iter().enumerate() {
+        sub[i] = view.subtree_alpha.get(&i).copied().unwrap_or(1.0) * n.parent.map_or(1.0, |p| sub[p]);
+    }
     for (i, n) in layout.nodes.iter().enumerate() {
         if !visible[i] || !filter(i) {
             continue;
         }
         let greyed = view.greyed.contains(&i);
-        let alpha = n.alpha * if greyed { 0.45 } else { 1.0 };
+        let alpha = n.alpha * sub[i] * if greyed && !view.opaque.contains(&i) { 0.45 } else { 1.0 };
         let mut r = view.rect.get(&i).copied().unwrap_or(n.rect);
         let is_hovered = hovered == Some(i);
         if is_hovered && n.grow > 1.0 && !greyed {
@@ -777,7 +831,10 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
                     }
                     crate::live_preview::key_blend(false);
                 }
-                None => canvas.image(img, r, [0.0, 0.0, 1.0, 1.0], fade(ImColor32::WHITE, alpha)),
+                None => {
+                    let a = alpha * view.node_image_alpha.get(&i).copied().unwrap_or(1.0);
+                    canvas.image(img, r, [0.0, 0.0, 1.0, 1.0], fade(ImColor32::WHITE, a))
+                }
             }
         }
         if let Some(img) = view.node_art.get(&i).or(n.img.as_ref()) {
@@ -833,6 +890,9 @@ pub fn draw(layout: &Layout, view: &View, canvas: &Canvas, filter: impl Fn(usize
             }
         }
         canvas.hole.set(hole);
+        for (_, pr, img, uv) in view.patches.iter().filter(|p| p.0 == i) {
+            canvas.image(img, *pr, *uv, fade(ImColor32::WHITE, n.alpha));
+        }
     }
     Hits { button: hovered }
 }
@@ -862,6 +922,12 @@ pub fn draw_extra(view: &View, canvas: &Canvas) {
     for (r, colour) in &view.over_fills {
         canvas.draw.add_rect(canvas.at(r[0], r[1]), canvas.at(r[2], r[3]), fade(*colour, canvas.alpha))
             .filled(true).build();
+    }
+    for (r, colour) in &view.over_discs {
+        let (p0, p1) = (canvas.at(r[0], r[1]), canvas.at(r[2], r[3]));
+        let radius = ((p1[0] - p0[0]).min(p1[1] - p0[1]) / 2.0).max(0.0);
+        canvas.draw.add_circle([(p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0], radius, fade(*colour, canvas.alpha))
+            .filled(true).num_segments(32).build();
     }
     for (r, text, style) in &view.extra {
         canvas.text(text, *r, style, false);

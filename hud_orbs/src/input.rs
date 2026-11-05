@@ -89,7 +89,7 @@ static MOUSE_SEEN: AtomicU64 = AtomicU64::new(0);
 /// DirectInput devices seen in GetDeviceData: (device, DI8DEVTYPE: 0x12 mouse, 0x13 keyboard).
 static DEVICES: Mutex<Vec<(usize, u8)>> = Mutex::new(Vec::new());
 
-static TRAMPOLINES: [AtomicUsize; 10] = [
+static TRAMPOLINES: [AtomicUsize; 11] = [
     AtomicUsize::new(0), // XInputGetState
     AtomicUsize::new(0), // XInputGetStateEx (ordinal 100)
     AtomicUsize::new(0), // IDirectInputDevice8W::GetDeviceState
@@ -100,6 +100,7 @@ static TRAMPOLINES: [AtomicUsize; 10] = [
     AtomicUsize::new(0), // ClipCursor
     AtomicUsize::new(0), // GetRawInputData
     AtomicUsize::new(0), // GetRawInputBuffer
+    AtomicUsize::new(0), // SetCursor
 ];
 static START_TIME: OnceLock<Instant> = OnceLock::new();
 static INSTALLED: OnceLock<()> = OnceLock::new();
@@ -225,6 +226,7 @@ pub fn take_pressed() -> u16 {
 }
 
 /// The right stick's horizontal axis now (-1 to 1).
+#[allow(dead_code)]
 pub fn right_x() -> f32 {
     RIGHT_X.load(Ordering::SeqCst) as f32 / 32767.0
 }
@@ -325,6 +327,8 @@ pub fn install() -> Vec<String> {
             let buffer = GetProcAddress(user32, c"GetRawInputBuffer".as_ptr().cast());
             report.push(hook(data.map(|f| f as usize), raw_input_data as *const () as usize, 8, "GetRawInputData"));
             report.push(hook(buffer.map(|f| f as usize), raw_input_buffer as *const () as usize, 9, "GetRawInputBuffer"));
+            let cursor = GetProcAddress(user32, c"SetCursor".as_ptr().cast());
+            report.push(hook(cursor.map(|f| f as usize), set_cursor as *const () as usize, 10, "SetCursor"));
         }
         if let Err(e) = MH_ApplyQueued().ok_context("MH_ApplyQueued") {
             report.push(format!("{e:?}"));
@@ -450,15 +454,15 @@ unsafe fn filter_pad(user: u32, result: u32, state: *mut XInputState) {
     let camera = INJECT_CAMERA_X.load(Ordering::SeqCst);
     let at_rest = pad.right_x.unsigned_abs() < STICK_REST && pad.right_y.unsigned_abs() < STICK_REST;
     if BOOK_OPEN.load(Ordering::SeqCst) {
-        let (right_x, left_x, left_y) = (pad.right_x, pad.left_x, pad.left_y);
+        let (left_x, left_y) = (pad.left_x, pad.left_y);
         *pad = Gamepad::default();
+        // Round 19 A1 / A5: the real right stick never reaches the game while the book is open (it moves the wand);
+        // the game only sees the book's own turning of the mirror's model (its slow spin, a drag), and only x: its
+        // y would tilt the world camera under the menu, which nothing turns back (round 17 B3).
         if PASS_RIGHT_STICK.load(Ordering::SeqCst) {
-            // Only x: the mirror turns its model with it. Its y would tilt the world camera under the menu,
-            // which nothing turns back (round 17 B3).
-            let injected = INJECT_RIGHT_X.load(Ordering::SeqCst);
-            pad.right_x = if at_rest && injected != 0 { injected } else { right_x };
+            pad.right_x = INJECT_RIGHT_X.load(Ordering::SeqCst);
         }
-        if camera != 0 && at_rest {
+        if camera != 0 {
             pad.right_x = camera;
         }
         if move_through() {
@@ -584,6 +588,13 @@ unsafe extern "system" fn set_cursor_pos(x: i32, y: i32) -> i32 {
         return 1;
     }
     trampoline::<unsafe extern "system" fn(i32, i32) -> i32>(6)(x, y)
+}
+
+/// Round 19 A6: while the book is open only Wizard101's wand shows (the book draws it), so Elden Ring's own mouse
+/// cursor (its menus set it, e.g. under the hidden mirror menu) is replaced by none.
+unsafe extern "system" fn set_cursor(cursor: *mut c_void) -> *mut c_void {
+    let cursor = if BOOK_OPEN.load(Ordering::SeqCst) { std::ptr::null_mut() } else { cursor };
+    trampoline::<unsafe extern "system" fn(*mut c_void) -> *mut c_void>(10)(cursor)
 }
 
 unsafe extern "system" fn clip_cursor(rect: *const c_void) -> i32 {

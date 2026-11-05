@@ -241,10 +241,10 @@ static MIRROR_UP: AtomicBool = AtomicBool::new(false);
 const WORLD_FORMATS: [u32; 3] = [28, 24, 10];
 const WORLD_KEEP: usize = 40;
 
-/// book.rs: the book's slow spin (not a drag) may turn Elden Ring's model.
-pub fn auto_spin() -> bool {
-    !enabled() || AUTO_SPIN.load(Ordering::Relaxed)
-}
+/// Round 19 A3: the live copy of the world scene's picture behind the book (ini live_world = 1). Off by default: the
+/// picture that matched the screen (R10G10B10A2) shows the world grey and untextured while ER's mirror menu is up, so
+/// the frame from before the mirror opened stands behind the book instead.
+static WORLD_LIVE: AtomicBool = AtomicBool::new(false);
 
 /// book.rs: W/A/S/D and the left stick reach the game while the book drives the mirror (round 18 A1).
 pub fn walk_under_mirror() -> bool {
@@ -699,6 +699,7 @@ impl LivePreview {
         // Round 18 A2: on by default.
         let drive = get("live_preview_drive").as_deref() != Some("0");
         AUTO_SPIN.store(get("live_preview_auto_spin").as_deref() == Some("1"), Ordering::Relaxed);
+        WORLD_LIVE.store(get("live_world").as_deref() == Some("1"), Ordering::Relaxed);
         WALK.store(get("live_walk").as_deref() != Some("0"), Ordering::Relaxed);
         let linger_fixed = get("live_preview_linger").is_some();
         let fake_breath = get("live_preview_fake_breath").as_deref() == Some("1");
@@ -971,7 +972,8 @@ impl LivePreview {
         self.world_live = false;
         // Round 18 A1: also while the mirror closes, until Elden Ring's own screen is back (frame()).
         let settling = matches!(self.drive, Drive::Settling(..));
-        if (hud.is_some_and(|h| h != 3) && (self.showing.is_some() || self.drives())) || settling {
+        if WORLD_LIVE.load(Ordering::Relaxed)
+            && ((hud.is_some_and(|h| h != 3) && (self.showing.is_some() || self.drives())) || settling) {
             if let Some((resource, w, h)) = self.search.chosen {
                 if let Some(id) = render.copy_texture(WORLD_SLOT, resource, self.world_state, [0, 0, w, h]) {
                     textures.set(LIVE_WORLD, id, [w as f32, h as f32]);

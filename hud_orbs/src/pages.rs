@@ -110,6 +110,8 @@ pub struct State {
     pub gear_view: bool,
     /// The chosen equipment set (row) there.
     pub gear_chosen: usize,
+    /// Round 29 (Q3): each quest card's goal page (by quest slug; wrapped to its open goals when drawn).
+    pub goal_page: std::collections::HashMap<String, usize>,
 }
 
 /// Something on a page that a click (or double click) acts on, besides its layout buttons.
@@ -129,6 +131,10 @@ pub enum Hit {
     Warp(u32),
     /// An equipment set's row (index): choose it; a double click equips it.
     GearSet(usize),
+    /// Round 20 (Q7): a quest card on the Quests page (index into Data::quests): track it.
+    Quest(usize),
+    /// Round 29 (Q3): a quest card's goal arrow (index into Data::quests, -1 back / +1 on).
+    Goal(usize, i32),
 }
 
 pub enum Action {
@@ -180,8 +186,13 @@ pub struct Data<'a> {
     pub map_picture: Option<f32>,
     /// The player's place (Game::position: chunk position, block, block origin), for the map page.
     pub position: Option<([f32; 3], i32, i32)>,
+    /// Round 33 (MAP1): the player's MSB position (book::Context::street).
+    pub street: Option<[f32; 3]>,
     /// Per ACHIEVEMENTS entry: earned (its event flag), or None when not tracked / not readable.
     pub achieved: &'a [Option<bool>],
+    /// Round 26 (W8): which of MAP_BOSSES the map shows (Ryan: a boss only once its quest is assigned or done;
+    /// Lady Blackhope never, her quest was removed; Rattlebones from Sinister Skeleton on).
+    pub map_bosses: [bool; 2],
     /// The character's saved equipment sets (the Backpack's Equipment Sets page).
     pub gear_sets: &'a [GearSet],
 }
@@ -307,17 +318,27 @@ pub(crate) fn marker(l: &Layout, v: &mut View, marker: &str, first: &str, chosen
     v.rect.insert(m, [cr[0] + mr[0] - fr[0], cr[1] + mr[1] - fr[1], cr[0] + mr[2] - fr[0], cr[1] + mr[3] - fr[1]]);
 }
 
-/// "p/n" in a page number box, greying the arrows at the ends; returns the clamped page.
+/// Round 24 (Ryan B2: "Page arrows everywhere ... if there is only one page, remove both arrows. With 2+ pages keep
+/// both and grey out the one that can't go further"): the back / forward arrows of a list on `page` of `pages`.
+pub(crate) fn page_arrows(l: &Layout, v: &mut View, page: usize, pages: usize, back: &str, forward: &str) {
+    if pages <= 1 {
+        hide(l, v, &[back, forward]);
+        return;
+    }
+    if page == 0 {
+        grey(l, v, &[back]);
+    }
+    if page + 1 >= pages {
+        grey(l, v, &[forward]);
+    }
+}
+
+/// "p/n" in a page number box, the arrows as page_arrows says; returns the clamped page.
 pub(crate) fn paging(l: &Layout, v: &mut View, st: &mut State, count: usize, per_page: usize, ids: (&str, &str, &str)) -> usize {
     let pages = count.div_ceil(per_page.max(1)).max(1);
     st.page = st.page.min(pages - 1);
     v.set(l.find(ids.0), centre(&format!("{}/{}", st.page + 1, pages)));
-    if st.page == 0 {
-        grey(l, v, &[ids.1]);
-    }
-    if st.page + 1 >= pages {
-        grey(l, v, &[ids.2]);
-    }
+    page_arrows(l, v, st.page, pages, ids.1, ids.2);
     st.page
 }
 
@@ -765,10 +786,11 @@ fn character(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 let r = l.nodes[col].rect;
                 v.set(Some(col), centre(&values[i]));
                 v.style.insert(col, TextStyle::new("WizardNormal", 0.42, BLACK));
-                // The label under the box (this section has one row).
-                v.add([r[0], r[3] - 8.0, r[2], r[3] + 8.0], labels[i].to_string(),
+                // The label under the box (this section has one row); round 22 B3: below the box's bottom line,
+                // not on it.
+                v.add([r[0], r[3] + 1.0, r[2], r[3] + 17.0], labels[i].to_string(),
                       TextStyle::new("WizardNormal", 0.3, BLACK).centred());
-                v.plain_tip([r[0], r[1] - 26.0, r[2], r[3] + 8.0], vec![format!("{}: {}", about[i], values[i])]);
+                v.plain_tip([r[0], r[1] - 26.0, r[2], r[3] + 17.0], vec![format!("{}: {}", about[i], values[i])]);
             }
             let ratio = if st3.max_load > 0.0 { st3.load / st3.max_load } else { 0.0 };
             let roll = match ratio {
@@ -1013,7 +1035,8 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
             v.show(l.find(&format!("{prefix}{i}")), false);
         }
     }
-    grey(l, v, &["Tab_HousingStuff", "Tab_MonsterMagic", "Tab_Photography"]);
+    // Round 20 B1: the greyed Monstrology (top left) and Housing (top right) arrows beside the tabs are gone.
+    hide(l, v, &["Tab_HousingStuff", "Tab_MonsterMagic", "Tab_Photography"]);
     // Only the equip button and the equipment sets button stay along the bottom.
     hide(l, v, &["Lock_Item", "Socket_Item", "btnFeedPet", "RecyclingBinButton", "QuickSell_Item", "Trash_Item"]);
     // Wizard101's hover texts (the buttons' m_sTip, in the plain tooltip): each tab's category, the equipment
@@ -1079,12 +1102,8 @@ fn backpack(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                 } else {
                     r[0] + 22.0
                 };
-                let right = if *count > 1 { r[2] - 52.0 } else { r[2] - 14.0 };
-                v.add([left, r[1], right, r[3]], name.clone(), TextStyle::new("WizardFancy", 0.42, LIGHT_YELLOW).centred());
-                if *count > 1 {
-                    v.add([r[2] - 50.0, r[1], r[2] - 16.0, r[3]], format!("x{count}"),
-                          TextStyle::new("WizardFancy", 0.42, LIGHT_YELLOW).right());
-                }
+                // Round 21 (Ryan B3): only the name on the row; the count is in the hover tooltip ("Owned: n").
+                v.add([left, r[1], r[2] - 14.0, r[3]], name.clone(), TextStyle::new("WizardFancy", 0.42, LIGHT_YELLOW).centred());
                 // Wizard101's mark beside an item that is worn or held: the closed hand (the fist, the row's own
                 // "fist" window); nothing beside the rest.
                 v.show(fist, false);
@@ -1241,8 +1260,9 @@ fn pets(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
         v.rect.insert(t, [r[0].max(l.nodes[a].rect[2] + 2.0), r[1], r[2].min(l.nodes[b].rect[0] - 2.0), r[3]]);
     }
     v.set(l.find("txtStageRace"), centre(&format!("{kind}  ({} of {})", i + 1, pets.len())));
+    // Round 24 (B2): one pet = one page, no arrows (with more they go round, so neither is ever at an end).
     if pets.len() < 2 {
-        grey(l, v, &["btnPrevPet", "btnNextPet"]);
+        hide(l, v, &["btnPrevPet", "btnNextPet"]);
     }
     match level {
         Some(level) => {
@@ -1523,7 +1543,10 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
     v.images.push(([x, y, x1, y1], frame.into(), [0.0, 0.0, 1.0, CARD_H / 256.0]));
     // The school symbol in the corner circle: the reagent cards' Icon_<School> art (Ryan, round 10: use those
     // symbols everywhere); Astral has none, so its tab button's own symbol.
-    let (c0, c1) = (card(101.0, 28.0), card(125.0, 52.0));
+    // Round 21 (Ryan B2): centred on the circle's silver ring (x 100..124, y 26..51 in the frame art; measured in
+    // the 2560x1440 render too: ring centre 112.1, 38.8); the box was 101..125 x 28..52, about 1 px right and low.
+    let [sx, sy] = CARD_SCHOOL_CENTRE;
+    let (c0, c1) = (card(sx - 12.0, sy - 12.0), card(sx + 12.0, sy + 12.0));
     match deck_school_icon(DECK_TABS[tab].0) {
         Some(icon) => {
             let inset = (c1[0] - c0[0]) * 0.12;
@@ -1538,12 +1561,29 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
         }
     }
     // What it does: Wizard101's type icon in the box at the picture's bottom right (98,97 .. 125,124).
-    let (y0, y1) = (card(100.0, 99.0), card(123.0, 122.0));
+    // Round 19 (Ryan D7): smaller, inside the box's frame as Wizard101's type symbol sits (the Sunbird and
+    // Lightning Bats help pictures: the fist covers about 70% of the grey box), not filling it.
     let kind = spell_type(d.items, raw);
+    // Round 20 (Ryan B4): a bit bigger again, and centred on the box's brown inside (101..123 x 102..122 in the
+    // frame art, above its lit bottom edge at 123); it sat about 1.5 px high at (111.5, 110.5).
+    let half = 23.0 * CARD_TYPE_FILL / 2.0;
+    let [tx, ty] = CARD_TYPE_CENTRE;
+    let (y0, y1) = (card(tx - half, ty - half), card(tx + half, ty + half));
     v.images.push(([y0[0], y0[1], y1[0], y1[1]], kind.into(), [0.0, 0.0, 1.0, 1.0]));
-    // The name inside the title band, clear of its edges (Ryan round 18 C1).
+    // The accuracy in the bottom-left circle (Ryan D6): Wizard101 prints the percentage over the frame's
+    // bullseye, which shows dimmed under it (Background_Tutorial_Card's Sunbird "100%",
+    // Background_Help_Combat_Card_Description's Lightning Bats "70%"): yellow, black-edged digits across the
+    // circle. Elden Ring's spells always land, so 100%.
+    let (a0, a1) = (card(2.0, 97.0), card(28.0, 123.0));
+    v.over_discs.push(([a0[0], a0[1], a1[0], a1[1]], ImColor32::from_rgba(20, 16, 40, 105)));
+    v.add([a0[0] - 2.0 * k, a0[1], a1[0] + 2.0 * k, a1[1]], "100%",
+          TextStyle::new("WizardFancy", CARD_ACCURACY_SCALE * k, PIP_YELLOW).centred().outlined());
+    // The name inside the title band (Ryan round 19 D4-D5): white with a black edge like Wizard101's card names,
+    // one size on every card (CARD_NAME_SCALE), one row; names too long for it use a chosen short name
+    // (CARD_SHORT_NAMES), never "...".
+    let name = card_name(name);
     let (t0, t1) = (card(CARD_NAME[0], CARD_NAME[1]), card(CARD_NAME[2], CARD_NAME[3]));
-    v.add([t0[0], t0[1], t1[0], t1[1]], name, TextStyle::new("WizardFancy", 0.34 * k, YELLOW).centred().outlined());
+    v.add([t0[0], t0[1], t1[0], t1[1]], name, TextStyle::new("WizardFancy", CARD_NAME_SCALE * k, WHITE).centred().outlined());
     if let Some(spell) = spell {
         // The cost in the pip triangle: Wizard101's yellow number with a black outline (its reagent card's rank,
         // w101_reference/reagent_card_balance_azoth.png: (239,233,111) inside a black edge, the digit about 14 of
@@ -1553,7 +1593,9 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
               TextStyle::new("WizardFancy", 0.3 * k, PIP_YELLOW).centred().outlined());
         let mut needs: Vec<String> = ["Int", "Fai", "Arc"].iter().zip(spell.requirements).filter(|(_, v)| *v > 0)
             .map(|(n, v)| format!("{n} {v}")).collect();
-        needs.insert(0, format!("{} slot{}", spell.slots.max(1), if spell.slots > 1 { "s" } else { "" }));
+        // The memory slots as the item tooltip shows them (Type_PowerPips and the count): with the words "2 slots"
+        // the longest line ("2 slots Fai 28 Arc 17") would not fit at the description's size (Ryan round 19 D1).
+        needs.insert(0, format!("<image;{SLOT_ICON}>{}", spell.slots.max(1)));
         // What it does, as Wizard101's cards say it (Spell.lang, e.g. Fire Elf "#1:$eA$ + #2:$eA4$
         // #3:$dT_image$#4:$Damage_image$ over 3 #5:$Rounds_image$"): the numbers from the cast's params
         // (tools/er_book_data.py), then the school symbol and the type symbol inline, at the text's size, one
@@ -1576,18 +1618,25 @@ fn spell_card(l: &Layout, d: &Data, v: &mut View, id: u32, name: &str, r: [f32; 
         // two, from the box's first line down (a one-line text sits on the first line, not in the middle), the
         // slots and needs on the third; at Wizard101's card text size, clear of the box's edges. The texts are
         // written to fit two lines (tools/er_book_data.py SHORT_CARDS); a longer one shrinks to fit.
+        // Round 21 (Ryan B1): the three rows evenly spaced, the first at the box's top and the needs line's
+        // bottom at CARD_NEEDS_BOTTOM (round 20 B3): the pitch is half the room between them, for the description's
+        // two lines too (its leading), so no gap under line 2 is bigger than the one under line 1.
         let line = font_line(CARD_TEXT_SCALE * k) / ch * CARD_H;
-        let pitch = line * CARD_LEADING;
+        let pitch = (CARD_NEEDS_BOTTOM - line - CARD_TEXT_TOP) / 2.0;
         let (b0, b1) = (card(CARD_TEXT_X[0], CARD_TEXT_TOP), card(CARD_TEXT_X[1], CARD_TEXT_TOP + 2.0 * pitch));
         let mut style = TextStyle::new("SpellDescription", CARD_TEXT_SCALE * k, BLACK).centred().wrapped();
         style.middle = false;
         style.picture = CARD_SYMBOL_SIZE;
-        style.leading = CARD_LEADING;
+        style.leading = pitch / line;
+        // Round 20 (Ryan B3): the needs line sits at the bottom of the parchment box (its inside ends at 188 in
+        // the frame art), no longer right under the two description lines. Round 24 (Ryan B1: "If the 2nd line is
+        // empty, put it on the 2nd line; never leave an empty line/gap"): it follows the description's last line
+        // (TextStyle::then), so after a one-line description it is the second line, after two the third.
+        let (n0, n1) = (card(CARD_NEEDS_X[0], 0.0), card(CARD_NEEDS_X[1], 0.0));
+        let mut needs_style = TextStyle::new("SpellDescription", CARD_TEXT_SCALE * k, BLACK).centred();
+        needs_style.picture = CARD_SYMBOL_SIZE;
+        style.then = Some(Box::new((needs.join(" "), [n0[0], n1[0]], needs_style)));
         v.add([b0[0], b0[1], b1[0], b1[1]], effect, style);
-        let top = CARD_TEXT_TOP + 2.0 * pitch;
-        let (n0, n1) = (card(CARD_NEEDS_X[0], top), card(CARD_NEEDS_X[1], top + line));
-        v.add([n0[0], n0[1], n1[0], n1[1]], needs.join(" "),
-              TextStyle::new("SpellDescription", CARD_NEEDS_SCALE * k, BLACK).centred());
     }
 }
 
@@ -1598,19 +1647,128 @@ const CARD_HOVER_SCALE: f32 = 1.08;
 const CARD_HIGHLIGHT: &str = "GUI/Art/Art_Card_Selection.png";
 const CARD_HIGHLIGHT_EDGE: f32 = 2.0;
 
-/// The name's box in the card art (128 x CARD_H): inside the title band (y 2..24), 14 px in from each side.
-const CARD_NAME: [f32; 4] = [14.0, 4.0, 114.0, 25.0];
+/// The name's box in the card art (128 x CARD_H): the title band (y 2..24) less 6 px each side; Wizard101's own
+/// names run nearly edge to edge (Lightning Bats: 90% of the card's width).
+const CARD_NAME: [f32; 4] = [6.0, 4.0, 122.0, 25.0];
+/// The name's WizardFancy scale on a 97 px card (Ryan round 19 D5: one size). Measured on Wizard101's cards in
+/// Background_Tutorial_Card (SUNBIRD: 49% of the card's width = 0.28) and Background_Help_Combat_Card_Description
+/// (LIGHTNING BATS 0.28, JUDGEMENT 0.30).
+const CARD_NAME_SCALE: f32 = 0.27;
+/// The accuracy's WizardFancy scale on a 97 px card ("100%" across the circle, as on the Sunbird picture).
+const CARD_ACCURACY_SCALE: f32 = 0.2;
+/// How much of the type box (23 px) the type symbol covers (Ryan round 19 D7: 0.72, too small; round 20 B4: 0.86)
+/// and its centre in the frame art.
+const CARD_TYPE_FILL: f32 = 0.86;
+const CARD_TYPE_CENTRE: [f32; 2] = [112.0, 112.5];
+/// The centre of the school symbol's corner circle in the frame art (Ryan round 21 B2).
+const CARD_SCHOOL_CENTRE: [f32; 2] = [112.25, 39.0];
+/// Short card names for the Elden Ring spells whose names do not fit one row at CARD_NAME_SCALE (wider than 320
+/// WizardFancy pixels, the box's 87.9 page px / 0.27): chosen by hand, every one checked against the font's glyph
+/// widths (Ryan round 19 D4: one row, never "...").
+const CARD_SHORT_NAMES: &[(&str, &str)] = &[
+    ("Great Glintstone Shard", "Great Shard"),
+    ("Swift Glintstone Shard", "Swift Shard"),
+    ("Glintstone Cometshard", "Cometshard"),
+    ("Founding Rain of Stars", "Rain of Stars"),
+    ("Glintblade Phalanx", "Glintblades"),
+    ("Greatblade Phalanx", "Greatblades"),
+    ("Rennala's Full Moon", "Full Moon"),
+    ("Ranni's Dark Moon", "Dark Moon"),
+    ("Loretta's Greatbow", "Greatbow"),
+    ("Loretta's Mastery", "Bow Mastery"),
+    ("Glintstone Icecrag", "Icecrag"),
+    ("Carian Greatsword", "Greatsword"),
+    ("Adula's Moonblade", "Moonblade"),
+    ("Scholar's Armament", "Scholar's Blade"),
+    ("Shattering Crystal", "Shatter Crystal"),
+    ("Carian Retaliation", "Retaliation"),
+    ("Meteorite of Astel", "Astel Meteor"),
+    ("Briars of Punishment", "Punishment"),
+    ("Ancient Death Rancor", "Death Rancor"),
+    ("Explosive Ghostflame", "Ghostflame"),
+    ("Great Oracular Bubble", "Great Bubble"),
+    ("Flame, Fall Upon Them", "Flamefall"),
+    ("Flame, Grant Me Strength", "Flame Strength"),
+    ("Flame, Protect Me", "Flame Ward"),
+    ("Giantsflame Take Thee", "Giantsflame"),
+    ("Flame of the Fell God", "Fell God Flame"),
+    ("Scouring Black Flame", "Scouring Flame"),
+    ("Black Flame Ritual", "Flame Ritual"),
+    ("Black Flame Blade", "Blackflame Blade"),
+    ("Black Flame's Protection", "Black Ward"),
+    ("Bloodflame Talons", "Blood Talons"),
+    ("Protection of the Erdtree", "Erdtree Ward"),
+    ("Blessing of the Erdtree", "Erdtree Blessing"),
+    ("Flame Fortification", "Fire Guard"),
+    ("Magic Fortification", "Magic Guard"),
+    ("Lightning Fortification", "Storm Guard"),
+    ("Divine Fortification", "Divine Guard"),
+    ("Lord's Divine Fortification", "Lord's Guard"),
+    ("Night Maiden's Mist", "Maiden's Mist"),
+    ("Assassin's Approach", "Assassin's Step"),
+    ("Triple Rings of Light", "Triple Rings"),
+    ("Radagon's Rings of Light", "Radagon's Rings"),
+    ("Law of Regression", "Regression"),
+    ("Litany of Proper Death", "Proper Death"),
+    ("Gurranq's Beast Claw", "Gurranq's Claw"),
+    ("Bestial Constitution", "Bestial Cure"),
+    ("Ancient Dragons' Lightning Strike", "Ancient Strike"),
+    ("Frozen Lightning Spear", "Frozen Spear"),
+    ("Ancient Dragons' Lightning Spear", "Ancient Spear"),
+    ("Fortissax's Lightning Spear", "Fortissax Spear"),
+    ("Lansseax's Glaive", "Lansseax Glaive"),
+    ("Electrify Armament", "Electrify"),
+    ("Vyke's Dragonbolt", "Vyke's Bolt"),
+    ("Dragonbolt Blessing", "Dragonbolt"),
+    ("Theodorix's Magma", "Theodorix"),
+    ("Glintstone Breath", "Glint Breath"),
+    ("Smarag's Glintstone Breath", "Smarag's Breath"),
+    ("Placidusax's Ruin", "Placidusax"),
+    ("Inescapable Frenzy", "Frenzy Grip"),
+    ("The Flame of Frenzy", "Frenzy Flame"),
+    ("Unendurable Frenzy", "Wild Frenzy"),
+    ("Aspects of the Crucible: Tail", "Crucible Tail"),
+    ("Aspects of the Crucible: Horns", "Crucible Horns"),
+    ("Aspects of the Crucible: Breath", "Crucible Breath"),
+    ("Golden Lightning Fortification", "Golden Guard"),
+    ("Miriam's Vanishing", "Vanishing"),
+    ("Rellana's Twin Moons", "Twin Moons"),
+    ("Gravitational Missile", "Gravity Missile"),
+    ("Impenetrable Thorns", "Iron Thorns"),
+    ("Rings of Spectral Light", "Spectral Rings"),
+    ("Vortex of Putrescence", "Putrid Vortex"),
+    ("Mass of Putrescence", "Putrid Mass"),
+    ("Furious Blade of Ansbach", "Ansbach's Blade"),
+    ("Aspects of the Crucible: Thorns", "Crucible Thorns"),
+    ("Aspects of the Crucible: Bloom", "Crucible Bloom"),
+    ("Wrath from Afar", "Distant Wrath"),
+    ("Multilayered Ring of Light", "Layered Rings"),
+    ("Knight's Lightning Spear", "Knight's Spear"),
+    ("Dragonbolt of Florissax", "Florissax Bolt"),
+    ("Bayle's Flame Lightning", "Bayle's Fury"),
+    ("Ghostflame Breath", "Ghost Breath"),
+    ("Rotten Butterflies", "Rot Butterflies"),
+    ("Pest-Thread Spears", "Thread Spears"),
+    ("Midra's Flame of Frenzy", "Midra's Frenzy"),
+    ("Fleeting Microcosm", "Microcosm"),
+    ("Cherishing Fingers", "Fingers"),
+    ("Divine Beast Tornado", "Beast Tornado"),
+    ("Divine Bird Feathers", "Bird Feathers"),
+];
+
+/// The name a card shows: its short name if it has one.
+fn card_name(name: &str) -> &str {
+    CARD_SHORT_NAMES.iter().find(|(long, _)| *long == name).map_or(name, |(_, short)| short)
+}
 /// The parchment box (School_*_Blnk: x 8..120, y 129..188 of the art) and the text in it: the first line's top
 /// (its letters start about 5 px under the box's top edge), the description's and the needs line's sides.
 const CARD_TEXT_TOP: f32 = 128.0;
 const CARD_TEXT_X: [f32; 2] = [12.0, 116.0];
-const CARD_NEEDS_X: [f32; 2] = [11.0, 117.0];
-/// Line pitch of the card text in line heights: three lines in the box (SpellDescription's 21 px cells have
-/// about 5 px of space over the capitals).
-const CARD_LEADING: f32 = 0.66;
-/// The slots and needs line's scale, the same on every card: the longest ("2 slots Fai 28 Arc 17", 141
-/// SpellDescription px) fits the box's 80 px at 0.57; shorter ones would otherwise come out larger.
-const CARD_NEEDS_SCALE: f32 = 0.6;
+const CARD_NEEDS_X: [f32; 2] = [7.0, 121.0];
+/// Where the needs line's cell ends (frame art pixels; Ryan round 20 B3).
+const CARD_NEEDS_BOTTOM: f32 = 189.0;
+/// The memory slots symbol on the needs line (the item tooltip's "Memory Slots" icon).
+const SLOT_ICON: &str = "GUI/Icons/Type_PowerPips.png";
 
 /// SpellDescription's line height (its 21 px glyph cells) at `scale`, in page pixels.
 fn font_line(scale: f32) -> f32 {
@@ -1652,8 +1810,11 @@ fn card_symbols(text: &str, school: &str) -> String {
 /// "105-145" is 58% of the card's width = 56 SpellDescription pixels on 97 px, scale 1.0; Background_Tutorial_Card's
 /// Sunbird: digits 11% of the card's width, 1.06; the help card description 0.9 to 1.4): 0.9, the largest at
 /// which three lines (two of text, the slots and needs) fit the parchment box. Round 17's 0.64 came from a
-/// reagent card's name, which Wizard101 draws smaller.
-const CARD_TEXT_SCALE: f32 = 0.9;
+/// reagent card's name, which Wizard101 draws smaller. Round 19 (Ryan D1, from playing Wizard101): that was too
+/// big for the two description lines and the needs line (0.6) too small; all three lines now share one size,
+/// 0.72, which keeps the longest needs line ("2 Fai 28 Arc 17" with the slot symbol) on one row. Round 20 (Ryan B2):
+/// a little bigger, 0.78, still one size and the longest needs line still one row.
+const CARD_TEXT_SCALE: f32 = 0.78;
 
 fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     st.subs = DECK_TABS.len();
@@ -1740,8 +1901,8 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
                     // it), the size of the list's cards (Ryan, round 16), above the slot and the cursor, as
                     // Wizard101's card tips sit (Ryan round 18 C8; it was under the slot).
                     let [cw, ch] = l.find("AllPageSpellList").and_then(|n| l.nodes[n].card).unwrap_or([97.0, 148.0]);
-                    let gx = ((cell[0] + cell[2]) / 2.0 - cw / 2.0).clamp(r[0], r[2] - cw);
-                    let gy = cell[1] - 6.0 - ch;
+                    // Round 19 (Ryan D2): directly on top of the slot, no gap, its left edge on the slot's.
+                    let (gx, gy) = (cell[0], cell[1] - ch);
                     let mut card = View::default();
                     spell_card(l, d, &mut card, id, &d.names.item(id), [gx, gy, gx + cw, gy + ch]);
                     v.hovers.push((cell, Box::new(card)));
@@ -1772,12 +1933,7 @@ fn deck(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     let per_page = columns * rows;
     let pages = known.len().div_ceil(per_page).max(1);
     st.page = st.page.min(pages - 1);
-    if st.page == 0 {
-        grey(l, v, &["PageUp"]);
-    }
-    if st.page + 1 >= pages {
-        grey(l, v, &["PageDown"]);
-    }
+    page_arrows(l, v, st.page, pages, "PageUp", "PageDown");
     for (i, (name, id)) in known.iter().skip(st.page * per_page).take(per_page).enumerate() {
         let (cx, cy) = ((i % columns) as f32, (i / columns) as f32);
         let x = r[0] + cx * (cw + gx);
@@ -1826,11 +1982,25 @@ fn quests(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     }
     let pages = d.quests.len().div_ceil(QUESTS_PER_PAGE).max(1);
     st.page = st.page.min(pages - 1);
-    if st.page == 0 {
-        grey(l, v, &["btnPrevPage"]);
-    }
-    if st.page + 1 >= pages {
-        grey(l, v, &["btnNextPage"]);
+    page_arrows(l, v, st.page, pages, "btnPrevPage", "btnNextPage");
+    // Round 20 (Q7): a click on a card tracks that quest (book.rs: the pulsing glow, the arrow at its top left, the
+    // Quest Helper follows it).
+    for i in 0..QUESTS_PER_PAGE {
+        let k = st.page * QUESTS_PER_PAGE + i;
+        if k >= d.quests.len() {
+            break;
+        }
+        if let Some(w) = l.find(&format!("wndQuestInfo{i}")) {
+            let r = l.nodes[w].rect;
+            st.hits.push((r, Hit::Quest(k)));
+            // Round 29 (Q3): the goal arrows on a card with more than one open goal (after the card: hits are
+            // looked up last first).
+            if d.quests[k].pages.len() > 1 {
+                for (a, step) in GOAL_ARROWS.iter().zip([-1, 1]) {
+                    st.hits.push(([r[0] + a[0], r[1] + a[1], r[0] + a[2], r[1] + a[3]], Hit::Goal(k, step)));
+                }
+            }
+        }
     }
     if d.quests.is_empty() {
         v.add([110.0, 200.0, 680.0, 240.0], "Your quest log is empty.", TextStyle::new("WizardFancy", 0.7, BLACK).centred());
@@ -1841,8 +2011,54 @@ fn quests(l: &Layout, d: &Data, st: &mut State, v: &mut View) {
     }
 }
 
-/// Fills quest card `q` (QuestInfoWindow.gui).
-pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
+/// Round 28 (Q4): a goal line split as Wizard101's quest card shows it: the verb over the goal's picture (txtGoal) and
+/// what it is about under it (txtGoalObjective1): "Defeat Lost Souls in Unicorn Way" -> ("Defeat", "Lost Souls"),
+/// "Talk to Lady Oriel in the Hedge Maze" -> ("Talk to", "Lady Oriel"), "Search for Rattlebones (The Archives)" ->
+/// ("Search for", "Rattlebones"). The place (" in <place>", "(<place>)") is dropped: the card's scroll shows it. A
+/// counted goal with one left names one ("Lost Soul"). A line with no known verb stays whole over the picture.
+pub fn goal_parts(goal: &str, place: &str, progress: Option<(u32, u32)>) -> (String, String) {
+    const VERBS: [&str; 9] = ["Talk to", "Go to", "Return to", "Search for", "Defeat", "Collect", "Open", "Find",
+                              "Examine"];
+    let Some(verb) = VERBS.iter().find(|v| goal.starts_with(&format!("{v} "))) else {
+        return (goal.to_string(), String::new());
+    };
+    let mut target = goal[verb.len()..].trim().to_string();
+    let place = place.trim();
+    for tail in [format!(" in {place}"), format!(" in the {place}"), format!(" ({place})")] {
+        if !place.is_empty() && target.ends_with(&tail) {
+            target.truncate(target.len() - tail.len());
+        }
+    }
+    if let Some(cut) = target.find(" (").filter(|_| target.ends_with(')')) {
+        target.truncate(cut);
+    }
+    if let Some((done, of)) = progress {
+        if of.saturating_sub(done) == 1 && !target.contains(" and ") {
+            target = singular(&target);
+        }
+    }
+    (verb.to_string(), target)
+}
+
+/// The last word of `name` in the singular ("Lost Souls" -> "Lost Soul", "Dark Fairies" -> "Dark Fairy").
+fn singular(name: &str) -> String {
+    if let Some(stem) = name.strip_suffix("ies") {
+        format!("{stem}y")
+    } else if let Some(stem) = name.strip_suffix("es").filter(|s| s.ends_with("sh") || s.ends_with("ch") || s.ends_with('x')) {
+        stem.to_string()
+    } else if let Some(stem) = name.strip_suffix('s').filter(|s| !s.ends_with('s')) {
+        stem.to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// Round 29 (Q3): QuestInfoWindow.gui's goal arrows (btnPrevGoal 15,83..35,123 and btnNextGoal 235,83..255,123,
+/// Wizard101's red Button_Left / Button_Right, hidden in the .gui until the client shows them), card coordinates.
+pub const GOAL_ARROWS: [[f32; 4]; 2] = [[15.0, 83.0, 35.0, 123.0], [235.0, 83.0, 255.0, 123.0]];
+
+/// Fills quest card `q` (QuestInfoWindow.gui) showing goal page `page` (Round 29 Q3, wrapped to its open goals).
+pub fn quest_card(card: &Layout, q: &Active, page: usize, v: &mut View) {
     for n in ["wndReward1", "wndReward2", "wndReward3", "wndReward4", "wndReward5", "btnHideQuest", "btnUnhideQuest"] {
         v.show(card.find(n), false);
     }
@@ -1858,33 +2074,128 @@ pub fn quest_card(card: &Layout, q: &Active, v: &mut View) {
         }
     };
     set(v, "txtName", q.title.clone());
-    set(v, "txtGoal", q.goal.clone());
+    // Round 28 (Q4, Ryan: "verb above the picture, the target's name under it"): QuestInfoWindow.gui's own goal
+    // fields, txtGoal (26,48..246,67) over imgGoalObjective1 and txtGoalObjective1 (18,134..) under it; the place is
+    // already on the scroll (txtZone), so " in Unicorn Way" is not repeated.
+    // Round 29 (Q3, Ryan: "W101 shows one objective per page with red left/right arrows"): a quest with more than
+    // one goal open (Finding Out Why: the Bone Cages and the Dark Fairies) shows one per page; QuestInfoWindow's own
+    // btnPrevGoal / btnNextGoal flip them and wrap round, so every open goal can be reached from any page. A done
+    // goal leaves the card (its "Goal Complete" popup), as Wizard101's card lists the goals still to do.
+    let shown = (!q.pages.is_empty()).then(|| &q.pages[page % q.pages.len()]);
+    let (goal, place, progress, picture) = match shown {
+        Some(g) => (&g.goal, &g.place, g.progress, &g.picture),
+        None => (&q.goal, &q.place, q.progress, &q.picture),
+    };
+    let arrows = q.pages.len() > 1;
+    for name in ["btnPrevGoal", "btnNextGoal"] {
+        v.show(card.find(name), arrows);
+    }
+    let (verb, target) = goal_parts(goal, place, progress);
+    set(v, "txtGoal", verb);
     // Round 18 (quests F3): the goal's picture in Wizard101's goal square (imgGoalObjective1, hidden in the .gui
     // until the client fills it): the creature to defeat, the NPC to talk to, the Bone Cage.
-    if !q.picture.is_empty() {
+    // Round 21 (Q3, Ryan): centred across the card (272 wide: 103..169), not in the left goal box.
+    if !picture.is_empty() {
         if let Some(id) = card.find("imgGoalObjective1") {
-            v.node_art.insert(id, q.picture.clone());
+            v.node_art.insert(id, picture.clone());
             v.show(Some(id), true);
+            v.rect.insert(id, GOAL_PICTURE);
         }
     }
-    // The other goals open now, across both objective boxes.
-    hide(card, v, &["txtGoalObjective1", "txtGoalObjective2"]);
-    if !q.other_goals.is_empty() {
-        v.add([18.0, 134.0, 255.0, 168.0], format!("Also: {}", q.other_goals.join("; ")),
-              TextStyle::new("WizardNormal", 0.36, BLACK).centred().wrapped());
+    hide(card, v, &["txtGoalObjective2"]);
+    match card.find("txtGoalObjective1") {
+        Some(id) if !target.is_empty() => {
+            v.show(Some(id), true);
+            v.rect.insert(id, [18.0, 138.0, 254.0, 156.0]);
+            set(v, "txtGoalObjective1", target);
+        }
+        id => v.show(id, false),
     }
-    match q.progress {
-        Some((n, of)) => set(v, "txtGoalCounter", format!("{n}/{of}")),
+    match progress {
+        Some((n, of)) => {
+            set(v, "txtGoalCounter", format!("{n}/{of}"));
+            // Round 20 (Q5, Ryan): the count sits over the bottom of the goal's picture (imgGoalObjective1,
+            // 40,67..106,133), not to its right: the counter scroll (110 x 28 at 142,107, its text 17,9 in) made 90
+            // wide and centred under the picture's middle, overlapping its lower edge.
+            if !picture.is_empty() {
+                if let (Some(scroll), Some(text)) = (card.find("imgGoalCounter"), card.find("txtGoalCounter")) {
+                    // Round 21 (Q3): centred with the picture (card middle x 136).
+                    v.rect.insert(scroll, [91.0, 115.0, 181.0, 138.0]);
+                    v.rect.insert(text, [105.0, 121.0, 167.0, 138.0]);
+                }
+            }
+        }
         None => {
             v.show(card.find("imgGoalCounter"), false);
             v.show(card.find("txtGoalCounter"), false);
         }
     }
-    set(v, "txtZone", q.place.clone());
+    set(v, "txtZone", place.clone());
     let world = if q.ready { format!("Ready: return to {}", q.turn_in) } else { "Wizard City".to_string() };
     set(v, "txtWorld", world);
     v.show(card.find("LeftMainline"), q.main);
     v.show(card.find("RightMainline"), q.main);
+    // Round 20 (Q3): the reward at the bottom of the card, in Wizard101's reward slot (wndReward3, the middle one of
+    // the five along the red band): the gold piece's ring around Elden Ring's rune, the amount on the scroll under it.
+    if q.reward > 0 {
+        let slot = 3;
+        v.show(card.find(&format!("wndReward{slot}")), true);
+        if let Some(id) = card.find(&format!("imgReward{slot}Symbol")) {
+            v.node_art.insert(id, REWARD_RUNES.into());
+        }
+        if let Some(id) = card.find(&format!("imgReward{slot}Scroll")) {
+            v.node_art.insert(id, REWARD_SCROLL.into());
+        }
+        set(v, &format!("txtReward{slot}Amount"), q.reward.to_string());
+    }
+}
+
+/// Round 20 (Q3): the card's reward symbol (round 21 Q4: Wizard101's Art_Quest_Gold, the gold reward's ring and
+/// orange inside, around Elden Ring's Lord's Rune icon; made by round21/quests/make_art.py) and Wizard101's scroll under the amount.
+pub const REWARD_RUNES: &str = "GUI/QuestPage/Art_Quest_Rune_Piece.png";
+pub const REWARD_SCROLL: &str = "GUI/QuestPage/Art_Quest_Exp_Scroll.png";
+/// Round 20 (Q7): Wizard101's quest-tracker icon (_Shared-WorldData.wad GUI/QuestPage) and its glow round the
+/// selected quest card (Art_Quest_Glow, a 256 square frame of soft yellow light).
+pub const QUEST_TRACKER: &str = "GUI/QuestPage/Button_Quest_Tracker02.png";
+pub const QUEST_GLOW: &str = "GUI/QuestPage/Art_Quest_Glow.png";
+/// Round 21 (Q5): the selected quest's lit paper (see quest_tracked).
+pub const QUEST_PAPER_LIT: &str = "GUI/QuestPage/Art_Quest_Paper_Lit.png";
+/// Round 21 (Q3): imgGoalObjective1 (66 square, 40,67 in the .gui) centred on the card.
+pub const GOAL_PICTURE: [f32; 4] = [103.0, 67.0, 169.0, 133.0];
+
+/// Round 22 (H8, Ryan: "the current quest should be pulsing yellow, not constantly yellow; a slow pulse"): the lit
+/// paper's alpha, rising and falling smoothly once every QUEST_PULSE seconds between QUEST_PULSE_LOW and 1. Wizard101
+/// drives such glows from code with its WinAnimAlphaFade (Root.wad Scripts/API/WindowAnimations.lua:
+/// CreateWinAnimAlphaFade(cycleTime, cycle), an alpha fade that cycles); the quest page's own cycle time is not in the
+/// client's files, so the period is a slow breath.
+const QUEST_PULSE: f32 = 2.4;
+const QUEST_PULSE_LOW: f32 = 0.15;
+
+pub fn quest_pulse() -> f32 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    // The preview renders a moment of the pulse (env PREVIEW_PULSE_T, seconds).
+    static FIXED: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+    let fixed = *FIXED.get_or_init(|| std::env::var("PREVIEW_PULSE_T").ok().and_then(|v| v.parse().ok()));
+    let t = fixed.unwrap_or_else(|| START.get_or_init(std::time::Instant::now).elapsed().as_secs_f32());
+    let wave = 0.5 - 0.5 * (t / QUEST_PULSE * std::f32::consts::TAU).cos();
+    QUEST_PULSE_LOW + (1.0 - QUEST_PULSE_LOW) * wave
+}
+
+/// Round 20 (Q7): the tracked quest's card: Wizard101's tracker arrow in imgActiveQuest (32 square), moved from
+/// 36,44 (where it covered the goal text's first letters) into the card's top-left corner under the star.
+pub fn quest_tracked(card: &Layout, v: &mut View) {
+    // Round 21 (Q5, Ryan): no border; the selected quest's paper itself is lit: Wizard101's Art_Quest_Glow_01 light
+    // laid on Art_Quest_Frame's parchment only (made by round21/quests/make_art.py), drawn right over the card's
+    // paper, under everything on it.
+    if let Some(id) = card.find("wndQuestInfo") {
+        v.node_images.insert(id, QUEST_PAPER_LIT.into());
+        v.node_image_alpha.insert(id, quest_pulse());
+    }
+    if let Some(id) = card.find("imgActiveQuest") {
+        v.node_art.insert(id, QUEST_TRACKER.into());
+        v.show(Some(id), true);
+        v.rect.insert(id, [4.0, 38.0, 36.0, 70.0]);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1955,10 +2266,14 @@ struct MapIcon {
 /// The bosses of Unicorn Way's towers that have rooms here: Lady Blackhope (tower T1; WCNameplates_00000178,
 /// "Blackhope" 75 wide) and Rattlebones (tower T2; WCNameplates_00000173, 91 wide), both on the Elite plate. Wizard101
 /// draws their tower icon (LocationIconUnicornWayTower) in the same spots before the quests reach them.
+/// Round 25 (H9): their Elden Ring stand-ins' faces (Nox Swordstress c3300, Giant Skeleton Torso c4960;
+/// tools/w101_npc_portraits.py), not Wizard101's.
+/// Round 26 (W8): their pictures are on Wizard101's red creature disc like the enemy pictures (tools/
+/// w101_portrait_red.py recolours the art), and each shows only per Data::map_bosses.
 const MAP_BOSSES: [MapIcon; 2] = [
-    MapIcon { picture: "GUI/NpcPortraits/Art_Portrait_GhostLady_Green.png", rect: [203.0, 216.0, 252.0, 265.0],
+    MapIcon { picture: "GUI/NpcPortraits/ER/lady_blackhope.png", rect: [203.0, 216.0, 252.0, 265.0],
               plate: MAP_PLATE_ELITE, plate_size: [101.0, 52.0], text: "Lady\nBlackhope" },
-    MapIcon { picture: "GUI/NpcPortraits/Portrait_Skeleton_Armored_A_MOB.png", rect: [518.0, 273.0, 567.0, 322.0],
+    MapIcon { picture: "GUI/NpcPortraits/ER/rattlebones.png", rect: [518.0, 273.0, 567.0, 322.0],
               plate: MAP_PLATE_ELITE, plate_size: [117.0, 32.0], text: "Rattlebones" },
 ];
 
@@ -2032,15 +2347,38 @@ pub enum MapPlace {
     WizardCity,
 }
 
-/// The map for a Game::position (chunk position, block, block origin).
-pub fn map_place(position: Option<([f32; 3], i32, i32)>) -> MapPlace {
-    let Some((chunk, block, origin)) = position else { return MapPlace::Street(None) };
-    let b = block as u32;
-    if [b >> 24, b >> 16 & 0xFF] == ROUNDTABLE {
-        return MapPlace::WizardCity;
+/// Round 33 (MAP1): the street's double door into the hedge maze (MSB region W101_Garden_door, x z). Wizard101 has
+/// no map of its own for the maze (GUI-WorldData.wad's Maps/ hold none: Map_WC_* are the streets, caves and
+/// districts), and the maze is its own zone behind that door, so inside it the arrow stands on the door, under the
+/// painting's "Hedge Maze" label.
+const MAP_MAZE_DOOR: [f32; 2] = [-360.22, -36.28];
+
+/// The map for the player's place: `street` = the MSB position (book::Context::street, from the loaded street NPCs,
+/// which is right after grace warps and world shifts), else `position` (Game::position: chunk position, block,
+/// block origin; the block origin reads garbage after grace warps, w101-music). The Roundtable Hold by its block.
+///
+/// Round 33 (MAP1, Ryan: the arrow is often in the wrong place, always in the hedge maze): the page used only the
+/// block origin, and the maze (beside the street, around (-328, 89)) went through street_uv onto the painting's
+/// right edge. Checked spots (page pixels of 720 x 600): Rattlebones' tower door (503, 260) and Lady Blackhope's
+/// (252, 254) by their portraits (518..567 x 273..322, 203..252 x 216..265); the maze door (571, 122) at the
+/// "Hedge Maze" label (512..578 x 68..128); the grace (198, 366) and Diego at the street's east end (192, 396)
+/// by the Commons and Arena labels.
+pub fn map_place(position: Option<([f32; 3], i32, i32)>, street: Option<[f32; 3]>) -> MapPlace {
+    if let Some((_, block, _)) = position {
+        let b = block as u32;
+        if [b >> 24, b >> 16 & 0xFF] == ROUNDTABLE {
+            return MapPlace::WizardCity;
+        }
     }
-    let Some(o) = crate::markers::tile(origin) else { return MapPlace::Street(None) };
-    let local = [chunk[0] + o[0] - STREET_TILE[0] as f32 * 256.0, chunk[2] + o[1] - STREET_TILE[1] as f32 * 256.0];
+    let local = match (street, position) {
+        (Some(p), _) => [p[0], p[2]],
+        (None, Some((chunk, _, origin))) => {
+            let Some(o) = crate::markers::tile(origin) else { return MapPlace::Street(None) };
+            [chunk[0] + o[0] - STREET_TILE[0] as f32 * 256.0, chunk[2] + o[1] - STREET_TILE[1] as f32 * 256.0]
+        }
+        (None, None) => return MapPlace::Street(None),
+    };
+    let local = if crate::questhelper::in_garden([local[0], 0.0, local[1]]) { MAP_MAZE_DOOR } else { local };
     let uv = street_uv(local[0], local[1]);
     let i = MAP_INSIDE;
     let inside = uv[0] > i[0] && uv[0] < i[2] && uv[1] > i[1] && uv[1] < i[3];
@@ -2091,7 +2429,10 @@ fn map(l: &Layout, d: &Data, v: &mut View, st: &mut State) {
     // The buttons' hover texts: MapSpellbookPage.gui gives each an m_sTip (GUI_00001513 "Commons", GUI_00001514 "Zoom",
     // GUI_00001515 "Go Home"), which Wizard101 shows in ToolTip.gui's white bubble; ours say where they go.
     let zoom = if d.map_open { "Back to Wizard101's map" } else { "Elden Ring's map" };
-    for (button, text) in [("GoHomeButton", "Travel to The First Step"), ("GotoDormButton", "Travel to the Roundtable Hold"),
+    // Round 26 (W6, Ryan: it should say "Travel to Unicorn Way"): the warp goes to The First Step's grace, but on
+    // Unicorn Way that place is named "Unicorn Way" (PlaceName 610900, er_text.py add_place_name, the name the
+    // street's MapNameOverride regions show), as the page's own zone name.
+    for (button, text) in [("GoHomeButton", "Travel to Unicorn Way"), ("GotoDormButton", "Travel to the Roundtable Hold"),
                            ("PlusMinusButton", zoom)] {
         if let Some(b) = l.find(button) {
             v.plain_tip(l.nodes[b].rect, vec![text.to_string()]);
@@ -2118,7 +2459,7 @@ fn map(l: &Layout, d: &Data, v: &mut View, st: &mut State) {
         return;
     }
     // Wizard101's map under the page's own controls: the page's root window draws it in MAP_AREA.
-    let place = map_place(d.position);
+    let place = map_place(d.position, d.street);
     let (zone, picture) = match place {
         MapPlace::WizardCity => ("Wizard City", MAP_WIZARD_CITY),
         MapPlace::Street(_) => ("Unicorn Way", MAP_UNICORN_WAY),
@@ -2130,8 +2471,10 @@ fn map(l: &Layout, d: &Data, v: &mut View, st: &mut State) {
     for (plate, r, text) in MAP_LABELS {
         map_plate(v, plate, r, text);
     }
-    for icon in &MAP_BOSSES {
-        map_icon(v, icon);
+    for (icon, shown) in MAP_BOSSES.iter().zip(d.map_bosses) {
+        if shown {
+            map_icon(v, icon);
+        }
     }
     // The grace: click (or A) to travel there. Round 17 A2: nothing on hover (no name plate), only the icon.
     let grace = map_grace_rect();
@@ -2294,9 +2637,7 @@ fn reagents(l: &Layout, d: &Data, st: &mut State, v: &mut View, list: &[(String,
         // The count on the sun (CardNumber, 128,171 .. 153,190).
         let (n0, n1) = (card(126.0, 171.0), card(155.0, 191.0));
         v.add([n0[0], n0[1], n1[0], n1[1]], count.to_string(), TextStyle::new("WizardFancy", 0.42, BLACK).centred());
-        let mut tip = d.items.tooltip(*id, *count, d.names, false);
-        tip.insert(1.min(tip.len()), format!("Rank {rank} {school} material"));
-        v.tip([x, y, x + w, y + h], tip);
+        // Round 22 B2: no hover on the reagent cards (name, rank, school and count are on the card).
     }
     if list.is_empty() {
         let text = if chosen == 0 { "No materials yet" } else { "None of these yet" };
@@ -2366,8 +2707,7 @@ type HelpPage = (&'static str, &'static str, &'static [(&'static str, &'static s
 const HELP: [(&str, &[(HelpPage, HelpPage)]); 6] = [
     ("Tab_Questing", &[
         (("The Spellbook",
-          "Open and close the book with B on the keyboard or the View button on the controller (Elden Ring's map \
-           button).\n\nEsc or the controller's B button also close it.", &[]),
+          "Open and close the book with Elden Ring's map button (B on the keyboard).\n\nEsc also closes it.", &[]),
          ("Tabs and Categories",
           "The tabs down the right edge are the book's pages, as in Wizard101.\n\nThe round buttons along the top of \
            a page are its categories.\n\nPoint at an item for its stats.", &[])),
@@ -2393,12 +2733,7 @@ const HELP: [(&str, &[(HelpPage, HelpPage)]); 6] = [
            Backpack.", &[])),
     ]),
     ("Tab_Combat", &[
-        (("Controller",
-          "LT / RT or D-pad up and down: previous / next page of the book.\n\nLB / RB: previous / next category \
-           along the top of the page.\n\nD-pad left and right: turn the page of a list.", &[]),
-         ("More Buttons",
-          "Right stick: turn your character in the Backpack (it turns by itself; a click on it stops it).\n\nA: \
-           use the tab, or click what the cursor is on (on the World Map, either stick moves the cursor).\n\nB or View: close the book.", &[])),
+        // (Round 19 B1: no controller button page in the book.)
         // HelpInterfaceIcons2-3: the schools and stat icons, as the item tooltips use them.
         (("Schools",
           "Item stats show Elden Ring's damage types with Wizard101's school symbols:", &[

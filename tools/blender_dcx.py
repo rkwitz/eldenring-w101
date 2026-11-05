@@ -6,16 +6,17 @@ Other scripts set MODE, SOURCE, TARGET and REFERENCE through runpy's init_global
 (the Smithbox project's copy if there is one, otherwise the game's) to reference/eldenring/work/dump.
 """
 
+import os
 from pathlib import Path
 
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path.home() / "Documents" / "game_modding"
+ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 MAP_NAME = "m60_42_36_00"  # The First Step's Limgrave tile; the Stranded Graveyard is m18_00_00_00
 MAPSTUDIO = Path("map") / "mapstudio" / f"{MAP_NAME}.msb.dcx"
 PROJECT_MAP = ROOT / "reference" / "eldenring" / "project" / MAPSTUDIO
 if not PROJECT_MAP.exists():
-    PROJECT_MAP = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game") / MAPSTUDIO
+    PROJECT_MAP = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / MAPSTUDIO
 
 MODE = globals().get("MODE", "unpack")
 SOURCE = Path(globals().get("SOURCE", PROJECT_MAP))

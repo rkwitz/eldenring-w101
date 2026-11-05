@@ -44,6 +44,15 @@ pub struct Game {
     /// The loaded characters (ChrIns, model), re-read every half second, and the models last logged.
     characters: std::sync::Mutex<(Option<std::time::Instant>, Vec<(usize, u32)>)>,
     models_logged: std::sync::Mutex<Vec<u32>>,
+    /// Round 33 (G3b): how Torrent was last found (or not), logged when it changes.
+    torrent_logged: std::sync::Mutex<String>,
+    /// Round 21 (quests Q2): the camera of the last few frames, newest last (`tick_camera`).
+    cameras: std::sync::Mutex<std::collections::VecDeque<crate::markers::Camera>>,
+    /// Round 22 (H5): the last camera sample taken, when, and since when samples have been refused (`tick_camera`).
+    camera_guard: std::sync::Mutex<(Option<(crate::markers::Camera, std::time::Instant)>, Option<std::time::Instant>)>,
+    /// Round 23 (H2): other characters' positions at the last camera sample taken (ChrIns, physics position), to tell
+    /// a world rebase (everything shifts together) from a bad read (`tick_camera`).
+    rebase_refs: std::sync::Mutex<Vec<(usize, [f32; 3])>>,
 }
 
 impl Game {
@@ -57,6 +66,10 @@ impl Game {
             equip_gear: scan_unique(&sections, EQUIP_GEAR).map(|at| at - EQUIP_GEAR_BACK),
             characters: Default::default(),
             models_logged: Default::default(),
+            torrent_logged: Default::default(),
+            cameras: Default::default(),
+            camera_guard: Default::default(),
+            rebase_refs: Default::default(),
         })
     }
 
@@ -71,6 +84,18 @@ impl Game {
         let block = read::<i32>(player + offset_of!(ChrIns, block_id))?;
         let origin = read::<i32>(player + offset_of!(ChrIns, block_origin))?;
         [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6).then_some(([x, y, z], block, origin))
+    }
+
+    /// Round 32 (U1, Ryan: "floating text over the player is much too high on Torrent"): the top of the player's own
+    /// posed model box over the player's physics position (the camera's player point), in metres, when it reads as
+    /// a body (0.5-3 m); None otherwise. On Torrent the physics position is the rider's (round 28's prompt log: dy
+    /// +1.39 m over an NPC's feet), so a fixed 1.75 m over it put the numbers a whole body too high.
+    pub fn player_head(&self) -> Option<f32> {
+        let chr = self.player()?;
+        let p = Self::chr_physics(chr)?;
+        let (top, _) = self.model_top(chr, p)?;
+        let h = top[1] - p[1];
+        (0.5..3.0).contains(&h).then_some(h)
     }
 
     /// The main player's ChrIns (scene probe).
@@ -100,6 +125,319 @@ impl Game {
     /// The game camera (CSCamera's first perspective camera: rows right, up, forward, position; vertical fov in
     /// radians) and the player's physics position, in the same space as the camera; None when they can't be read.
     pub fn camera(&self) -> Option<crate::markers::Camera> {
+        let cameras = self.cameras.lock().unwrap_or_else(|e| e.into_inner());
+        cameras.front().copied().or_else(|| self.camera_now())
+    }
+
+    /// Round 21 (quests Q2): once per frame, before anything draws. Ryan: the "!" and the name plates lagged behind
+    /// the character as the camera turned. The overlay draws at Present, when the game thread is already stepping
+    /// the next frame, so CSCam holds a newer camera than the picture being shown (it can't hold an older one).
+    /// `camera()` then answers with the camera of `delay` frames ago (w101_orbs.ini marker_frames, default 1).
+    ///
+    /// Round 22 (H5, Ryan: the "?" "glitches to the side of the screen" while running toward the NPC; names "randomly
+    /// slide across the screen"). His round 21 log shows single frames where every NPC is ~30 m nearer than the frame
+    /// before and after (markers: private_connelly 229 m then 261 m 15 ms later, 202/230, 167/199, 134/166, 101/133)
+    /// : a camera/player read from a moment the game was mid-update. A sample whose player or camera moved further
+    /// than anyone can in that time, or whose camera is far from the player, is refused and the last good one kept;
+    /// if the jump lasts GUARD_HOLD (a warp, a respawn) it is taken. Every refusal is logged ("camera: refused").
+    ///
+    /// Round 23 (H2, Ryan: "all of the name tags appear at once and they all disappear"). His round 22 log has 33
+    /// refusals of 32-40 m every 3.5-4.5 s while running, each also refusing all five NPC positions by the same
+    /// distance, then "jump kept for 0.35 s, taken" with the player's MSB position continuous across it: the game moves
+    /// its whole coordinate frame (player, camera and every character together) every ~35 m travelled. Those are not
+    /// bad reads: the guard froze the camera for 0.35 s each time (names and markers stuck on the screen, creature
+    /// plates and wisps 35 m off, then all snapping back). Now a jump that the other loaded characters made too (same
+    /// vector within 2 m, `rebase`) is taken at once, and the frames queued for `delay` are moved by it, so the camera
+    /// of a frame ago matches this frame's characters. Logged ("camera: world shifted ...").
+    ///
+    /// Round 26 (O2, Ryan: "single frames where every name tag/character marker jumps to a wrong screen spot then
+    /// back", 3rd report). His 21:58 log: 27 shifts of 32-40 m (vectors on an 8 m grid: (232,-32,-8), (0,-88,80), ...)
+    /// were all "refused" and then "jump kept for 0.35 s, taken"; not one was recognised as a shift, because
+    /// `rebase` compared against the first 8 of 99-270 loaded characters (most of them elsewhere in the map, which do
+    /// not move with the street) and the shift never got a majority. The NPC positions read in the same frame did
+    /// move with the player (markers: "refused a position ... moved 40.2 m against the player": against the held old
+    /// camera), so for 0.35 s everything was drawn from the frozen camera, and on the frame the jump was taken the
+    /// one-frame-old camera (marker_frames=1) was still the unshifted one while the characters were shifted: the
+    /// markers line at 21:48:20.549 has Connelly 50 m / player MSB [-49, 96, -16] between 14 m / [-24, 96, -48] the
+    /// frame before and 17 m / [-28, 96, -45] the frame after. Now: player and camera jumping by the same vector
+    /// (within 1.5 m) in one frame IS the shift (a bad read doesn't move both identically), taken at once with the
+    /// queued cameras moved by it; a jump that is still taken after the hold empties the queue (no stale camera);
+    /// a camera far from the player with no jump (the load screen's 240 m) no longer logs "world shifted (0, 0, 0)"
+    /// every frame (391 lines in that log).
+    pub fn tick_camera(&self, delay: usize) {
+        const GUARD_HOLD: f32 = 0.35;
+        let mut now = self.camera_now();
+        let refs = self.reference_positions();
+        let mut shift: Option<[f32; 3]> = None;
+        let mut restart = false;
+        {
+            let mut guard = self.camera_guard.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(c) = now {
+                let at = std::time::Instant::now();
+                let mut bad = guard.0.as_ref().and_then(|(last, when)| {
+                    let dt = at.duration_since(*when).as_secs_f32().min(1.0);
+                    let d = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+                    let cam = |c: &crate::markers::Camera| [c.matrix[3][0], c.matrix[3][1], c.matrix[3][2]];
+                    let (player_jump, camera_jump, apart) = (d(c.player, last.player), d(cam(&c), cam(last)), d(cam(&c), c.player));
+                    (player_jump > 2.5 + 30.0 * dt || camera_jump > 3.0 + 40.0 * dt || apart > 30.0)
+                        .then(|| format!("player moved {player_jump:.1} m, camera {camera_jump:.1} m in {:.0} ms, camera {apart:.1} m from the player", dt * 1000.0))
+                });
+                // A jump the camera made with the player (or every other character made too) is the world moving, not
+                // a bad read.
+                if bad.is_some() {
+                    if let Some((last, _)) = guard.0.as_ref() {
+                        let jump = [c.player[0] - last.player[0], c.player[1] - last.player[1], c.player[2] - last.player[2]];
+                        let cam_jump = [c.matrix[3][0] - last.matrix[3][0], c.matrix[3][1] - last.matrix[3][1],
+                                        c.matrix[3][2] - last.matrix[3][2]];
+                        let len = |v: [f32; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                        let together = len([jump[0] - cam_jump[0], jump[1] - cam_jump[1], jump[2] - cam_jump[2]]) < 1.5;
+                        let apart = len([c.matrix[3][0] - c.player[0], c.matrix[3][1] - c.player[1], c.matrix[3][2] - c.player[2]]);
+                        let old = self.rebase_refs.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        let moved = len(jump) > 1.0 && apart <= 30.0;
+                        if moved && (together || rebase(jump, &old, &refs)) {
+                            let grid = jump.iter().all(|v| (v / 8.0 - (v / 8.0).round()).abs() * 8.0 < 1.0);
+                            tracing::info!("camera: world shifted by ({:.1}, {:.1}, {:.1}) m ({}{}); taken",
+                                           jump[0], jump[1], jump[2],
+                                           if together { "player and camera together" } else { "with the other characters" },
+                                           if grid { ", on the 8 m grid" } else { "" });
+                            shift = Some(jump);
+                            bad = None;
+                            guard.1 = None;
+                        }
+                    }
+                }
+                match bad {
+                    Some(why) if guard.1.is_none_or(|since| since.elapsed().as_secs_f32() < GUARD_HOLD) => {
+                        if guard.1.is_none() {
+                            tracing::info!("camera: refused a sample ({why})");
+                            guard.1 = Some(at);
+                        }
+                        now = guard.0.map(|(last, _)| last);
+                    }
+                    _ => {
+                        if guard.1.take().is_some() && bad.is_some() {
+                            tracing::info!("camera: jump kept for {GUARD_HOLD} s, taken (warp or respawn)");
+                            restart = true;
+                        }
+                        guard.0 = Some((c, at));
+                        *self.rebase_refs.lock().unwrap_or_else(|e| e.into_inner()) = refs;
+                    }
+                }
+            } else {
+                *guard = (None, None);
+            }
+        }
+        let mut cameras = self.cameras.lock().unwrap_or_else(|e| e.into_inner());
+        if restart {
+            cameras.clear();
+        }
+        if let Some(d) = shift {
+            for c in cameras.iter_mut() {
+                for k in 0..3 {
+                    c.matrix[3][k] += d[k];
+                    c.player[k] += d[k];
+                }
+            }
+        }
+        match now {
+            Some(c) => {
+                cameras.push_back(c);
+                while cameras.len() > delay + 1 {
+                    cameras.pop_front();
+                }
+            }
+            None => cameras.clear(),
+        }
+    }
+
+    /// Round 23 (H2): up to 8 loaded characters other than the player (from the half-second cache) and their physics
+    /// positions now, for `rebase`.
+    fn reference_positions(&self) -> Vec<(usize, [f32; 3])> {
+        use eldenring::cs::{CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
+        use std::mem::offset_of;
+        let player = self.player();
+        let list = self.characters.lock().unwrap_or_else(|e| e.into_inner()).1.clone();
+        list.iter().filter(|(chr, _)| Some(*chr) != player).filter_map(|&(chr, _)| {
+            let modules = read::<usize>(chr + offset_of!(ChrIns, modules))?;
+            let physics = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics))?;
+            let [x, y, z, _] = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position))?;
+            [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6).then_some((chr, [x, y, z]))
+        }).take(8).collect()
+    }
+
+    /// Round 26 (O1): CSCam's near and far planes (metres), for reading the scene depth buffer (occlusion.rs).
+    pub fn clip_planes(&self) -> Option<(f32, f32)> {
+        use eldenring::cs::{CSCam, CSCamera};
+        use std::mem::offset_of;
+        let camera = from_singleton::static_of::<CSCamera>()?;
+        let camera = read::<usize>(camera.as_ptr() as usize)?;
+        let cam = read::<usize>(camera + offset_of!(CSCamera, pers_cam_1))?;
+        let near = read::<f32>(cam + offset_of!(CSCam, near_plane))?;
+        let far = read::<f32>(cam + offset_of!(CSCam, far_plane))?;
+        (near.is_finite() && far.is_finite() && (0.001..10.0).contains(&near)).then_some((near, far))
+    }
+
+    /// Round 26 (O3): the box the game keeps round character `chr`'s model as it is posed this frame
+    /// (CSChrModelIns -> CSFD4ModelItem -> CSFD4LocationGxModelMatricesAndAabbExporter.aabb), as (centre x, z, top y)
+    /// in the physics position's space. The box is world space when it holds the character's physics position `at`
+    /// (else, near the origin, model space: then the top is over `at`). None when it can't be read or is neither.
+    pub fn model_top(&self, chr: usize, at: [f32; 3]) -> Option<([f32; 3], bool)> {
+        use eldenring::cs::{CSChrModelIns, CSFD4LocationGxModelMatricesAndAabbExporter, CSFD4ModelItem, CSModelIns, ChrIns};
+        use std::mem::offset_of;
+        let model = read::<usize>(chr + offset_of!(ChrIns, chr_model_ins)).filter(|p| *p >= 0x10000)?;
+        let item = read::<usize>(model + offset_of!(CSChrModelIns, model_ins) + offset_of!(CSModelIns, model_item))
+            .filter(|p| *p >= 0x10000)?;
+        let exporter = read::<usize>(item + offset_of!(CSFD4ModelItem, location_aabb_exporter)).filter(|p| *p >= 0x10000)?;
+        let [min, max] = read::<[[f32; 4]; 2]>(exporter + offset_of!(CSFD4LocationGxModelMatricesAndAabbExporter, aabb))?;
+        if !min.iter().chain(&max).take(3).all(|v| v.is_finite()) || (0..3).any(|k| max[k] < min[k] || max[k] - min[k] > 60.0) {
+            return None;
+        }
+        let c = [(min[0] + max[0]) / 2.0, (min[2] + max[2]) / 2.0];
+        let holds = (0..3).all(|k| at[k] >= min[k] - 1.5 && at[k] <= max[k] + 1.5);
+        if holds && max[1] > at[1] + 0.3 {
+            return Some(([c[0], max[1], c[1]], true));
+        }
+        let local = c[0].abs() < 12.0 && c[1].abs() < 12.0 && min[1] > -3.0 && max[1] > 0.3 && max[1] < 40.0;
+        local.then_some(([at[0], at[1] + max[1], at[2]], false))
+    }
+
+    /// Round 29 (T1): Torrent (found by fade_torrent_chr, fixed in round 33) fading out (`out`) or back in,
+    /// through his ChrIns base_transparency_modifier (negative fades the base
+    /// transparency to 0, positive back to 1; the game's own fade flags set -1 / 1). Returns his ChrIns.
+    pub fn fade_torrent(&self, out: bool) -> Option<usize> {
+        use eldenring::cs::ChrIns;
+        use std::mem::offset_of;
+        let chr = self.fade_torrent_chr()?;
+        let at = chr + offset_of!(ChrIns, base_transparency_modifier);
+        read::<f32>(at)?;
+        unsafe { (at as *mut f32).write_volatile(if out { -1.0 } else { 1.0 }) };
+        Some(chr)
+    }
+
+    /// Round 32 (G2/G7): the physics module (CSChrPhysicsModule address) of a character: the player (`None`),
+    /// Torrent (`Some(TORRENT)`, character id 8000 in the summon/buddy set, as fade_torrent) or the street NPC with
+    /// event entity id `id` (from the cached character list, as `entities`).
+    pub fn physics_of(&self, who: Option<u32>) -> Option<usize> {
+        use eldenring::cs::{ChrIns, ChrInsModuleContainer};
+        use std::mem::offset_of;
+        let chr = match who {
+            None => self.player()?,
+            Some(TORRENT) => self.fade_torrent_chr()?,
+            Some(id) => {
+                let list = self.characters.lock().unwrap_or_else(|e| e.into_inner()).1.clone();
+                list.into_iter().map(|(c, _)| c)
+                    .find(|c| read::<u32>(c + offset_of!(ChrIns, event_entity_id)) == Some(id))?
+            },
+        };
+        let modules = read::<usize>(chr + offset_of!(ChrIns, modules))?;
+        read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics)).filter(|p| *p >= 0x10000)
+    }
+
+    /// Torrent's ChrIns, None when he isn't loaded. Round 33 (G3b): round 32 looked only for character id 8000 in
+    /// summon_buddy_chr_set and never found him ("Torrent None" / "no Torrent loaded" on every warp). Ryan's logs
+    /// never list a model 8000 at all: every "characters: N loaded, models [...]" line of rounds 30-33 lists 8002
+    /// instead (also while riding), and 8002 is the one id there without its own chr\c8002.chrbnd (Torrent's model
+    /// is c8000). So Torrent's ChrIns says 8002 (or 8000 in other versions). Looked up, in order: the player's ride
+    /// module `last_mounted` (set once he has mounted this session), the summon/buddy set, then every character the
+    /// game lists (the cached by-distance / open-field / map-set list), any of them with id 8000..=8009. What was found is logged.
+    fn fade_torrent_chr(&self) -> Option<usize> {
+        use eldenring::cs::{CSChrRideModule, ChrIns, ChrInsModuleContainer, ChrSet, ChrSetEntry, WorldChrMan};
+        use std::mem::{offset_of, size_of};
+        let horse = |c: usize| c >= 0x10000 && c % 8 == 0
+            && read::<u32>(c + offset_of!(ChrIns, character_id)).is_some_and(|id| (8000..=8009).contains(&id))
+            && crate::probe::rtti(c).is_some_and(|n| n.ends_with("Ins"));
+        let mounted = self.player()
+            .and_then(|p| read::<usize>(p + offset_of!(ChrIns, modules)))
+            .and_then(|m| read::<usize>(m + offset_of!(ChrInsModuleContainer, ride)))
+            .filter(|r| *r >= 0x10000)
+            .and_then(|r| read::<usize>(r + offset_of!(CSChrRideModule, last_mounted)))
+            .filter(|c| horse(*c));
+        let buddy = || {
+            let wcm = read::<usize>(self.world_chr_man)?;
+            let set = wcm + offset_of!(WorldChrMan, summon_buddy_chr_set);
+            let capacity = read::<u32>(set + offset_of!(ChrSet<ChrIns>, capacity))? as usize;
+            let entries = read::<usize>(set + offset_of!(ChrSet<ChrIns>, entries))?;
+            let entry = size_of::<ChrSetEntry<ChrIns>>();
+            let bytes = read_bytes(entries, capacity.min(256) * entry)?;
+            bytes.chunks_exact(entry).map(|e| usize::from_le_bytes(e[..8].try_into().unwrap())).find(|c| horse(*c))
+        };
+        let (chr, how) = match mounted {
+            Some(c) => (Some(c), "the player's ride module (last mounted)"),
+            None => match buddy() {
+                Some(c) => (Some(c), "the summon/buddy set"),
+                None => {
+                    let list = self.characters.lock().unwrap_or_else(|e| e.into_inner()).1.clone();
+                    (list.into_iter().map(|(c, _)| c).find(|c| horse(*c)), "the loaded characters")
+                },
+            },
+        };
+        let note = match chr {
+            Some(c) => format!("Torrent found in {how}: character id {:?}, {}",
+                               read::<u32>(c + offset_of!(ChrIns, character_id)), crate::probe::rtti(c).unwrap_or_default()),
+            None => "Torrent not found (no character 8000..8009 mounted, in the summon/buddy set or loaded)".into(),
+        };
+        let mut logged = self.torrent_logged.lock().unwrap_or_else(|e| e.into_inner());
+        if *logged != note {
+            tracing::info!("{note}");
+            *logged = note;
+        }
+        chr
+    }
+
+    /// Round 32: a character's yaw `a` (radians; its quaternion is a turn about +y by `a`, and the character faces
+    /// -z of that frame: forward = -(sin a, cos a), as the prompt's calibrated "-z" and the MSB rotations show).
+    pub fn yaw_of(&self, who: Option<u32>) -> Option<f32> {
+        use eldenring::cs::CSChrPhysicsModule;
+        use std::mem::offset_of;
+        let physics = self.physics_of(who)?;
+        let [x, y, z, w] = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, orientation))?;
+        if ![x, y, z, w].iter().all(|v| v.is_finite()) || ((x * x + y * y + z * z + w * w) - 1.0).abs() > 0.1 {
+            return None;
+        }
+        Some((2.0 * (x * z + w * y)).atan2(1.0 - 2.0 * (x * x + y * y)))
+    }
+
+    /// Round 32: turns a character to yaw `a` (see `yaw_of`): both the orientation and the interpolated one.
+    pub fn set_yaw(&self, who: Option<u32>, a: f32) -> bool {
+        use eldenring::cs::CSChrPhysicsModule;
+        use std::mem::offset_of;
+        let Some(physics) = self.physics_of(who) else { return false };
+        let q = [0.0, (a / 2.0).sin(), 0.0, (a / 2.0).cos()];
+        for field in [offset_of!(CSChrPhysicsModule, orientation), offset_of!(CSChrPhysicsModule, interpolated_orientation)] {
+            if read::<[f32; 4]>(physics + field).is_none() {
+                return false;
+            }
+            unsafe { ((physics + field) as *mut [f32; 4]).write_volatile(q) };
+        }
+        true
+    }
+
+    /// Round 32 (G7): a character's physics position.
+    pub fn position_of(&self, who: Option<u32>) -> Option<[f32; 3]> {
+        use eldenring::cs::CSChrPhysicsModule;
+        use std::mem::offset_of;
+        let physics = self.physics_of(who)?;
+        let [x, y, z, _] = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position))?;
+        [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6).then_some([x, y, z])
+    }
+
+    /// Round 32 (G7): moves a character to physics position `to` (position and last-update position, then asks the
+    /// character proxy to take it, chr_proxy_pos_update_requested).
+    pub fn set_position(&self, who: Option<u32>, to: [f32; 3]) -> bool {
+        use eldenring::cs::CSChrPhysicsModule;
+        use std::mem::offset_of;
+        let Some(physics) = self.physics_of(who) else { return false };
+        for field in [offset_of!(CSChrPhysicsModule, position), offset_of!(CSChrPhysicsModule, last_update_position)] {
+            let Some(old) = read::<[f32; 4]>(physics + field) else { return false };
+            unsafe { ((physics + field) as *mut [f32; 4]).write_volatile([to[0], to[1], to[2], old[3]]) };
+        }
+        let flag = physics + offset_of!(CSChrPhysicsModule, chr_proxy_pos_update_requested);
+        unsafe { (flag as *mut bool).write_volatile(true) };
+        true
+    }
+
+    /// The camera as CSCam holds it right now (see `camera`).
+    fn camera_now(&self) -> Option<crate::markers::Camera> {
         use eldenring::cs::{CSCam, CSCamera, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
         use std::mem::offset_of;
         let player = self.player()?;
@@ -119,7 +457,10 @@ impl Game {
     /// physics position in the camera's space, hit capsule height in metres). Every character the game has loaded is
     /// looked at: the map's characters (WorldChrMan's open-field set and its per-map sets) and the by-distance list
     /// (which only holds some of them: round 8 found only the Lost Souls in it).
-    pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3], f32)> {
+    ///
+    /// Round 26 (O3): and the top of the model's posed box (Game::model_top: (x, top y, z) over which the plate
+    /// floats, following the character's pose), when it can be read.
+    pub fn enemies(&self, models: &[u32]) -> Vec<(u32, [f32; 3], f32, Option<[f32; 3]>)> {
         use eldenring::cs::{CSChrDataModule, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
         use std::mem::offset_of;
         let mut out = Vec::new();
@@ -148,15 +489,61 @@ impl Game {
             let Some([x, y, z, _]) = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position)) else { continue };
             let height = read::<f32>(physics + offset_of!(CSChrPhysicsModule, hit_height)).unwrap_or(0.0);
             if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6) {
-                out.push((model, [x, y, z], if height.is_finite() && (0.2..30.0).contains(&height) { height } else { 0.0 }));
+                let top = self.model_top(chr, [x, y, z]);
+                log_model_top(model, [x, y, z], top);
+                // Round 31 (NT1): nothing until the anchor has settled (settle).
+                let Some(top) = settle(chr, model, [x, y, z], top.map(|t| t.0)) else { continue };
+                out.push((model, [x, y, z], if height.is_finite() && (0.2..30.0).contains(&height) { height } else { 0.0 },
+                          top));
             }
         }
         out
     }
 
+    /// w101 music (round 20 M2/M3): the loaded characters of model `models` with their HP (0 when dead), as
+    /// (ChrIns address, model, physics position, hp). Uses the same half-second character list as `enemies`.
+    pub fn combatants(&self, models: &[u32]) -> Vec<(usize, u32, [f32; 3], i32)> {
+        use eldenring::cs::{CSChrDataModule, CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
+        use std::mem::offset_of;
+        let list = {
+            let mut cache = self.characters.lock().unwrap_or_else(|e| e.into_inner());
+            if cache.0.is_none_or(|t| t.elapsed() > std::time::Duration::from_millis(500)) {
+                *cache = (Some(std::time::Instant::now()), self.characters());
+            }
+            cache.1.clone()
+        };
+        let mut out = Vec::new();
+        for (chr, model) in list {
+            if !models.contains(&model) || read::<u32>(chr + offset_of!(ChrIns, character_id)) != Some(model) {
+                continue;
+            }
+            let Some(modules) = read::<usize>(chr + offset_of!(ChrIns, modules)) else { continue };
+            let Some(hp) = read::<usize>(modules + offset_of!(ChrInsModuleContainer, data))
+                .and_then(|data| read::<i32>(data + offset_of!(CSChrDataModule, hp))) else { continue };
+            let Some(physics) = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics)) else { continue };
+            let Some([x, y, z, _]) = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position)) else { continue };
+            if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6) {
+                out.push((chr, model, [x, y, z], hp.max(0)));
+            }
+        }
+        out
+    }
+
+    /// w101 music (round 20 M3): GameDataMan's boss fight state (the eldenring crate's public layout): whether a
+    /// boss fight is active and the entity ID of the boss whose health bar is up (0 = none).
+    pub fn boss_fight(&self) -> Option<(bool, u32)> {
+        use eldenring::cs::GameDataMan;
+        use std::mem::offset_of;
+        let gdm = read::<usize>(self.game_data_man).filter(|p| *p != 0)?;
+        let active = read::<u8>(gdm + offset_of!(GameDataMan, boss_fight_active))?;
+        let entity = read::<u32>(gdm + offset_of!(GameDataMan, boss_health_bar_entity_id))?;
+        Some((active != 0, entity))
+    }
+
     /// w101 npcvis (round 18 G1): the loaded characters of model `models` whose map entity ID (ChrIns
     /// event_entity_id, the MSB part's EntityID) is in `ids`: (entity, physics position in the camera's space).
     pub fn entities(&self, models: &[u32], ids: &[u32]) -> Vec<(u32, [f32; 3])> {
+        let mut dead = Vec::new();
         use eldenring::cs::{CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
         use std::mem::offset_of;
         let list = {
@@ -173,11 +560,41 @@ impl Game {
             }
             let Some(id) = read::<u32>(chr + offset_of!(ChrIns, event_entity_id)).filter(|i| ids.contains(i)) else { continue };
             let Some(modules) = read::<usize>(chr + offset_of!(ChrIns, modules)) else { continue };
+            // Round 26 (npcs N7): a dead street NPC is left out and reported to markers.rs, which then shows no
+            // marker, name or talk prompt for it (it is immortal by EMEVD, so this only catches the unexpected).
+            let hp = read::<usize>(modules + offset_of!(ChrInsModuleContainer, data))
+                .and_then(|data| read::<i32>(data + offset_of!(eldenring::cs::CSChrDataModule, hp)));
+            if hp.is_some_and(|hp| hp <= 0) {
+                dead.push(id);
+                continue;
+            }
             let Some(physics) = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics)) else { continue };
             let Some([x, y, z, _]) = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, position)) else { continue };
             if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1.0e6) {
                 out.push((id, [x, y, z]));
             }
+        }
+        crate::markers::set_dead(&dead);
+        out
+    }
+
+    /// Round 19 (quests E2): why a loaded street NPC may not be seen. Per entity in `ids` (model in `models`): the
+    /// ChrIns render bits (chr_flags1c4 bit 3 = render group (MSB draw groups) on, chr_flags1c5 bit 3 = rendering on)
+    /// and the activation flags (bit 3 = activation enabled), raw, for the log.
+    pub fn entity_render_bits(&self, models: &[u32], ids: &[u32]) -> Vec<(u32, u8, u8, u32)> {
+        use eldenring::cs::ChrIns;
+        use std::mem::offset_of;
+        let list = self.characters.lock().unwrap_or_else(|e| e.into_inner()).1.clone();
+        let mut out = Vec::new();
+        for (chr, model) in list {
+            if !models.contains(&model) {
+                continue;
+            }
+            let Some(id) = read::<u32>(chr + offset_of!(ChrIns, event_entity_id)).filter(|i| ids.contains(i)) else { continue };
+            let (Some(a), Some(b), Some(c)) = (read::<u8>(chr + offset_of!(ChrIns, chr_flags1c4)),
+                                                read::<u8>(chr + offset_of!(ChrIns, chr_flags1c5)),
+                                                read::<u32>(chr + offset_of!(ChrIns, chr_activation_flags))) else { continue };
+            out.push((id, a, b, c));
         }
         out
     }
@@ -329,6 +746,43 @@ impl Game {
             items,
             key_items,
         })
+    }
+
+    /// Round 20 (quests Q3): gives the player `runes` (a quest reward): PlayerGameData's rune count, and its rune
+    /// memory (all runes ever held) as picking runes up does. Elden Ring's EMEVD and ItemLotParam have no way to
+    /// give runes as such (only items such as Golden Runes), so the DLL adds them. The new count, or None.
+    pub fn add_runes(&self, runes: u32) -> Option<u32> {
+        use eldenring::cs::PlayerGameData;
+        use std::mem::offset_of;
+        let pgd = read::<usize>(self.game_data_man).and_then(|gdm| read::<usize>(gdm + PLAYER_GAME_DATA))?;
+        let level = read::<u32>(pgd + offset_of!(PlayerGameData, level))?;
+        if !(1..=713).contains(&level) {
+            return None;
+        }
+        let (count_at, memory_at) = (pgd + offset_of!(PlayerGameData, rune_count), pgd + offset_of!(PlayerGameData, rune_memory));
+        let count = read::<u32>(count_at)?.saturating_add(runes).min(999_999_999);
+        let memory = read::<u32>(memory_at)?.saturating_add(runes).min(999_999_999);
+        unsafe {
+            (count_at as *mut u32).write_volatile(count);
+            (memory_at as *mut u32).write_volatile(memory);
+        }
+        Some(count)
+    }
+
+    /// Round 27 (B2): takes `runes` from the runes held (the shop's buys; rune memory, the total ever gathered, is
+    /// left alone); None when fewer are held or the count can't be reached. Returns the runes held after.
+    pub fn spend_runes(&self, runes: u32) -> Option<u32> {
+        use eldenring::cs::PlayerGameData;
+        use std::mem::offset_of;
+        let pgd = read::<usize>(self.game_data_man).and_then(|gdm| read::<usize>(gdm + PLAYER_GAME_DATA))?;
+        let level = read::<u32>(pgd + offset_of!(PlayerGameData, level))?;
+        if !(1..=713).contains(&level) {
+            return None;
+        }
+        let count_at = pgd + offset_of!(PlayerGameData, rune_count);
+        let count = read::<u32>(count_at)?.checked_sub(runes)?;
+        unsafe { (count_at as *mut u32).write_volatile(count) };
+        Some(count)
     }
 
     /// Puts `spell` (a magic param ID, -1 = none) in memory slot `index` (EquipMagicData's entries), as Elden
@@ -567,6 +1021,9 @@ pub fn loading_screens() -> Option<i32> {
     read::<i32>(helper + std::mem::offset_of!(eldenring::cs::CSNowLoadingHelper, menu_load_counter))
 }
 
+/// Round 32: `Game::physics_of` etc. take this for Torrent.
+pub const TORRENT: u32 = u32::MAX;
+
 /// Sets or clears an event flag.
 pub fn set_event_flag(flag: u32, on: bool) {
     let Some(man) = from_singleton::static_of::<eldenring::cs::CSEventFlagMan>() else { return };
@@ -730,6 +1187,68 @@ impl Game {
         read::<usize>(gdm + GAME_SETTINGS).filter(|p| *p != 0)
     }
 
+    /// Round 21 M3 (wisps.rs): adds `percent` of the main player's max HP (or FP) to its current value in the
+    /// player's CSChrDataModule (the stat module: hp/max hp at 0x138, fp/max fp at 0x148, the eldenring crate's
+    /// layout, checked below), capped at the max. Nothing for a dead player or a full stat (round 25 H6). Returns (before, after).
+    pub fn add_player_stat(&self, fp: bool, percent: f32) -> Option<(i32, i32)> {
+        let player = read::<usize>(self.world_chr_man).and_then(|wcm| read::<usize>(wcm + PLAYER))?;
+        let stat = read::<usize>(player + MODULES).and_then(|modules| read::<usize>(modules))?;
+        let hp = read::<i32>(stat + STAT_HP)?;
+        let at = stat + if fp { STAT_FP } else { STAT_HP };
+        let (now, max) = (read::<i32>(at)?, read::<i32>(at + 4)?);
+        if hp <= 0 || !(1..100_000).contains(&max) || !(0..=max).contains(&now) {
+            return None;
+        }
+        // Round 25 (H6, Ryan: "wisps can't be picked up when that stat is full"): Wizard101 leaves a wisp where it
+        // is when its stat is full (Ryan's 14:39 log: "picked up a Health wisp ... HP 1704 -> 1704").
+        if now >= max {
+            return None;
+        }
+        let new = (now + ((max as f32 * percent / 100.0).round() as i32).max(1)).min(max);
+        unsafe { (at as *mut i32).write_volatile(new) };
+        Some((now, new))
+    }
+
+    /// Round 25 (H3): the main player's facing on the ground (radians, atan2 of its forward x, z in the camera's space),
+    /// from CSChrPhysicsModule's orientation quaternion (x, y, z, w; forward = local +z).
+    pub fn player_yaw(&self) -> Option<f32> {
+        use eldenring::cs::{CSChrPhysicsModule, ChrIns, ChrInsModuleContainer};
+        use std::mem::offset_of;
+        let chr = self.player()?;
+        let modules = read::<usize>(chr + offset_of!(ChrIns, modules))?;
+        let physics = read::<usize>(modules + offset_of!(ChrInsModuleContainer, physics))?;
+        let [x, y, z, w] = read::<[f32; 4]>(physics + offset_of!(CSChrPhysicsModule, orientation))?;
+        if ![x, y, z, w].iter().all(|v| v.is_finite()) || ((x * x + y * y + z * z + w * w) - 1.0).abs() > 0.1 {
+            return None;
+        }
+        // The quaternion applied to (0, 0, 1).
+        let fx = 2.0 * (x * z + w * y);
+        let fz = 1.0 - 2.0 * (x * x + y * y);
+        Some(fx.atan2(fz))
+    }
+
+    /// Round 25 (H3): ActionButtonParam row `row`'s ER prompt shape (the vanilla regulation's values, read from the
+    /// game's param data).
+    pub fn action_button(&self, row: u32) -> Option<ActionButton> {
+        let at = param_row(b"ACTIONBUTTON_PARAM_ST", row)?;
+        let b = read_bytes(at, 0x38)?;
+        let f = |o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let i = |o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        Some(ActionButton { region: b[0], radius: f(0x0C), angle: i(0x10), height: f(0x1C), base: f(0x20),
+                            angle_check: b[0x24], allow_angle: i(0x28), text_id: i(0x34) })
+    }
+
+    /// Round 25 (H3): writes ActionButtonParam row `row`'s textId (the text Elden Ring's own prompt shows).
+    pub fn set_action_button_text(&self, row: u32, text_id: i32) -> bool {
+        use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
+        let Some(at) = param_row(b"ACTIONBUTTON_PARAM_ST", row) else { return false };
+        let mut written = 0;
+        unsafe {
+            WriteProcessMemory(GetCurrentProcess(), (at + 0x34) as _, (&text_id as *const i32).cast(), 4, &mut written)
+                != 0 && written == 4
+        }
+    }
+
     /// One byte of Elden Ring's GameSettings (options.rs has the offsets).
     pub fn option(&self, offset: usize) -> Option<u8> {
         read::<u8>(self.game_settings()? + offset)
@@ -851,3 +1370,167 @@ const _: () = {
         assert!(offset_of!(GameSettings, camera_auto_rotation) == opt::AUTO_ROTATION);
     }
 };
+
+/// Round 31 (NT1, Ryan: "enemy name plates flicker when a group first loads; they must have the right position and
+/// opacity from the first frame"). Round 30's "tags first frames" log (w101_orbs.log.round31_input, the group loads
+/// at 23:02:14, 23:04:48 and 23:05:52, 53 characters each in one frame) proves what the plate anchor does then:
+/// - the posed box is not readable on a character's first frames: 28 of 30 Dark Sprites, 52 of 76 Skeletal Pirates,
+///   18 of 60 Lost Souls and 2 of 3 Rattlebones start with no box (plate from the capsule / fixed height); where it
+///   turns up within 3 s it does so 0.02-0.18 s later (far ones, not animated, stay without one);
+/// - the first box is the spawn pose, not the idle one: Dark Sprites read 2.53 m at +0.07 s, then 1.99 m at
+///   +0.47-0.55 s; Lost Souls 3.00 -> 3.33 m at +0.08 s; Fear of Fire 7.19 -> 7.41 -> 7.61 m by +0.68 s.
+/// So a Dark Sprite's plate stood at 1.80 m (fixed), jumped to 2.88 m, then dropped to 2.34 m inside half a second
+/// (nameplates::anchor: box + 0.35), and Rattlebones' moves from 5.95 m to 10.60 m when his box is first read: the
+/// flicker. Now each character's anchor settles first: for SETTLE seconds
+/// after it is first seen it is not passed on (no plate, no floater anchor), so the first frame drawn has the
+/// settled pose; after that, a box that can't be read for a frame keeps the last box's offset from the character
+/// instead of falling back to the capsule height (the log also shows box -> none at +2.41 s for a Skeletal Pirate).
+/// The state of a character not seen for FORGET seconds is dropped (a reload or respawn settles again).
+/// Returns None while settling, else the box top to use (or None for the capsule / fixed height).
+fn settle(chr: usize, model: u32, at: [f32; 3], top: Option<[f32; 3]>) -> Option<Option<[f32; 3]>> {
+    const SETTLE: f32 = 0.75;
+    const FORGET: f32 = 2.0;
+    struct State { chr: usize, first: std::time::Instant, last: std::time::Instant, held: Option<[f32; 3]>, logged: bool }
+    static STATES: std::sync::Mutex<Vec<State>> = std::sync::Mutex::new(Vec::new());
+    let mut states = STATES.lock().unwrap_or_else(|e| e.into_inner());
+    let now = std::time::Instant::now();
+    states.retain(|s| now.duration_since(s.last).as_secs_f32() < FORGET);
+    let i = match states.iter().position(|s| s.chr == chr) {
+        Some(i) => i,
+        None => {
+            states.push(State { chr, first: now, last: now, held: None, logged: false });
+            states.len() - 1
+        }
+    };
+    let s = &mut states[i];
+    s.last = now;
+    if let Some(t) = top {
+        s.held = Some([t[0] - at[0], t[1] - at[1], t[2] - at[2]]);
+    }
+    let age = now.duration_since(s.first).as_secs_f32();
+    if age < SETTLE {
+        return None;
+    }
+    if !s.logged {
+        s.logged = true;
+        match s.held {
+            Some(h) => tracing::info!("tags settled: c{model} {chr:#x} after {age:.2} s, box top {:.2} m{}", h[1],
+                                      if top.is_none() { " (held: box not readable this frame)" } else { "" }),
+            None => tracing::info!("tags settled: c{model} {chr:#x} after {age:.2} s, no box yet: capsule / fixed height"),
+        }
+    }
+    Some(top.or(s.held.map(|h| [at[0] + h[0], at[1] + h[1], at[2] + h[2]])))
+}
+
+/// Round 26 (O3): logs a model's box against its physics position, once per model and then every 20 s (proof the
+/// plate follows the pose: "tags: c4960 box top ...").
+fn log_model_top(model: u32, at: [f32; 3], top: Option<([f32; 3], bool)>) {
+    static LOGGED: std::sync::Mutex<Vec<(u32, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
+    let mut logged = LOGGED.lock().unwrap_or_else(|e| e.into_inner());
+    let now = std::time::Instant::now();
+    if logged.iter().any(|(m, t)| *m == model && now.duration_since(*t).as_secs() < 20) {
+        return;
+    }
+    logged.retain(|(m, _)| *m != model);
+    logged.push((model, now));
+    match top {
+        Some((t, world)) => tracing::info!(
+            "tags: c{model} model box top {:.2} m over its physics position, centre {:.2} m from it ({} space)",
+            t[1] - at[1], (t[0] - at[0]).hypot(t[2] - at[2]), if world { "world" } else { "model" }),
+        None => tracing::info!("tags: c{model} model box not readable; plate from the capsule / fixed height"),
+    }
+}
+
+/// Round 23 (H2): whether the player's `jump` is a world rebase: more than half of the characters seen both at the
+/// last sample (`old`) and now (`new`) moved by the same vector (within 2 m), and at least one was seen.
+pub fn rebase(jump: [f32; 3], old: &[(usize, [f32; 3])], new: &[(usize, [f32; 3])]) -> bool {
+    const MATCH: f32 = 2.0;
+    let (mut same, mut seen) = (0, 0);
+    for (chr, p) in new {
+        let Some((_, q)) = old.iter().find(|(c, _)| c == chr) else { continue };
+        seen += 1;
+        let d = [p[0] - q[0] - jump[0], p[1] - q[1] - jump[1], p[2] - q[2] - jump[2]];
+        if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() < MATCH {
+            same += 1;
+        }
+    }
+    seen > 0 && same * 2 > seen
+}
+
+/// Round 25 (H3): an ActionButtonParam row's prompt shape: region type (0 cylinder), radius, angle (degrees), height
+/// and base height offset (metres), and textId.
+#[derive(Clone, Copy, Debug)]
+pub struct ActionButton {
+    pub region: u8,
+    pub radius: f32,
+    pub angle: i32,
+    pub height: f32,
+    pub base: f32,
+    /// Round 27 (A1): angleCheckType (0x24) and allowAngle (0x28, the player's facing tolerance either side, degrees;
+    /// 180 = any). `angle` (0x10) is the region's own sector round the target's front (180 = all round).
+    pub angle_check: u8,
+    pub allow_angle: i32,
+    pub text_id: i32,
+}
+
+static PARAM_FILES: std::sync::Mutex<Vec<(Vec<u8>, usize)>> = std::sync::Mutex::new(Vec::new());
+
+/// Round 25 (H3): the data address of row `row` of the param table named `name` (its PARAMDEF type), found through
+/// SoloParamRepository's holders as probe.rs finds MenuOffscrRendParam; tables are looked up once and kept.
+fn param_row(name: &[u8], row: u32) -> Option<usize> {
+    use eldenring::cs::{ParamResCap, SoloParamRepository};
+    use eldenring::fd4::FD4ParamResCap;
+    use std::mem::offset_of;
+    let mut files = PARAM_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let file = match files.iter().find(|f| f.0 == name) {
+        Some(f) => f.1,
+        None => {
+            let repo = from_singleton::static_of::<SoloParamRepository>()?;
+            let repo = read::<usize>(repo.as_ptr() as usize)?;
+            let holders = repo + offset_of!(SoloParamRepository, solo_param_holders);
+            const HOLDER: usize = 72;
+            let file_of = |index: usize| -> Option<usize> {
+                let res_cap = read::<usize>(holders + index * HOLDER + 8)?;
+                let param = read::<usize>(res_cap + offset_of!(ParamResCap, param_res_cap))?;
+                read::<usize>(param + offset_of!(FD4ParamResCap, data))
+            };
+            let named = |file: usize| -> bool {
+                let Some(header) = read_bytes(file, 0x40) else { return false };
+                let got = if header[0x2D] & 0x80 != 0 {
+                    let offset = u32::from_le_bytes(header[0x10..0x14].try_into().unwrap()) as usize;
+                    read_bytes(file + offset, name.len() + 1)
+                } else {
+                    Some(header[0x0C..(0x0C + name.len() + 1).min(0x40)].to_vec())
+                };
+                got.is_some_and(|g| g.starts_with(name) && g.get(name.len()).is_none_or(|c| *c == 0))
+            };
+            let file = (0..200).find_map(|i| file_of(i).filter(|f| named(*f)))?;
+            files.push((name.to_vec(), file));
+            file
+        }
+    };
+    param_rows_of(file).into_iter().find(|(id, _)| *id == row).map(|(_, at)| at)
+}
+
+/// Round 33 (G1): every row of the param table named `name`: (row id, data address).
+pub fn param_rows(name: &[u8]) -> Vec<(u32, usize)> {
+    param_row(name, u32::MAX);
+    let files = PARAM_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    files.iter().find(|f| f.0 == name).map_or(Vec::new(), |f| param_rows_of(f.1))
+}
+
+fn param_rows_of(file: usize) -> Vec<(u32, usize)> {
+    let Some(header) = read_bytes(file, 0x40) else { return Vec::new() };
+    let rows = u16::from_le_bytes(header[0x0A..0x0C].try_into().unwrap()) as usize;
+    let format = header[0x2D];
+    let wide = format & 0x04 != 0;
+    let extended = wide || (format & 0x01 != 0 && format & 0x02 != 0);
+    let first = 0x30 + if extended { 0x10 } else { 0 };
+    let entry = if wide { 24 } else { 12 };
+    let Some(table) = read_bytes(file + first, rows.min(20_000) * entry) else { return Vec::new() };
+    table.chunks_exact(entry).map(|d| {
+        let offset = if wide { u64::from_le_bytes(d[8..16].try_into().unwrap()) as usize }
+                     else { u32::from_le_bytes(d[4..8].try_into().unwrap()) as usize };
+        (u32::from_le_bytes(d[0..4].try_into().unwrap()), file + offset)
+    }).collect()
+}

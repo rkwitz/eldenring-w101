@@ -1212,7 +1212,8 @@ fn batches(cache: &mut Cache, look: &Look) -> (Vec<Batch>, Option<Head>) {
     let mut out = Vec::new();
     for (stem, part, weapon) in &parts {
         let is_face = stem.starts_with("fg_");
-        let is_hair = stem.starts_with("hr_");
+        // Hair, eyebrows (fg_a_20NN) and beards (fg_a_30NN; FaceParam eyebrow_ / beard_partsId) take the hair colour.
+        let is_hair = stem.starts_with("hr_") || stem.starts_with("fg_a_2") || stem.starts_with("fg_a_3");
         // A weapon's main model only (the others are sheaths and such).
         let flvers = if *weapon { &part.flvers[..part.flvers.len().min(1)] } else { &part.flvers[..] };
         for f in flvers {

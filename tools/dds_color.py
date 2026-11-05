@@ -23,10 +23,10 @@ def _pack565(r, g, b):
     return (q(r, 31) << 11) | (q(g, 63) << 5) | q(b, 31)
 
 
-def _adjust(c, saturation, brightness):
+def _adjust(c, saturation, brightness, gains=(1.0, 1.0, 1.0)):
     rgb = _unpack565(c)
     luma = sum(w * v for w, v in zip(LUMA, rgb))
-    return _pack565(*((luma + (v - luma) * saturation) * brightness for v in rgb))
+    return _pack565(*((luma + (v - luma) * saturation) * brightness * g for v, g in zip(rgb, gains)))
 
 
 def _swap_indices(bits, three_colour):
@@ -39,10 +39,10 @@ def _swap_indices(bits, three_colour):
     return out
 
 
-def _colour_block(data, at, saturation, brightness, dxt1):
+def _colour_block(data, at, saturation, brightness, dxt1, gains=(1.0, 1.0, 1.0)):
     c0, c1, bits = struct.unpack_from("<HHI", data, at)
     three_colour = dxt1 and c0 <= c1
-    n0, n1 = _adjust(c0, saturation, brightness), _adjust(c1, saturation, brightness)
+    n0, n1 = _adjust(c0, saturation, brightness, gains), _adjust(c1, saturation, brightness, gains)
     if three_colour:
         if n0 > n1:
             n0, n1, bits = n1, n0, _swap_indices(bits, True)
@@ -53,14 +53,16 @@ def _colour_block(data, at, saturation, brightness, dxt1):
     struct.pack_into("<HHI", data, at, n0, n1, bits)
 
 
-def boost(dds, saturation=1.3, brightness=1.1):
-    """DDS bytes with every colour block (all mipmaps) made more saturated and brighter."""
+def boost(dds, saturation=1.3, brightness=1.1, gains=(1.0, 1.0, 1.0)):
+    """DDS bytes with every colour block (all mipmaps) made more saturated and brighter; `gains` then scales red,
+    green and blue separately (a colour grade, e.g. round 25's Wizard101 floor tint)."""
     four_cc = dds[84:88]
-    if four_cc not in (b"DXT1", b"DXT3", b"DXT5") or (saturation == 1 and brightness == 1):
+    gains = tuple(gains)
+    if four_cc not in (b"DXT1", b"DXT3", b"DXT5") or (saturation == 1 and brightness == 1 and gains == (1.0, 1.0, 1.0)):
         return dds
     data = bytearray(dds)
     block = 8 if four_cc == b"DXT1" else 16
     colour = 0 if four_cc == b"DXT1" else 8
     for at in range(128, len(data) - block + 1, block):
-        _colour_block(data, at + colour, saturation, brightness, four_cc == b"DXT1")
+        _colour_block(data, at + colour, saturation, brightness, four_cc == b"DXT1", gains)
     return bytes(data)

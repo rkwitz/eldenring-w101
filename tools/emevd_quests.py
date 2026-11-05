@@ -7,7 +7,7 @@ Events, in id order (all flags in w101_quests' docstring):
   assign  quests offered on arrival (Unicorn Way: reaching Private Connelly's sphere): the giver's offer
           ("intro|<quest>": Merle Ambrose's lines and the quest card with yes / no), the quest assigned only on yes,
           then "intro|<quest>|after" (Gamma pointing the player to Connelly). Round 18; rounds 10-17 assigned it
-          before showing anything.
+          before showing anything. Round 20: no quest uses it any more (Unicorn Way is "greet": npc block 0).
   goal    one per goal that is not a talk goal: END if done; WAIT for the quest's assigned flag and the goals before
           it; then wait for the goal's own condition (player in the sphere / kill counter >= N / every cage flag /
           the boss alive and then dead) and set the goal flag; the second-to-last goal also sets "ready", the last
@@ -16,17 +16,20 @@ Events, in id order (all flags in w101_quests' docstring):
           kind (2000[0] slot k, as vanilla's per-enemy events): END if the goal is done; wait for the goal to be
           current and the enemy alive, then for it to die; count it (2003[31], 4 bits) unless the goal finished
           meanwhile; END (the rest restart watches the respawned enemy again).
-  cage    one per Bone Cage: disabled (not drawn, no collision) at load; if already opened, END; else wait for
-          Finding Out Why, enable it, wait for the "Examine" press, set the cage flag, disable it again.
+  cage    one per Bone Cage (round 22): closed cage shown, open twin hidden; if already opened, swap them and END;
+          else wait for Finding Out Why, wait for the "Examine" press on the closed cage, set the cage flag, SFX on
+          the open twin, swap them.
   npc     (round 15) one per street character (w101_quests.CHARACTERS, placed by msb_add_npcs.py): wait for ER's
           own "Talk" press (ActionButtonParam 6000) on the character, then the first block whose flags match, each
           ending in RESTART so the next press is handled the same way:
+            0. (round 20) a "greet" quest of this NPC not assigned yet: assign it and go on to block 1, whose talk
+               goal it now is (Connelly: Unicorn Way's conversation, ending in the Ghost Hunters card)
             1. a talk goal of any quest that is current and targets this NPC: set the goal flag (and ready /
                complete / the next quests' assignment, as a goal event would), then that goal's conversation
             2. a side quest this NPC hands out whose prerequisite is on and which is not assigned: the offer
                conversation; the quest is assigned only when it is accepted (round 17)
             3. a quest of this NPC's that is assigned and not complete and has "underway" lines: that conversation
-            4. the NPC's idle conversation
+            4. the NPC's idle conversation (round 23: its "<quest>|done" line once that quest is complete)
   idle    (round 16) one per street character: one frame after every load, ForceAnimation its idle
           (w101_quests.IDLE), then END.
 Conversations (round 17, F2/F3) are shown by the HUD DLL in Wizard101's own dialogue box, not ER's 2007[10]: a
@@ -78,6 +81,29 @@ def if_button(group, button, entity):
     return _i(3, 24, "<bxxxiI", group, button, entity)
 
 
+def if_riding(group, entity, mounted):
+    """4[32] IF Character Riding Mount."""
+    return _i(4, 32, "<bxxxIBxxx", group, entity, mounted)
+
+
+def buttons(on_foot, riding, entity, alive=False):
+    """Wait for the Action Button on `entity` that fits the player's state: `on_foot` (greyed out on Torrent) while on
+    foot, `riding` (usable on Torrent) while mounted, never both at once.
+    Round 25 (M5) waited for either in one OR group, so Elden Ring had two action buttons up at the same spot and
+    showed its "Switch actions" prompt (Ryan, round 26 N4). Now 4[32] IF Character Riding Mount picks the branch; a
+    branch waits for its button OR the player (un)mounting, and on (un)mounting the event restarts into the other
+    branch. Each branch sets RIDING_FLAG (w101_quests) for the HUD prompt (prompt.rs), which then measures the same
+    row. With `alive` (round 26 N7) the button counts only while the character is alive."""
+    def branch(button, mounted):
+        press = [if_button(5, button, entity)] + ([if_dead(5, entity, 0)] if alive else [])
+        return [set_flag(Q.RIDING_FLAG, mounted), *press, if_riding(6, PLAYER, 1 - mounted),
+                if_group(-5, 1, 5), if_group(-5, 1, 6), if_group(0, 1, -5),
+                _i(1000, 8, "<BBbx", 1, 1, 6)]  # (un)mounted instead of a press: RESTART
+    foot, ride = branch(on_foot, 0), branch(riding, 1)
+    return [if_riding(7, PLAYER, 1), _i(1000, 1, "<BBbx", len(foot) + 1, 1, 7),  # on Torrent now: the riding branch
+            *foot, _i(1000, 3, "<Bxxx", len(ride)), *ride]
+
+
 def if_dead(group, entity, dead):
     return _i(4, 0, "<bxxxIBBxxf", group, entity, dead, 0, 1.0)
 
@@ -108,6 +134,11 @@ def increment(base, bits=4, maximum=15):
 
 def asset_enabled(entity, state):
     return _i(2005, 3, "<IBxxx", entity, state)
+
+
+def oneshot_sfx(asset, sfx, dummy_poly=-1):
+    """2006[03] SpawnOneshotSFX on an asset (target type 0), as vanilla common 9005810."""
+    return _i(2006, 3, "<iIii", 0, asset, dummy_poly, sfx)
 
 
 def force_animation(entity, animation, loop=0):
@@ -174,7 +205,8 @@ def prereq_flag(spec):
 
 def current(q, i):
     """(flag, state) conditions of goal i of quest q being current."""
-    return ([(Q.assigned(q["slug"]), 1), (Q.goal_flag(q["slug"], i), 0)]
+    # Round 23: never once the quest is complete (as markers.rs's "?").
+    return ([(Q.assigned(q["slug"]), 1), (Q.complete(q["slug"]), 0), (Q.goal_flag(q["slug"], i), 0)]
             + [(Q.goal_flag(q["slug"], j), 1) for j in Q.after_of(q, i)])
 
 
@@ -186,7 +218,15 @@ def after_yes(npc, quest, entity):
 
 
 def npc_event(slug, entity):
-    body = [if_button(0, Q.TALK_NPC_BUTTON, entity)]
+    # Round 26 (N7): a dead character (immortal, so only if something kills it anyway) takes no talk until the map
+    # loads again: END while it is dead, and the button counts only while it is alive.
+    body = [if_dead(4, entity, 1), _i(1000, 2, "<BBbx", 0, 1, 4)]  # group 4 (buttons uses 5, 6, 7)
+    body += buttons(Q.TALK_NPC_BUTTON, Q.TALK_NPC_BUTTON_RIDING, entity, alive=True)
+    for q in Q.QUESTS:  # 0. (round 20) a quest this NPC starts by being talked to ("greet"): assigned, then block 1
+        if q["assign"] and q["assign"][0] == "greet" and q["assign"][1] == slug:
+            # Round 23 (Q2): never for a quest already assigned or complete.
+            body += block([(Q.assigned(q["slug"]), 0), (Q.complete(q["slug"]), 0)],
+                          assign(q["slug"]))  # no RESTART: falls into its talk goal
     for q in Q.QUESTS:  # 1. talk goals
         for i, g in enumerate(q["goals"], 1):
             if g["type"] == "talk" and g["target"] == slug:
@@ -198,7 +238,8 @@ def npc_event(slug, entity):
                 body += block(current(q, i), goal_done(q, i) + talk(key, entity) + accepted + [RESTART])
     for q in Q.QUESTS:  # 2. side quests offered by talking
         if q["assign"] and q["assign"][0] == "talk" and q["assign"][1] == slug:
-            conditions = [(Q.assigned(q["slug"]), 0)]
+            # Round 23 (Q2): an offer never comes for a quest the player has (assigned) or finished (complete).
+            conditions = [(Q.assigned(q["slug"]), 0), (Q.complete(q["slug"]), 0)]
             if q["assign"][2]:
                 conditions.append((prereq_flag(q["assign"][2]), 1))
             # Round 17 (F3): assigned only once the offer is accepted (talk() restarts on decline / walking off).
@@ -207,8 +248,20 @@ def npc_event(slug, entity):
     for q in Q.QUESTS:  # 3. underway
         key = f"{slug}|{q['slug']}|underway"
         if DIALOGUE.get(key):
-            body += block([(Q.assigned(q["slug"]), 1), (Q.complete(q["slug"]), 0)], talk(key, entity) + [RESTART])
-    return body + talk(f"{slug}|idle", entity) + [RESTART]  # 4. idle
+            conditions = [(Q.assigned(q["slug"]), 1), (Q.complete(q["slug"]), 0)]
+            # Round 23 (Q1): only until this NPC's last talk goal of the quest is done (Connelly's "drive away some of
+            # these Lost Souls" no longer comes after he was told they're beaten and sends the player to Ceren).
+            mine = [i for i, g in enumerate(q["goals"], 1) if g["type"] == "talk" and g["target"] == slug]
+            if mine:
+                conditions.append((Q.goal_flag(q["slug"], mine[-1]), 0))
+            body += block(conditions, talk(key, entity) + [RESTART])
+    # 4. idle. Round 23 (Q1): once one of its IDLE_DONE quests is complete, the latest one's "done" line (so Ceren
+    # no longer opens with her Skeleton Crew pitch after that quest); before, "<npc>|idle".
+    for quest in reversed(Q.IDLE_DONE.get(slug, [])):
+        key = f"{slug}|{quest}|done"
+        if DIALOGUE.get(key):
+            body += block([(Q.complete(quest), 1)], talk(key, entity) + [RESTART])
+    return body + talk(f"{slug}|idle", entity) + [RESTART]
 
 
 def quest_events():
@@ -222,7 +275,10 @@ def quest_events():
         body = [end_if_flag(Q.assigned(q["slug"]))]
         if prereq:
             body.append(wait_flag(prereq_flag(prereq)))
-        body.append(if_area(0, 1, region))
+        # Round 19 (E1): the first offer comes anywhere on the street (Ryan never got within the 12 m of Connelly's
+        # sphere, so round 18's offer never came); once shown (INTRO_SEEN), a "no" waits for the region again.
+        body += [skip_if_flag(2, Q.INTRO_SEEN, 1), if_near(0, 1, Q.INTRO_ANCHOR, Q.INTRO_RADIUS),
+                 skip_if_flag(1, Q.INTRO_SEEN, 0), if_area(0, 1, region), set_flag(Q.INTRO_SEEN)]
         # Round 18 (F2): the giver's offer (Merle Ambrose's lines and the quest card with yes / no); the quest is
         # the player's only on yes. On no, or the box closed, it is offered again on the next arrival (after leaving
         # the region), never assigned behind the player's back as in rounds 10-17.
@@ -260,21 +316,54 @@ def quest_events():
             events.append(body + goal_done(q, i) + [END])
     events += kills
     for c, (_local, entity) in enumerate(Q.CAGES):  # cages
-        flag = Q.CAGE_FLAG + c
-        events.append([asset_enabled(entity, 0), end_if_flag(flag), wait_flag(Q.assigned("finding_out_why")),
-                       asset_enabled(entity, 1), if_button(0, Q.TALK_BUTTON, entity), set_flag(flag),
-                       asset_enabled(entity, 0), END])
+        # Round 22 (P2): the cage stands on the street from the start (Ryan saw none: rounds 13-21 hid it until Finding
+        # Out Why); opened = its open twin (door swung, entity + CAGE_OPEN_ENTITY) instead, with a burst of SFX.
+        flag, opened = Q.CAGE_FLAG + c, entity + Q.CAGE_OPEN_ENTITY
+        events.append([asset_enabled(entity, 1), asset_enabled(opened, 0),
+                       skip_if_flag(3, flag, 0),  # not opened yet: on to the wait
+                       asset_enabled(entity, 0), asset_enabled(opened, 1), END,
+                       wait_flag(Q.assigned("finding_out_why")),  # the Examine prompt only while the quest is on
+                       *buttons(Q.CAGE_BUTTON, Q.CAGE_BUTTON_RIDING, entity), set_flag(flag),
+                       oneshot_sfx(opened, Q.CAGE_OPEN_SFX), asset_enabled(entity, 0), asset_enabled(opened, 1), END])
     for slug, *_rest, entity in Q.CHARACTERS:  # npcs
         events.append(npc_event(slug, entity))
     for _slug, _title, _frame, _local, _yaw, model, *_rows, entity in Q.CHARACTERS:  # idles (round 16 F3)
-        animation, loop = Q.IDLE[model]
-        events.append([WAIT_FRAME, force_animation(entity, animation, loop), END])  # vanilla waits a frame too
+        animation, loop = Q.IDLE_BY_SLUG.get(_slug, Q.IDLE[model])
+        body = [WAIT_FRAME, force_animation(entity, animation, loop)]  # vanilla waits a frame too
+        # Round 26 (N7): never dies (HP stays >= 1; hits and flinches still happen). N3: a seated character keeps the
+        # MSB root under its seat (gravity off), as vanilla Enia in her chair.
+        body.insert(1, _i(2004, 12, "<IBxxx", entity, 1))
+        if _slug in Q.SEATED:
+            body.insert(1, _i(2004, 10, "<IBxxx", entity, 0))
+        if _slug in Q.STAND_STILL:
+            # Round 21 (Q7): Ryan: Lady Oriel ran around the hedge maze pathfinding. AI off (2004[1], as the bosses'
+            # setup in emevd.py) keeps her on her MSB spot in the middle; her Talk button is the event's, not the AI's.
+            body.insert(1, _i(2004, 1, "<IBxxx", entity, 0))
+        events.append(body + [END])
     assert len(events) <= 100, f"{len(events)} events do not fit in {Q.EVENT_BASE}..+99"
+    events.append(reset_event())
     out = []
     for k, ev in enumerate(events):
         body, pars, instances = ev if isinstance(ev, tuple) else (ev, [], [None])
+        if k < len(events) - 1:
+            # Round 19 (E1): nothing runs before the one-shot reset has cleared the old quest state (parameters
+            # point at instruction lines, so they move down by the added line).
+            body = [wait_flag(Q.QUEST_RESET)] + body
+            pars = [(line + 1, *rest) for line, *rest in pars]
         out.append((Q.EVENT_BASE + k, body, pars, instances))
     return out
+
+
+def reset_event():
+    """Round 19 (E1): once per save (QUEST_RESET, versioned), every quest flag off, then QUEST_RESET on. Ryan's save
+    kept Unicorn Way's state from round 17, so the quest line could not start at Merle Ambrose's offer."""
+    # Round 23 (Q3): the removed side quests' saved flags go off on every map load (Ryan's save had Pesky Pirates
+    # assigned), so nothing in the book, markers or helper can show them again.
+    body = [set_flag(f, 0) for first, last in Q.REMOVED_FLAG_RANGES for f in range(first, last + 1)]
+    body += [end_if_flag(Q.QUEST_RESET)]
+    for first, last in Q.QUEST_FLAG_RANGES:
+        body += [set_flag(f, 0) for f in range(first, last + 1)]
+    return body + [set_flag(Q.QUEST_RESET), END]
 
 
 def add_quests(d):
@@ -319,5 +408,74 @@ def main(argv):
         Path(argv[1]).write_bytes(add_quests(data))
 
 
+# Round 32 (G6, Ryan: Bone Cages are hard to open on Torrent): the DLL (hud_orbs/src/cages.rs CAGE_PRESS) turns
+# CAGE_PRESS + c on when the rider presses Examine within prompt::RIDE_EXAMINE_REACH m of shut cage c; the riding
+# branch of the cage's button wait takes it as the press (no vanilla ActionButtonParam row reaches further on Torrent:
+# the only riding Examine rows are 9300-9560 at 1.5 m and 9330, front-only).
+CAGE_PRESS = 1042362923
+
+
+def cage_ride_press(d):
+    """Patches the cage events already in m60_42_36_00.emevd: after the riding branch's OR of its button (group 5) and
+    the (un)mount restart (group 6), also OR flag CAGE_PRESS + c (group 4). Rerunning changes nothing more."""
+    e = Emevd(d)
+    events = events_of(e)
+    entities = [entity for _p, entity in Q.CAGES]
+    patched = 0
+    for ev in events:
+        ins = ev["ins"]
+        for k, i in enumerate(ins):
+            if (i["bank"], i["id"]) != (3, 24):
+                continue
+            group, button, entity = struct.unpack("<bxxxiI", i["args"])
+            if button != Q.CAGE_BUTTON_RIDING or entity not in entities:
+                continue
+            c = entities.index(entity)
+            press = if_flag(4, 1, CAGE_PRESS + c)
+            if any(j["args"] == press["args"] and (j["bank"], j["id"]) == (3, 0) for j in ins):
+                patched += 1
+                break
+            at = next(j for j in range(k, len(ins)) if (ins[j]["bank"], ins[j]["id"]) == (0, 0)
+                      and ins[j]["args"] == if_group(-5, 1, 6)["args"])
+            ins[at + 1:at + 1] = [press, if_group(-5, 1, 4)]
+            patched += 1
+            break
+    assert patched == len(entities), f"patched {patched} cage events"
+    return build(e, events)
+
+
+def idle_patch(d):
+    """Round 33 (G11): the idle events already in m60_42_36_00.emevd (one per street character: wait a frame, ...,
+    2003[18] ForceAnimation on the character, END) get the animation and loop of Q.IDLE_BY_SLUG / Q.IDLE now, without
+    rebuilding the quest events. Returns the patched file; asserts every character's idle was found."""
+    e = Emevd(d)
+    events = events_of(e)
+    want = {entity: Q.IDLE_BY_SLUG.get(slug, Q.IDLE[model])
+            for slug, _title, _frame, _local, _yaw, model, *_rows, entity in Q.CHARACTERS}
+    found = set()
+    for ev in events:
+        for i in ev["ins"]:
+            if (i["bank"], i["id"]) != (2003, 18):
+                continue
+            entity, animation, loop = struct.unpack_from("<IiB", i["args"])
+            if entity not in want or len(ev["ins"]) > 8:
+                continue
+            new = force_animation(entity, *want[entity])
+            if new["args"] != i["args"]:
+                print(f"idle of {entity}: {animation} loop {loop} -> {want[entity][0]} loop {want[entity][1]}")
+                i["args"] = new["args"]
+            found.add(entity)
+    assert found == set(want), f"no idle event for {sorted(set(want) - found)}"
+    return build(e, events)
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--idle-patch"]:  # emevd_quests.py --idle-patch in.emevd[.dcx] out.emevd[.dcx] (round 33 G11)
+        from emevd import _dcx_apply
+        _dcx_apply(sys.argv[2], sys.argv[3], idle_patch)
+        sys.exit()
+    if sys.argv[1:2] == ["--cage-ride-press"]:  # emevd_quests.py --cage-ride-press in.emevd[.dcx] out.emevd[.dcx]
+        from emevd import _dcx_apply
+        _dcx_apply(sys.argv[2], sys.argv[3], cage_ride_press)
+        sys.exit()
     main(sys.argv[1:])

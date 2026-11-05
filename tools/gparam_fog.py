@@ -94,7 +94,7 @@ OVERHEAD_LIGHT, OVERHEAD_ANGLE = "Directional Light DiffColor1", "Directional Li
 ANGLE = 0x0C  # 2 floats (pitch, yaw in radians) in 16 bytes; vanilla light 1 mostly points straight down (-pi/2, 0)
 
 
-def flat_lighting(data, ambient, overhead=0.0):
+def flat_lighting(data, ambient, overhead=0.0, overhead_colour=(1.0, 1.0, 1.0)):
     """(new GPARAM bytes, [names of changed params]): white hemisphere ambient of intensity `ambient` from every
     side and no directional light (see the module docstring), except, with `overhead` > 0, directional light 1 (the
     fill light; only light 0, the sun, casts shadows) as white light of that intensity straight down."""
@@ -117,7 +117,7 @@ def flat_lighting(data, ambient, overhead=0.0):
             if name in HEMI:
                 struct.pack_into("<4f", out, at, 1.0, 1.0, 1.0, ambient)
             elif name == OVERHEAD_LIGHT:
-                struct.pack_into("<4f", out, at, 1.0, 1.0, 1.0, overhead)
+                struct.pack_into("<4f", out, at, *overhead_colour, overhead)
             else:
                 struct.pack_into("<f", out, at + 12, 0.0)
         changed.append(name)

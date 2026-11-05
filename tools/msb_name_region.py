@@ -23,6 +23,13 @@ floor) and the three boss rooms 60 m under the street (a square box round each r
 never changes going through a door, so no title card shows (the street box stays as it is: lowering it would reach
 the Stranded Graveyard under the exit door). Rerunning moves the existing boxes.
 
+Round 33 (G3b): the extra boxes get the NEGATIVE id -610900 (EXTRA_TEXT_ID). A map load (the riding doors' fallback
+map warp) shows the title card of the override box the player lands in, whatever 2012[8] says (round 32 log). Vanilla
+marks arrival boxes with negative ids: of the 22 PlaceName values in 40 vanilla MSBs (m10-m45 _00_00, several m60),
+10 are negative copies of a positive name (m12_01 has +12010/-12010 and +12012/-12012 boxes), and the negative boxes are
+small ones round arrival points (InvasionPoint regions in m10 -10000, m12_01 -12010, m16 -16000; the elevator regions
+in m21 -21001), i.e. the place keeps its name but no card is shown on arriving there.
+
 Usage: python msb_name_region.py in.msb.dcx out.msb.dcx [--extra]   (DFLT DCX as Smithbox saves, or an uncompressed
 .msb; --extra only adds/moves the W101_name_* boxes, leaving the street box and the door trigger alone)
 """
@@ -114,10 +121,11 @@ EXTRA_ROOMS = (("W101_name_T2", 9256, "W101_Rattlebones_arena", 8.0),
                ("W101_name_T1", 9257, "W101_Blackhope_arena", 8.0),
                ("W101_name_H4", 9258, "W101_FearOfFire_arena", 8.0))
 EXTRA_GARDEN_NAME, EXTRA_GARDEN_ID = "W101_name_maze", 9255
+EXTRA_TEXT_ID = -TEXT_ID  # round 33 (G3b): silent name (see the module doc)
 ROOM_BELOW, ROOM_HEIGHT = 10.0, 40.0  # box from 10 m under the arena centre, 40 m tall
 
 
-def extra_boxes(lists, text_id=TEXT_ID):
+def extra_boxes(lists, text_id=EXTRA_TEXT_ID):
     """Add (or move) the W101_name_* MapNameOverride boxes (see the module doc). Returns their names."""
     from msb_add_indoor import insert_region
     from msb_floor import _set_name

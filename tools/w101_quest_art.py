@@ -35,6 +35,12 @@ MARKERS = [  # (wad, entry, index of the NiPixelData in the file, output)
     ("Root.wad", "Wizbang/Quest_Marker_Complete.nif", 1, "Wizbang/Quest_Complete.png"),
     # Round 18 (F4): the quest arrow under the player's feet (a flat 42.46 x 70 unit quad, its texture embedded).
     ("Root.wad", "Character/Arrow/Quest_Arrow_JT.nif", 0, "Quest/Quest_Arrow.png"),
+    # Round 27 (A9): the merchant's marker (WizBangs.xml Shopping -> Wizbang/Quest_Marker_Shopping.nif: Quest_Spiral
+    # behind the purse sign, a 58.16-unit quad).
+    ("_Shared-WorldData.wad", "Textures/Quest_Shopping__e71b1435.nif", 0, "Wizbang/Quest_Shopping.png"),
+    # Round 31 (QM2): the grey "?" of a quest under way (WizBangs.xml UnfinishedQuest ->
+    # Wizbang/Quest_Marker_Unfinished.nif: Quest_Spiral behind the sign, a 76.2-unit quad as Start's).
+    ("_Shared-WorldData.wad", "Textures/Quest_Unfinished__d57fb319.nif", 0, "Wizbang/Quest_Unfinished.png"),
 ]
 # Round 18: the quest cards' goal pictures (QuestInfoWindow imgGoalObjective1, w101_quests.GOAL_PICTURES) and the
 # pictures inline in the dialogue text (w101_npc_dialogue.tidy).

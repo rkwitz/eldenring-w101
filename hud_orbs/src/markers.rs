@@ -23,6 +23,54 @@ use crate::layout::Textures;
 pub const OFFER: &str = "Wizbang/Quest_Start.png";
 pub const TALK: &str = "Wizbang/Quest_Complete.png";
 pub const SPIRAL: &str = "Wizbang/Quest_Spiral.png";
+/// Round 31 (QM2, Ryan: "an NPC whose quest you have and haven't finished shows a grey ? with the red swirl"):
+/// WizBangs.xml UnfinishedQuest -> Wizbang/Quest_Marker_Unfinished.nif (_Shared-WorldData.wad): the same billboard
+/// as Quest_Marker_Start (76.2-unit sign quad, Quest_Spiral__9549b9f2 behind it, same turn), its sign the grey "?"
+/// Quest_Unfinished__d57fb319.nif (DXT5 256x256, alpha box 51..208 x 6..250, as Quest_Complete's). WizBangPriority.xml
+/// orders CompleteQuestGoal, StartQuest, UnfinishedQuest, ..., Shopping: `marker` keeps that order.
+pub const UNFINISHED: &str = "Wizbang/Quest_Unfinished.png";
+/// Round 27 (A9, Ryan: "Ugo gets W101's shop marker, the purse with the red swirl turning behind it"): WizBangs.xml
+/// Shopping -> Wizbang/Quest_Marker_Shopping.nif (_Shared-WorldData.wad): the same billboard and Quest_Spiral
+/// (59 units, same turn) as Quest_Marker_Start, with the sign Quest_Shopping__e71b1435.nif (the coin purse, 256x256)
+/// on a 58.16-unit quad (Start's is 76.2). PNG made by tools/w101_quest_art.py (MARKERS).
+pub const SHOP: &str = "Wizbang/Quest_Shopping.png";
+const SIGN_SHOP: f32 = 0.5816;
+/// Round 28 (S1, Ryan: "slightly smaller; constant screen size, Wizard101 doesn't scale it; always a fixed pixel gap
+/// above the TOP of the name tag at any distance"). The purse was drawn 44 layout pixels (768-high screen)
+/// square, its picture's visible bottom (Quest_Shopping.png alpha box 17..249 of 256: SHOP_BOTTOM of the half side
+/// under its centre) SHOP_GAP pixels over the top of Ugo's name plate (the plate's own anchor and scale, npc_plates,
+/// and its drawn height: the name and the "Merchant" line, `plate_h` font units from book.rs). Round 27 hung it at a
+/// world height (ChatNode) and scaled it with distance: far away it sank into the name, close up it floated high.
+/// Round 29 (M1, Ryan: "scale it WITH distance, the same size relative to Ugo as in W101; bigger up close, much
+/// smaller far away; still just above the name"): the purse is drawn at its Wizard101 world size again (SIGN_SHOP,
+/// 58.16 units = cm, beside an NPC of Ugo's height, as the quest signs are), never under SHOP_MIN of the screen's
+/// height far away, and its visible bottom stays SHOP_GAP over the top of the name plate as in round 28.
+const SHOP_GAP: f32 = 4.0;
+const SHOP_MIN: f32 = 0.015;
+const SHOP_BOTTOM: f32 = (249.0 - 128.0) / 128.0;
+/// Round 27 (A9): the merchant, his plate's title, and the request flag his talk event raises. Ugo has no
+/// dialogue: emevd_quests' "ugo_kalahad|idle" talk raises SHOP_REQUEST (DIALOGUE_FLAG + its key, dialogue.tsv) and
+/// waits, like any talk, for the HUD's answer (1042362620 OK / 1042362621 Cancel) or the player walking 6 m off.
+/// The shop window (portraits worker, round 27 B2) opens on SHOP_REQUEST instead of the dialogue box and answers
+/// OK when it closes.
+pub const SHOP_NPC: &str = "ugo_kalahad";
+pub const SHOP_TITLE: &str = "Merchant";
+pub const SHOP_REQUEST: u32 = 1042362441;
+
+/// Round 30 (T1): the street NPCs' titles, from Wizard101's Locale/English/Title.lang (the strings its NPC
+/// templates point at with Title_ keys) and WC-NPCs.lang. Wizard City's Unicorn Way templates
+/// (ObjectData/WC/WC-ST01-NPC*.xml) carry only their display-name keys, no Title_ key, so each one is matched by
+/// its own text: Diego, "Diego the Duelmaster" (WC-NPCs_00000116), is the "Duelmaster" (Title_00000003,
+/// WC-NPCs_00000119); Private Connelly (WC-NPCs_00000024) is one of the "Wizard City Guard"s (Title_00000002,
+/// WC-NPCs_00000149..158); Ugo is the "Merchant" (Title_00000052). No title string names Ceren, Olivia or
+/// Lady Oriel, so they keep the name alone.
+pub const TITLES: [(&str, &str); 3] =
+    [("diego", "Duelmaster"), ("private_connelly", "Wizard City Guard"), (SHOP_NPC, SHOP_TITLE)];
+
+/// The title line of NPC `slug` ("" for none).
+pub fn title(slug: &str) -> &'static str {
+    TITLES.iter().find(|t| t.0 == slug).map_or("", |t| t.1)
+}
 
 /// The tile the givers are in (m60_42_36_00).
 const TILE: [i32; 2] = [42, 36];
@@ -43,15 +91,137 @@ const TILE: [i32; 2] = [42, 36];
 /// stand-in by the Wizard City guard's proportion (ChatNode 290 units over the feet / head bone 189.2 = 1.53, times
 /// the stand-in's head bone: c0000 about 1.55 m, Melina 1.5 m), which leaves the sign just over the name. Round 17
 /// used the Seraph's proportion (285.9 / 152.4) for Melina, a winged creature twice her size.
-pub const NPCS: [(&str, &str, u32, u32, [f32; 3], f32, f32); 5] = [
-    ("private_connelly", "Private Connelly", 1042360820, 0, [5.0029, 94.1828, -44.0778], 1.9, 2.38),
-    ("ceren_nightchant", "Ceren Nightchant", 1042360821, 0, [-84.8379, 94.4878, -18.4484], 1.9, 2.38),
-    ("olivia_dawnwillow", "Olivia Dawnwillow", 1042360822, 0, [-65.8655, 92.8248, -7.9762], 1.85, 2.3),
-    ("lady_oriel", "Lady Oriel", 1042360823, 2180, [-335.1056, 93.4988, 103.5473], 1.9, 2.3),
-    ("private_oryan", "Private O'Ryan", 1042360824, 0, [-160.8270, 93.4878, -54.0237], 1.9, 2.38),
+///
+/// Round 24 (N1, Ryan's picks; tools/w101_quests.py BERNAHL ...): Connelly = Knight Bernahl, Ceren = Brother Corhyn,
+/// O'Ryan = Castellan Edgar (all c0000 in their own looks), Olivia = Finger Reader Enia (c2170), Lady Oriel = St.
+/// Trina (c5330). Heights measured the round 18 way (plate = seen top + 0.21; marker = 1.53 x head bone, and at least
+/// plate + 0.48, the c0000 gap, so the sign never sits on the name):
+/// - Bernahl / Corhyn / Edgar (npc_portrait renders in the book's idle pose): hair / blindfold top 1.69 / 1.69 / 1.72
+///   m, head bone about 1.55 -> plates 1.9 / 1.9 / 1.93, markers 2.38 / 2.38 / 2.41.
+/// - Enia (tools/er_chr_height.py, idle a000_000020): head bone 1.96, hood top 2.19 (bind mesh top 2.14 over bind
+///   head 1.91) -> plate 2.4, marker 3.0.
+/// - Trina: a small girl asleep on her side inside tall flowers: head bone 1.22, but the flowers reach 1.97 (mesh top
+///   and highest bone Flower_B103) -> plate 2.18 over the flowers, marker 2.66 (plate + 0.48).
+/// Round 25 (M3, Ryan: "look at each one in its real pose: Enia's tag too low; Corhyn kneels so his tag goes lower").
+/// The c0000 NPCs don't stand: EMEVD plays 90100, which their NpcParam SpEffects (9845 / 9861 / 9828, animIdOffset
+/// 345 / 361 / 328 million) turn into a345_090100 (Bernahl sits, head bone 1.23 m), a361_090100 (Corhyn kneels, head
+/// 0.87) and a328_090100 (Edgar sits, head 1.04) (c0000_a9x.anibnd, first = last frame; round 24 measured the book's
+/// standing pose). Tops = head bone + the standing hair / blindfold gap (0.14 / 0.14 / 0.17). Enia (a000_000020, sat
+/// in her chair) holds her staff with cloth ribbons up to 3.10 m ([cloth]c2170_wand_07; head 1.96), so the round 24
+/// plate (2.4) sat inside it. Trina now rises from her flowers (emevd idle a000_030000: head 1.22, flowers 1.96):
+/// unchanged. Same rule: plate = top + 0.21, marker = max(1.53 x head bone, plate + 0.48).
+/// Round 26 (N1/N2): the spots are Wizard101's own (tools/w101_npc_spots.py: rounds 15-25 put each NPC on its
+/// neighbour's spot); O'Ryan is inside his house (off the street); Diego the Duelmaster (D, Hunter of the Dead's look
+/// on Varre's standing rows: a320_090100 head 1.54, helm top ~1.69 -> 1.9 / 2.38 as round 24's standing c0000) and Ugo
+/// Kalahad (Merchant Kale c3200, a000_000000: head 1.70, hat 1.79 -> plate 2.00, marker 1.53 x 1.70 = 2.60).
+/// Round 27 (A5/A7, Ryan: "everyone stands where the model can"): Connelly (Bernahl a345_090101) and Ceren (Corhyn
+/// a361_090101, his Roundtable Hold stance) stand: head bone 1.54 m as Varre's a320_090100 -> round 24's standing
+/// 1.9 / 2.38. Olivia is Rya the Scout (c0000, CharaInit 23130) standing in a329_090100: head bone 1.40, hair top
+/// ~1.55 (the c0000 gap 0.15) -> plate 1.76, marker max(1.53 x 1.40, 1.76 + 0.48) = 2.24. Unverified in game.
+pub const NPCS: [(&str, &str, u32, u32, [f32; 3], f32, f32); 6] = [
+    ("private_connelly", "Private Connelly", 1042360820, 0, [-65.8655, 92.8248, -7.9762], 1.9, 2.38),
+    ("ceren_nightchant", "Ceren Nightchant", 1042360821, 0, [-80.3192, 93.6998, -12.8224], 1.9, 2.38),
+    ("olivia_dawnwillow", "Olivia Dawnwillow", 1042360822, 0, [-84.8379, 94.4878, -18.4484], 1.76, 2.24),
+    ("lady_oriel", "Lady Oriel", 1042360823, 5330, [-336.1025, 93.4988, 105.5051], 2.18, 2.66),
+    ("diego", "Diego the Duelmaster", 1042360825, 0, [5.0029, 94.1828, -44.0778], 1.9, 2.38),
+    ("ugo_kalahad", "Ugo Kalahad", 1042360826, 3200, [-29.7745, 94.5018, -61.8978], 2.0, 2.6),
 ];
+/// Round 29 (NP1, Ryan: "NPCs knocked away by hits sometimes walk back to their spot and sometimes just stay"):
+/// proof of which NPCs go home. The log says when one is pushed more than HOME_AWAY m off its spot, when it is back
+/// within HOME_BACK m (and after how long), and when it is still away HOME_STUCK s later. Their Think rows
+/// (regulation, NpcThinkParam) differ: Connelly / Ceren / Olivia / Diego run logic 10000 with backhomeDist 50 / 50 /
+/// 50 / 35 m, Ugo (Kale) his own logic 320000 with backhomeDist 30 and BackHomeLife_OnHitEneWal 5, Lady Oriel (Trina)
+/// 9999, so the log is what tells which of them return.
+/// Round 31 (NP1, Ryan's round 30 log: every NPC "pushed" 72-328 m at once): the physics positions Game::entities
+/// returns move all together when the game shifts its world origin, so a spot taken in that space goes stale. Now each
+/// NPC is placed against the other loaded street NPCs instead: its offset from NPC j, minus the two MSB spots' offset
+/// (NPCS), is the same in any shifted space; the median over the others is how far it is off its own spot, minus
+/// that same number when it was first seen (its standing offset from the MSB spot). A shift moves everybody and
+/// changes nothing; one pushed NPC moves only its own number. It needs two other NPCs loaded (Lady Oriel, alone in
+/// the garden, is not tracked).
+const HOME_AWAY: f32 = 0.5;
+const HOME_BACK: f32 = 0.3;
+const HOME_STUCK: f32 = 20.0;
+struct Home {
+    id: u32,
+    /// Its offset from the MSB spot when first seen (x, z).
+    base: [f32; 2],
+    seen: std::time::Instant,
+    away: Option<(std::time::Instant, bool)>,
+}
+static HOMES: std::sync::Mutex<Vec<Home>> = std::sync::Mutex::new(Vec::new());
+
+/// The horizontal offset of `i` from its MSB spot, measured against the other loaded NPCs (median per axis).
+fn off_spot(i: usize, at: &[([f32; 3], [f32; 3])]) -> Option<[f32; 2]> {
+    let mut xs = Vec::new();
+    let mut zs = Vec::new();
+    for (j, (p, m)) in at.iter().enumerate() {
+        if j != i {
+            xs.push((at[i].0[0] - p[0]) - (at[i].1[0] - m[0]));
+            zs.push((at[i].0[2] - p[2]) - (at[i].1[2] - m[2]));
+        }
+    }
+    if xs.len() < 2 {
+        return None;
+    }
+    let median = |v: &mut Vec<f32>| { v.sort_by(f32::total_cmp); v[v.len() / 2] };
+    Some([median(&mut xs), median(&mut zs)])
+}
+
+pub fn track_homes(entities: &[(u32, [f32; 3])]) {
+    let now = std::time::Instant::now();
+    let mut homes = HOMES.lock().unwrap_or_else(|e| e.into_inner());
+    // An NPC unseen for 3 s (map load, warp, out of range) takes its standing offset afresh when it is back.
+    homes.retain(|h| now.duration_since(h.seen).as_secs_f32() < 3.0);
+    // (physics position, MSB spot) of the street NPCs loaded now (not Lady Oriel's garden).
+    let known: Vec<(u32, &str, [f32; 3], [f32; 3])> = entities.iter().filter_map(|(id, p)| {
+        NPCS.iter().find(|n| n.2 == *id && n.0 != "lady_oriel").map(|n| (*id, n.1, *p, n.4))
+    }).collect();
+    let at: Vec<([f32; 3], [f32; 3])> = known.iter().map(|k| (k.2, k.3)).collect();
+    for (i, (id, name, _, _)) in known.iter().enumerate() {
+        let Some(off) = off_spot(i, &at) else { continue };
+        let Some(h) = homes.iter_mut().find(|h| h.id == *id) else {
+            homes.push(Home { id: *id, base: off, seen: now, away: None });
+            continue;
+        };
+        h.seen = now;
+        let d = (off[0] - h.base[0]).hypot(off[1] - h.base[1]);
+        match h.away {
+            None if d > HOME_AWAY => {
+                tracing::info!("npc home: {name} ({id}) pushed {d:.2} m off its spot ({} others to measure by)", at.len() - 1);
+                h.away = Some((now, false));
+            }
+            Some((since, _)) if d < HOME_BACK => {
+                tracing::info!("npc home: {name} ({id}) back on its spot after {:.1} s", now.duration_since(since).as_secs_f32());
+                h.away = None;
+            }
+            Some((since, false)) if now.duration_since(since).as_secs_f32() > HOME_STUCK => {
+                tracing::info!("npc home: {name} ({id}) still {d:.2} m off its spot after {HOME_STUCK} s: its AI is not taking it home");
+                h.away = Some((since, true));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Round 26 (N7): street NPCs the game has loaded dead (Game::entities). They get no spot at all, so no marker, name
+/// plate or talk prompt; the talk events END for a dead character too (tools/emevd_quests.py npc_event).
+static DEAD: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+pub fn set_dead(ids: &[u32]) {
+    let mut dead = DEAD.lock().unwrap_or_else(|e| e.into_inner());
+    if *dead != ids {
+        tracing::info!("markers: dead street NPCs now {ids:?}");
+        *dead = ids.to_vec();
+    }
+}
+
+fn is_dead(entity: u32) -> bool {
+    DEAD.lock().unwrap_or_else(|e| e.into_inner()).contains(&entity)
+}
+
 /// Their models and entity IDs, for Game::entities.
-pub const MODELS: [u32; 2] = [0, 2180];
+pub const MODELS: [u32; 3] = [0, 5330, 3200];
 pub fn entity_ids() -> Vec<u32> {
     NPCS.iter().map(|n| n.2).collect()
 }
@@ -70,56 +240,82 @@ const PLATE_RANGE: f32 = 40.0;
 /// place of the Wizard101 picture; Gamma (the intro) keeps Wizard101's owl.
 pub const ER_PORTRAITS: &str = "GUI/NpcPortraits/ER";
 
-/// Points the conversations of dialogue.tsv at the Elden Ring portraits that are installed under `book`/art.
-pub fn er_portraits(requests: &mut [crate::talk::Request], book: &std::path::Path) {
+/// Points the conversations of dialogue.tsv at the Elden Ring portraits. Round 25 (H9): always (round 24 only when
+/// the file was there at load, so a game started before the ER folder was deployed kept the W101 faces), also each
+/// page's own speaker, and Merle Ambrose / Gamma (quests::er_picture). A missing ER file shows no face (and is
+/// retried, layout::Textures), never a Wizard101 one.
+pub fn er_portraits(requests: &mut [crate::talk::Request], _book: &std::path::Path) {
+    let er = |slug: &str, path: &str| match NPCS.iter().find(|n| n.0 == slug) {
+        Some(n) => format!("{ER_PORTRAITS}/{}.png", n.0),
+        None => crate::quests::er_picture(path),
+    };
+    let mut left = Vec::new();
     for r in requests.iter_mut() {
-        let picture = format!("{ER_PORTRAITS}/{}.png", r.speaker);
-        if book.join("art").join(&picture).exists() {
-            r.portrait = picture;
+        r.portrait = er(&r.speaker, &r.portrait);
+        for (name, portrait) in r.speakers.iter_mut() {
+            if !portrait.is_empty() {
+                let slug = NPCS.iter().find(|n| n.1 == name.as_str()).map_or("", |n| n.0);
+                *portrait = er(slug, portrait);
+            }
+        }
+        if !r.portrait.starts_with(ER_PORTRAITS) {
+            left.push(format!("{} {}", r.key, r.portrait));
         }
     }
+    tracing::info!("dialogue portraits: {} conversations, not Elden Ring: {left:?}", requests.len());
 }
 
 /// Quests given by talking to their giver: (giver, assigned flag, the flag that makes it available).
 /// Round 18 (quests F2): the main quests are offered too (Wizard101's flow: each one handed out by its giver on
 /// yes), so a giver whose quest was declined shows the "!" again (w101_quests.QUESTS "assign").
 const OFFERS: &[(&str, u32, u32)] = &[
-    ("private_connelly", 1042362010, 1042362009), // Ghost Hunters once Unicorn Way is complete
-    ("ceren_nightchant", 1042362020, 1042362019), // Skeleton Crew once Ghost Hunters is complete
-    ("ceren_nightchant", 1042362030, 1042362029), // Monsters and Mazes once Skeleton Crew is complete
-    ("lady_oriel", 1042362040, 1042362039), // Finding Out Why once Monsters and Mazes is complete
-    ("lady_oriel", 1042362050, 1042362049), // Who Could It Be Now? once Finding Out Why is complete
-    ("ceren_nightchant", 1042362060, 1042362059), // Sinister Skeleton once Who Could It Be Now? is complete
-    ("olivia_dawnwillow", 1042362100, 1042362020), // Pesky Pirates once Skeleton Crew is assigned
-    ("private_connelly", 1042362110, 1042362019), // Saving Private Oryan once Ghost Hunters is complete
-    ("olivia_dawnwillow", 1042362150, 1042362109), // Fear of Fire once Pesky Pirates is complete
+    // Round 19 (E3): Unicorn Way is Merle Ambrose's, offered by his message anywhere on the street (emevd_quests.py)
+    // and again on reaching Connelly after a "no"; until it is accepted Connelly shows the "!" so the player can
+    // find him. QUEST_RESET is on in every save once the round 19 reset has run.
+    // Round 20 (Q2): no Ambrose offer; the "!" is how the line starts, and talking to Connelly takes Unicorn Way.
+    ("private_connelly", 1042360300, QUEST_RESET),
+    ("private_connelly", 1042360310, 1042360309), // Ghost Hunters once Unicorn Way is complete
+    ("ceren_nightchant", 1042360320, 1042360319), // Skeleton Crew once Ghost Hunters is complete
+    ("ceren_nightchant", 1042360330, 1042360329), // Monsters and Mazes once Skeleton Crew is complete
+    ("lady_oriel", 1042360340, 1042360339), // Finding Out Why once Monsters and Mazes is complete
+    ("lady_oriel", 1042360350, 1042360349), // Who Could It Be Now? once Finding Out Why is complete
+    ("ceren_nightchant", 1042360360, 1042360359), // Sinister Skeleton once Who Could It Be Now? is complete
+    // Round 23 (Q3, Ryan): only the line to Rattlebones and Ceren after him; the side quests (Pesky Pirates, Saving
+    // Private O'Ryan, The Power is Ours) are removed (w101_quests.REMOVED_QUESTS).
 ];
+
+/// w101_quests.QUEST_RESET: the one-shot quest reset has run (the quest events wait for it). Round 21 (Q1): version 3
+/// in the saved 1042360xxx block (round 20's 1042362691 sat in a block every map load clears, so it re-ran each load).
+pub const QUEST_RESET: u32 = 1042360691;
 
 /// Talk goals: (npc, quest assigned flag, quest complete flag, goal flag, flags of the goals it comes after).
+/// Round 32 (U8, Ryan: "Ceren kept the grey ? until I was close, then it turned yellow; it should be yellow as soon as
+/// it shows"): a talk goal that comes after a "go to this NPC" goal (w101_quests: finding_out_why goal 3 "Go to Lady
+/// Oriel" = goto hedge_maze, where she stands; sinister_skeleton goal 3 "Return to Ceren Nightchant" = goto near_ceren)
+/// now waits only for the goals before that one: the yellow "?" shows from the moment the quest sends the player to
+/// the NPC. Round 31's log (round32_input): 03:12:31 +1042360362 (Rattlebones defeated, popup "New Goal: Return to
+/// Ceren Nightchant"), but Ceren stayed Unfinished until 03:14:21 +1042360363 (near_ceren) at 13 m; Lady Oriel the
+/// same at 03:09:10 (+1042360343 at 14 m) although her two goals before were done at 03:07:54.
 const TALKS: &[(&str, u32, u32, u32, &[u32])] = &[
-    ("private_connelly", 1042362000, 1042362009, 1042362001, &[]),
-    ("private_connelly", 1042362010, 1042362019, 1042362012, &[1042362011]),
-    ("ceren_nightchant", 1042362010, 1042362019, 1042362013, &[1042362012]),
-    ("ceren_nightchant", 1042362020, 1042362029, 1042362022, &[1042362021]),
-    ("lady_oriel", 1042362030, 1042362039, 1042362032, &[1042362031]),
-    ("lady_oriel", 1042362040, 1042362049, 1042362044, &[1042362043]),
-    ("ceren_nightchant", 1042362050, 1042362059, 1042362051, &[]),
-    ("ceren_nightchant", 1042362060, 1042362069, 1042362064, &[1042362063]),
-    ("olivia_dawnwillow", 1042362100, 1042362109, 1042362102, &[1042362101]),
-    ("private_oryan", 1042362110, 1042362119, 1042362112, &[1042362111]),
-    ("private_oryan", 1042362110, 1042362119, 1042362115, &[1042362114]),
-    ("private_connelly", 1042362110, 1042362119, 1042362116, &[1042362115]),
-    ("olivia_dawnwillow", 1042362150, 1042362159, 1042362153, &[1042362152]),
+    ("private_connelly", 1042360300, 1042360309, 1042360301, &[]),
+    ("private_connelly", 1042360310, 1042360319, 1042360312, &[1042360311]),
+    ("ceren_nightchant", 1042360310, 1042360319, 1042360313, &[1042360312]),
+    ("ceren_nightchant", 1042360320, 1042360329, 1042360322, &[1042360321]),
+    ("lady_oriel", 1042360330, 1042360339, 1042360332, &[1042360331]),
+    ("lady_oriel", 1042360340, 1042360349, 1042360344, &[1042360341, 1042360342]),
+    ("ceren_nightchant", 1042360350, 1042360359, 1042360351, &[]),
+    ("ceren_nightchant", 1042360360, 1042360369, 1042360364, &[1042360362]),
 ];
 
-/// Markers are drawn this far (metres) and fade out over the last part.
-const RANGE: f32 = 150.0;
-/// Quest_Marker_*.nif: the billboard's height over the marker's origin, the sign's and the spiral's quad sides (W101
-/// units = cm), and the spiral's turn (its z rotation keys: -2 pi over 6.67 s).
-const CENTRE: f32 = 0.3871;
+/// Quest_Marker_*.nif: the sign's and the spiral's quad sides (W101 units = cm), and the spiral's turn (its z
+/// rotation keys: -2 pi over 6.67 s). (The billboard's 38.71-unit height over the marker's origin is not used since
+/// round 31: the signs sit over the name plate.)
 const SIGN: f32 = 0.762;
 const SPIRAL_SIDE: f32 = 0.59;
 const SPIRAL_TURN: f32 = 6.6667;
+/// Round 31 (QM1): the "!" / "?" pictures' visible bottom (alpha boxes end at row 250 of 256), in half sides under
+/// the centre.
+const SIGN_BOTTOM: f32 = (250.0 - 128.0) / 128.0;
 
 /// The game camera: rows right, up, forward, position; vertical field of view in radians; and the player's physics
 /// position (the camera's space).
@@ -157,29 +353,49 @@ impl Camera {
 pub enum Marker {
     Offer,
     Talk,
+    /// Round 31 (QM2): the grey "?": the NPC's quest is under way.
+    Unfinished,
+    /// Round 27 (A9): the merchant's purse.
+    Shop,
 }
 
 /// Every flag the markers read.
 pub fn flags() -> Vec<u32> {
-    let mut out: Vec<u32> = OFFERS.iter().flat_map(|o| [o.1, o.2]).collect();
+    let mut out: Vec<u32> = OFFERS.iter().flat_map(|o| [o.1, o.1 + 9, o.2]).collect();
     for (_, assigned, complete, goal, after) in TALKS.iter().copied() {
         out.extend([assigned, complete, goal]);
         out.extend(after.iter().copied());
     }
+    out.push(crate::prompt::RIDING_FLAG); // round 26 (N4): which Talk row the events wait for
     out.retain(|f| *f != 0);
     out
 }
 
 /// The marker over `npc`, from the quest flags: "!" when one of its quests is available and not yet assigned, else
 /// "?" when a goal to talk to it is current (its quest in progress, the goal not done, the goals before it done).
+/// Round 23 (Q1/Q2): in the order the NPC's talk event checks them (emevd_quests.npc_event): Unicorn Way's greet,
+/// then a current talk goal ("?"), then an offer, which needs the quest neither assigned nor complete (+9).
 pub fn marker(npc: &str, flag: &dyn Fn(u32) -> bool) -> Option<Marker> {
-    if OFFERS.iter().any(|(giver, assigned, after)| *giver == npc && flag(*after) && !flag(*assigned)) {
-        return Some(Marker::Offer);
+    let offer = |(giver, assigned, after): &(&str, u32, u32)| {
+        *giver == npc && flag(*after) && !flag(*assigned) && !flag(*assigned + 9)
+    };
+    if OFFERS.first().is_some_and(offer) {
+        return Some(Marker::Offer); // greet: Connelly takes Unicorn Way
     }
     let talk = TALKS.iter().any(|(who, assigned, complete, goal, after)| {
         *who == npc && flag(*assigned) && !flag(*complete) && !flag(*goal) && after.iter().all(|a| flag(*a))
     });
-    talk.then_some(Marker::Talk)
+    if talk {
+        return Some(Marker::Talk);
+    }
+    if OFFERS.iter().any(offer) {
+        return Some(Marker::Offer);
+    }
+    // Round 31 (QM2): a quest this NPC gave is under way (assigned, its complete flag = assigned + 9 not yet on).
+    if OFFERS.iter().any(|(giver, assigned, _)| *giver == npc && flag(*assigned) && !flag(*assigned + 9)) {
+        return Some(Marker::Unfinished);
+    }
+    (npc == SHOP_NPC).then_some(Marker::Shop)
 }
 
 /// A map block's tile (x, z) in 256 m units and its scale, or None outside the open world (area 60).
@@ -227,6 +443,7 @@ pub fn locate(camera: &Camera, position: Option<([f32; 3], i32, i32)>, entities:
     }
     let shift = if n > 0.0 { shift.map(|v| v / n) } else { [0.0; 3] };
     (0..NPCS.len())
+        .filter(|i| !is_dead(NPCS[*i].2))
         .filter_map(|i| match found(i) {
             Some(f) => Some((i, f, true)),
             None => msb(i).map(|m| (i, [m[0] + shift[0], m[1] + shift[1], m[2] + shift[2]], false)),
@@ -238,7 +455,7 @@ pub fn locate(camera: &Camera, position: Option<([f32; 3], i32, i32)>, entities:
 /// NPC whether the game has it loaded, the marker it gets, its distance (in 50 m steps for the change test), and how
 /// far its MSB spot is from where the game has it.
 fn log_state(camera: &Camera, position: Option<([f32; 3], i32, i32)>, entities: &[(u32, [f32; 3])], spots: &[Spot],
-             flag: &dyn Fn(u32) -> bool) {
+             render: &[(u32, u8, u8, u32)], flag: &dyn Fn(u32) -> bool) {
     static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
     let p = camera.player;
     let (mut key, mut line) = (String::new(), String::new());
@@ -251,8 +468,14 @@ fn log_state(camera: &Camera, position: Option<([f32; 3], i32, i32)>, entities: 
             let f = entities.iter().find(|e| e.0 == NPCS[i].2)?.1;
             Some(((p[0] + o[0] - f[0]).powi(2) + (p[1] + o[1] - f[1]).powi(2) + (p[2] + o[2] - f[2]).powi(2)).sqrt())
         });
-        key += &format!("{slug}:{loaded}:{kind:?}:{} ", (d / 50.0) as i32);
-        line += &format!(" {slug} {} marker {kind:?} {d:.0} m{};", if loaded { "loaded" } else { "at its MSB spot" },
+        // Round 19 (E2): height over the player (fallen under the street?) and the game's render bits.
+        let bits = render.iter().find(|r| r.0 == NPCS[i].2);
+        let shown = bits
+            .map(|b| format!(" render group {} render {} activation {:#x}", b.1 >> 3 & 1, b.2 >> 3 & 1, b.3))
+            .unwrap_or_default();
+        key += &format!("{slug}:{loaded}:{kind:?}:{}:{}:{shown} ", (d / 50.0) as i32, ((at[1] - p[1]) / 5.0) as i32);
+        line += &format!(" {slug} {} marker {kind:?} {d:.0} m, {:+.1} m up{shown}{};",
+                         if loaded { "loaded" } else { "at its MSB spot" }, at[1] - p[1],
                          err.map(|e| format!(" (MSB spot {e:.1} m off)")).unwrap_or_default());
     }
     if spots.is_empty() {
@@ -267,8 +490,8 @@ fn log_state(camera: &Camera, position: Option<([f32; 3], i32, i32)>, entities: 
 }
 
 /// The Wizard101 name plates of the street NPCs in view (book.rs draws them with the creature plates): the name in
-/// Wizard101's NPC green, no second line (none of these NPCs has a title in Wizard101's data).
-pub fn npc_plates(camera: &Camera, spots: &[Spot], screen: [f32; 2]) -> Vec<crate::nameplates::Plate> {
+/// Wizard101's NPC green, and under it the NPC's title (TITLES).
+pub fn npc_plates(camera: &Camera, spots: &[Spot], sight: &Sight, screen: [f32; 2]) -> Vec<crate::nameplates::Plate> {
     let mut out = Vec::new();
     let p = camera.player;
     for &(i, at, _) in spots {
@@ -282,10 +505,15 @@ pub fn npc_plates(camera: &Camera, spots: &[Spot], screen: [f32; 2]) -> Vec<crat
         if x < -200.0 || x > screen[0] + 200.0 || y < -100.0 || y > screen[1] + 100.0 {
             continue;
         }
-        let alpha = ((PLATE_RANGE - d) / (PLATE_RANGE * 0.2)).clamp(0.0, 1.0);
+        let alpha = ((PLATE_RANGE - d) / (PLATE_RANGE * 0.2)).clamp(0.0, 1.0) * sight.alpha(i);
+        if alpha <= 0.0 {
+            continue;
+        }
         let k = (screen[1] / 768.0) * (8.0 / z.max(1.0)).clamp(0.7, 1.15);
-        out.push(crate::nameplates::Plate { at: on_screen, k, alpha, name, line: String::new(), school: "",
-                                             colour: NPC_NAME_COLOUR });
+        // Round 27 (A9) / round 30 (T1): the title under the name.
+        let line = title(NPCS[i].0).to_string();
+        out.push(crate::nameplates::Plate { at: on_screen, k, alpha, name, line, school: "",
+                                             colour: NPC_NAME_COLOUR, z });
     }
     out
 }
@@ -300,35 +528,60 @@ pub fn draw(
     position: Option<([f32; 3], i32, i32)>,
     entities: &[(u32, [f32; 3])],
     spots: &[Spot],
+    render: &[(u32, u8, u8, u32)],
     flags: &HashMap<u32, bool>,
+    sight: &Sight,
     time: f32,
     screen: [f32; 2],
+    plate_h: [f32; 2],
 ) {
     let flag = |f: u32| flags.get(&f) == Some(&true);
-    log_state(camera, position, entities, spots, &flag);
+    log_state(camera, position, entities, spots, render, &flag);
     let p = camera.player;
-    let mut drawn: Vec<(f32, [f32; 2], f32, u8, &str)> = Vec::new();
+    // (depth, centre, sign half side, spiral half side, alpha, picture)
+    let mut drawn: Vec<(f32, [f32; 2], f32, f32, u8, &str)> = Vec::new();
     for &(i, at, _) in spots {
-        let (slug, _, _, _, _, _, lift) = NPCS[i];
+        let (slug, _, _, _, _, plate_lift, _) = NPCS[i];
         let Some(kind) = marker(slug, &flag) else { continue };
-        let distance = ((at[0] - p[0]).powi(2) + (at[2] - p[2]).powi(2)).sqrt();
-        let alpha = (255.0 * ((RANGE - distance) / (RANGE * 0.2)).clamp(0.0, 1.0)) as u8;
+        // Round 22 (H6, Ryan: "the name fades away at a certain distance; make those symbols also fade"): faded with
+        // distance exactly as the names are (PLATE_RANGE, 3D distance), and out of sight behind walls (`sight`).
+        let d3 = ((at[0] - p[0]).powi(2) + (at[1] - p[1]).powi(2) + (at[2] - p[2]).powi(2)).sqrt();
+        let fade = ((PLATE_RANGE - d3) / (PLATE_RANGE * 0.2)).clamp(0.0, 1.0) * sight.alpha(i);
+        let alpha = (255.0 * fade) as u8;
         if alpha == 0 {
             continue;
         }
-        let Some((on_screen, z)) = camera.project([at[0], at[1] + lift + CENTRE, at[2]], screen) else { continue };
-        // Wizard101 draws it at its world size; far away it is kept to a still readable 1.5 % of the screen.
-        let metre = camera.scale(z, screen[1]).max(screen[1] * 0.015 / SIGN);
-        drawn.push((z, on_screen, metre, alpha, if kind == Marker::Offer { OFFER } else { TALK }));
+        // Round 28 (S1): a fixed gap over the top of the name plate (npc_plates' anchor and scale k).
+        // Round 29 (M1): its world size (SIGN_SHOP) at this depth, never under SHOP_MIN of the screen's height.
+        // Round 31 (QM1, Ryan: "the ! and ? scale with distance the same way as Ugo's purse"): every sign now goes
+        // the purse's way, each at its own Wizard101 size (SIGN / SIGN_SHOP), its picture's visible bottom SHOP_GAP
+        // over the top of this NPC's plate (the name, plus the title line when it has one). They used to hang at a
+        // world height, so far away they sank into the name and with a title line they covered it.
+        let Some(([x, y], z)) = camera.project([at[0], at[1] + plate_lift, at[2]], screen) else { continue };
+        let s = screen[1] / 768.0;
+        let k = s * (8.0 / z.max(1.0)).clamp(0.7, 1.15);
+        let (side, bottom, sign) = match kind {
+            Marker::Offer => (SIGN, SIGN_BOTTOM, OFFER),
+            Marker::Talk => (SIGN, SIGN_BOTTOM, TALK),
+            Marker::Unfinished => (SIGN, SIGN_BOTTOM, UNFINISHED),
+            Marker::Shop => (SIGN_SHOP, SHOP_BOTTOM, SHOP),
+        };
+        let metre = camera.scale(z, screen[1]).max(screen[1] * SHOP_MIN / side);
+        let half = side * metre / 2.0;
+        let plate = plate_h[0] + if title(slug).is_empty() { 0.0 } else { plate_h[1] };
+        let centre = [x, y - plate * k - SHOP_GAP * s - half * bottom];
+        drawn.push((z, centre, half, half * SPIRAL_SIDE / side, alpha, sign));
     }
     // Far ones first, so near ones cover them.
     drawn.sort_by(|a, b| b.0.total_cmp(&a.0));
     // The spiral turns clockwise on the screen, a full turn every SPIRAL_TURN seconds.
     let angle = (time / SPIRAL_TURN).fract() * std::f32::consts::TAU;
-    for (_, at, metre, alpha, name) in drawn {
+    for (z, at, sign_half, spiral_half, alpha, name) in drawn {
+        // Round 26 (O1): hidden wherever the game's scene is in front of it (occlusion.rs).
+        crate::occlusion::begin(z, 0.0, "", at);
         let tint = ImColor32::from_rgba(255, 255, 255, alpha);
         if let Some((spiral, _)) = textures.get(SPIRAL) {
-            let h = SPIRAL_SIDE * metre / 2.0;
+            let h = spiral_half;
             let (sin, cos) = angle.sin_cos();
             let corner = |x: f32, y: f32| [at[0] + (x * cos - y * sin) * h, at[1] + (x * sin + y * cos) * h];
             draw.add_image_quad(spiral, corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0))
@@ -336,7 +589,102 @@ pub fn draw(
                 .build();
         }
         let Some((texture, _)) = textures.get(name) else { continue };
-        let h = SIGN * metre / 2.0;
+        let h = sign_half;
         draw.add_image(texture, [at[0] - h, at[1] - h], [at[0] + h, at[1] + h]).col(tint).build();
     }
+    crate::occlusion::end();
+}
+
+/// Round 22 (H6): whether each street NPC can be seen from the player (MSB positions; questhelper::Nav::sees), eased
+/// in and out over FADE seconds so a marker doesn't blink at a corner. In a room under the street nobody on the
+/// street is in sight; the garden (hedge maze) and the street don't see each other.
+///
+/// Round 23 (H2): a name is hidden only after it has been out of sight for HIDE_AFTER seconds (a glimpse of a corner
+/// no longer blinks every name), and the player position a world shift moved for a frame can't hide them all.
+#[derive(Default)]
+pub struct Sight {
+    fade: [f32; NPCS.len()],
+    unseen: [f32; NPCS.len()],
+    time: Option<f32>,
+}
+
+const FADE: f32 = 0.25;
+const HIDE_AFTER: f32 = 0.3;
+
+impl Sight {
+    pub fn update(&mut self, nav: &crate::questhelper::Nav, player: Option<[f32; 3]>, time: f32) {
+        use crate::questhelper::{in_garden, in_room};
+        let dt = self.time.map_or(1.0, |t| (time - t).clamp(0.0, 1.0));
+        self.time = Some(time);
+        if dt <= 0.0 {
+            return; // already updated this frame (markers and names both call it)
+        }
+        for (i, npc) in NPCS.iter().enumerate() {
+            let spot = npc.4;
+            // Round 26 (O1): with the game's own depth test on, nothing is hidden by this guess.
+            let seen = match player {
+                _ if crate::occlusion::active() => true,
+                None => true,
+                Some(p) if in_room(p) => false,
+                Some(p) if in_garden(p) != in_garden(spot) => false,
+                Some(p) if in_garden(p) => true,
+                // Round 24 (H1): through the street's geometry (Nav::sees_3d), head height to name height.
+                Some(p) => nav.sees_3d([p[0], p[1] + 1.6, p[2]], [spot[0], spot[1] + 2.0, spot[2]]),
+            };
+            self.unseen[i] = if seen { 0.0 } else { self.unseen[i] + dt };
+            let shown = self.unseen[i] < HIDE_AFTER;
+            let step = dt / FADE;
+            self.fade[i] = if shown { (self.fade[i] + step).min(1.0) } else { (self.fade[i] - step).max(0.0) };
+        }
+    }
+
+    pub fn alpha(&self, i: usize) -> f32 {
+        self.fade.get(i).copied().unwrap_or(1.0)
+    }
+}
+
+/// Round 22 (H5): the street NPCs' positions (Game::entities) held steady: a position that jumps, relative to the
+/// player, further in one read than the player can move (a read from a moment the game was mid-update) is refused and
+/// the last good one kept (moved with the player), unless the jump lasts HOLD seconds. Logged once per refusal.
+pub fn steady(camera: &Camera, entities: &[(u32, [f32; 3])]) -> Vec<(u32, [f32; 3])> {
+    use std::time::Instant;
+    const HOLD: f32 = 0.35;
+    // id -> (offset from the player, when taken, refused since)
+    static LAST: std::sync::Mutex<Vec<(u32, [f32; 3], Instant, Option<Instant>)>> = std::sync::Mutex::new(Vec::new());
+    // The player's own jumps already passed the camera's check (Game::tick_camera): one this big is a warp, after
+    // which every offset is new.
+    static PLAYER: std::sync::Mutex<Option<[f32; 3]>> = std::sync::Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    let p = camera.player;
+    let now = Instant::now();
+    {
+        let mut player = PLAYER.lock().unwrap_or_else(|e| e.into_inner());
+        if player.is_some_and(|q| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2) + (q[2] - p[2]).powi(2) > 20.0 * 20.0) {
+            last.clear();
+        }
+        *player = Some(p);
+    }
+    entities.iter().map(|&(id, at)| {
+        let offset = [at[0] - p[0], at[1] - p[1], at[2] - p[2]];
+        if !offset.iter().all(|v| v.is_finite()) {
+            return (id, at);
+        }
+        let Some(k) = last.iter().position(|l| l.0 == id) else {
+            last.push((id, offset, now, None));
+            return (id, at);
+        };
+        let (_, old, when, since) = last[k];
+        let dt = now.duration_since(when).as_secs_f32().min(1.0);
+        let jump = ((offset[0] - old[0]).powi(2) + (offset[1] - old[1]).powi(2) + (offset[2] - old[2]).powi(2)).sqrt();
+        if jump > 2.5 + 30.0 * dt && since.is_none_or(|s| s.elapsed().as_secs_f32() < HOLD) {
+            if since.is_none() {
+                tracing::info!("markers: refused a position of {id} (moved {jump:.1} m against the player in {:.0} ms)",
+                               dt * 1000.0);
+                last[k].3 = Some(now);
+            }
+            return (id, [p[0] + old[0], p[1] + old[1], p[2] + old[2]]);
+        }
+        last[k] = (id, offset, now, None);
+        (id, at)
+    }).collect()
 }

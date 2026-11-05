@@ -79,18 +79,42 @@ def place_npcs(raw, template_raw):
     for slug, name, _model in Q.REMOVED:
         if remove_part(lists, name):
             print(f"{slug}\t{name}\tremoved")
+    # Round 26 (N2): characters taken off the street (w101_quests.OFF_STREET: O'Ryan is inside his house in Wizard101),
+    # found by entity id (their part name can be a new character's).
+    for slug, _title, entity in Q.OFF_STREET:
+        gone = [entry_name(x) for x in _list(lists, "PARTS_PARAM_ST").entries
+                if u32(x, 0x0C) == ENEMY and u32(x, q(x, 0x60)) == entity]
+        for name in gone:
+            remove_part(lists, name)
+            print(f"{slug}\t{name}\tentity {entity}\tremoved (off the street)")
     parts = _list(lists, "PARTS_PARAM_ST")
     frames = {}
     for key, part in FRAMES.items():
         position, rotation = transform(parts.entries[find(parts, part)])
         frames[key] = (position, rotation[1])
+    swapped = set()
     for k, (slug, title, frame, local, yaw, model, think, npc, chara_init, entity) in enumerate(Q.CHARACTERS):
         name = part_name(k, model)
         frame_position, ry = frames[frame]
         position = to_world(frame_position, ry, local)
         rotation = rotation_of(yaw, ry)
         names = [entry_name(e) for e in parts.entries]
-        if name in names:
+        # Round 24 (N1): found by entity id, so a new stand-in model (c2180 -> c5330 ...) swaps the model in place
+        # and renames the part (same length) instead of adding a second character with the same entity id.
+        by_entity = [k for k, x in enumerate(parts.entries) if u32(x, 0x0C) == ENEMY and u32(x, q(x, 0x60)) == entity]
+        if by_entity:
+            i = by_entity[0]
+            if entry_name(parts.entries[i]) != name:
+                old_model = entry_name(_list(lists, "MODEL_PARAM_ST").entries[u32(parts.entries[i], 0x14)])
+                index = add_model(lists, template_lists, model)  # may remap the stored parts' model indices
+                e = bytearray(parts.entries[i])
+                struct.pack_into("<i", e, 0x14, index)
+                _set_name(e, name)
+                parts.entries[i] = bytes(e)
+                swapped.add(old_model)
+                print(f"{slug}\tmodel {old_model} -> {model}")
+            e = bytearray(parts.entries[i])
+        elif name in names:
             i = names.index(name)
             e = bytearray(parts.entries[i])
         else:
@@ -116,6 +140,10 @@ def place_npcs(raw, template_raw):
             parts.entries[i] = bytes(e)
         print(f"{slug}\t{title}\t{name}\tentity {entity}\tThink {think}\tNpc {npc}\tCharaInit {chara_init}\t"
               f"world {tuple(round(c, 4) for c in position)}\trot {rotation:.1f}")
+    for old_model in swapped:  # a stand-in model nothing uses any more
+        names = [entry_name(e) for e in _list(lists, "MODEL_PARAM_ST").entries]
+        if old_model in names:
+            remove_unused_model(lists, names.index(old_model))
     count_users(lists)
     check_grouped(lists)
     return write_msb(header, lists)

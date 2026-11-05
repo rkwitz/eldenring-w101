@@ -17,16 +17,26 @@ python emevd.py --interiors m60_42_36_00.emevd out.emevd
   door warps of Lady Blackhope's tower and Fear of Fire's house (see interior_doors; msb_add_interiors.py).
 python emevd.py --bosses m60_42_36_00.emevd out.emevd
   all door warps (rideable up to the door, load-screen flag, camera turned) and all four bosses (see all_bosses).
+python emevd.py --boss-watchdog in.emevd[.dcx] out.emevd[.dcx]
+python emevd.py --quest-window in.emevd[.dcx] out.emevd[.dcx]     (round 26 W2: tower's blue windows while its goal is current)
+python emevd.py --boss-resurface in.emevd[.dcx] out.emevd[.dcx]   (round 26 W3: Rattlebones rises again when out of battle)
+python emevd.py --fog-wall in.emevd[.dcx] out.emevd[.dcx]         (round 27 A6: Elden Ring's fog gate on the Commons arch)
+  round 25: Rattlebones back onto his sigil when he leaves the room (under the floor), see boss_watchdog.
 python emevd.py --book-warps common.emevd out.emevd
   the HUD spellbook map page's warp buttons (see book_warps).
 python emevd.py --crafting common.emevd er_recipes.tsv out.emevd
   the HUD spellbook's crafting page: one event per recipe (see crafting; er_recipes.tsv from er_recipes.py).
+python emevd.py --shop common.emevd[.dcx] shop.tsv out.emevd[.dcx]
+  round 27 (B2): Ugo Kalahad's shop window (hud_orbs shop.rs): one event per item to buy or sell (see shop;
+  shop.tsv from w101_shop.py).
 python emevd.py --no-leaves common.emevd|m60.emevd out.emevd
   every falling-leaf source of those events off, in place (see no_leaves).
 python emevd.py --midday m60_42_36_00.emevd out.emevd [first_id second_id]
+python emevd.py --sidewalk m60_42_36_00.emevd[.dcx] out.emevd[.dcx]   (round 24 M1, needs the DLL's sidewalk.rs)
   always 12:00 (see midday; m60.emevd takes ids 1060002990 1060002991).
 """
 import struct
+import zlib
 class Emevd:
     def __init__(s,d):
         s.d=d; h=struct.unpack_from('<16q',d,0x10)
@@ -169,9 +179,16 @@ ARRIVAL_YAW = {  # arrival region -> its rotation y in m60_42_36_00 (msb_add_roo
     1042362821: STREET_YAW, 1042362823: STREET_YAW,  # Fear of Fire in / out
 }
 CAMERA_PITCH = 5.0  # as common event 950 after its warp
+# Round 32 (G7/G3): riding doors whose move the HUD DLL does (hud_orbs/src/ridewarp.rs REQUESTS / DONE): arrival region
+# -> request flag. The event turns the request on, waits RIDE_WAIT s and skips its map warp when the DLL turned
+# RIDE_DONE on (Torrent at the arrival, still mounted, no map load and so no area title); otherwise it map-warps.
+RIDE_WARPS = {1042362805: 1042362920, 1042362807: 1042362921}  # hedge maze in / out
+RIDE_DONE = 1042362922
+RIDE_WAIT = 1.5
 LOAD_SCREEN_LEAD = 0.75  # seconds between LOAD_SCREEN_FLAG on and the warp, so the HUD's load screen is up first
 FADE = 0.5  # seconds of 2004[77] fade to black before the warp
 ARRIVAL_SETTLE = 1.0  # seconds after the warp before the door listens again
+WELCOME_REARM = 5.0  # unused since round 29 H1 (welcome_cards re-arms on the street); round 23 H3: further seconds before an on-foot door's warp turns the welcome message back on
 
 
 MOUNTED_EVENT_OFFSET = 20  # door event id + this = its mounted twin (1042362830-839)
@@ -239,14 +256,30 @@ def rattlebones_doors(d, doors=RATTLEBONES_DOORS, on_foot=False):
             ]
             if riding:
                 body.append(_i(2012, 8, "<Bxxx", 0))  # area welcome message off, so the load shows no title card
+                if arrival in RIDE_WARPS:  # round 32: the DLL moves Torrent; the map warp only if it didn't
+                    body += [_i(2003, 66, "<BxxxIBxxx", 0, RIDE_DONE, 0),
+                             _i(2003, 66, "<BxxxIBxxx", 0, RIDE_WARPS[arrival], 1),
+                             _i(1001, 0, "<f", RIDE_WAIT),
+                             _i(1003, 1, "<BBBxI", 2, 1, 0, RIDE_DONE)]  # SKIP the 2 map-warp lines IF done
                 body.append(_i(2003, 14, "<BBBBIi", *HOME_MAP, SPAWN_OF[arrival], 0))  # map warp to its spawn point
                 body.append(_i(1001, 0, "<f", MOUNTED_WAIT))
+                if arrival in RIDE_WARPS:
+                    body.append(_i(2003, 66, "<BxxxIBxxx", 0, RIDE_WARPS[arrival], 0))
+                    if arrival in ARRIVAL_YAW:  # camera looking where the arrival faces, as on foot
+                        body.append(_i(2008, 4, "<ff", CAMERA_PITCH, (ARRIVAL_YAW[arrival] + 180.0) % 360.0 - 180.0))
             else:
+                # Round 23 (H3, Ryan: "When you go into the hedge maze, it shouldn't say Unicorn Way again"): the short
+                # warp also announces the arrival's MapNameOverride box (the garden's W101_name_maze, 610900), so the
+                # welcome message is off over the warp, as on the riding branch, welcome_cards arms it again on the street (round 29).
+                body.append(_i(2012, 8, "<Bxxx", 0))  # area welcome message off: no title card at the arrival
                 body.append(_i(2004, 41, "<IIIi", 10000, 1, arrival, -1))  # short warp to region
                 if arrival in ARRIVAL_YAW:  # camera looking where the arrival faces
                     body.append(_i(2008, 4, "<ff", CAMERA_PITCH, (ARRIVAL_YAW[arrival] + 180.0) % 360.0 - 180.0))
             body.append(_i(2004, 77, "<ffBxxxf", 0.0, 0.0, 0, 0.0))  # lift the fade and the freeze
             body.append(_i(1001, 0, "<f", ARRIVAL_SETTLE))
+            # Round 29 (H1, 3rd report of the maze title): no re-arm here any more. It ran WELCOME_REARM s after the
+            # arrival, i.e. while the player stood in the hedge maze, and the maze's title card is what Ryan keeps
+            # seeing; welcome_cards now arms the message only once the player is back on the street (FOG_SIDE box).
             body.append(_i(1000, 4, "<Bxxx", 1))  # End Unconditionally: restart
             events.append({"id": this, "rest": 0, "pars": [], "ins": body})
     return build(e, events)
@@ -287,6 +320,48 @@ def clear_weather(d, event_id=WEATHER_EVENT, weather=CLEAR_WEATHER):
         _i(1000, 4, "<Bxxx", 1),  # restart
     ]})
     return build(e, events)
+
+
+SIDEWALK_EVENT = 1042362560
+SIDEWALK_FLAG = 1042362560  # hud_orbs/src/sidewalk.rs SIDEWALK_FLAG: on while the player is on the street off the road
+SIDEWALK_SPEFFECT = 99006  # vanilla: sightSearchEnemyRate 0, hearingSearchEnemyRate 0, no vfx/icon, not saved
+DOOR_AREA = 1042362700  # UnicornWay_title_door: the box just outside the graveyard exit door (title_on_door_exit)
+
+
+def sidewalk(d, event_id=SIDEWALK_EVENT, flag=SIDEWALK_FLAG, speffect=SIDEWALK_SPEFFECT, door_area=DOOR_AREA):
+    """Round 24 (M1, Ryan: enemies should not aggro while the player is on the sidewalk, only once he steps into the
+    road, as Wizard101's mobs keep to the road): event `event_id` (rest 0, started from the top of event 0) clears
+    SpEffect `speffect` on the player, waits for the DLL's `flag` (sidewalk.rs, off the road), sets it (enemies'
+    sight and hearing of the player x0), waits for the flag off OR the player at the graveyard door (so he never
+    takes it into the Stranded Graveyard, whose map doesn't run this event), clears it and restarts."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
+    events.append({"id": event_id, "rest": 0, "pars": [], "ins": [
+        _i(2004, 21, "<Ii", 10000, speffect),  # Clear SpEffect
+        _i(1003, 0, "<BBxxI", 1, 0, flag),  # WAIT flag on
+        _i(2004, 8, "<Ii", 10000, speffect),  # Set SpEffect
+        _i(3, 0, "<bBBxI", -1, 0, 0, flag),  # OR: flag off
+        _i(3, 2, "<bBxxIIi", -1, 1, 10000, door_area, 1),  # OR: player at the graveyard door
+        _i(0, 0, "<bBbx", 0, 1, -1),  # IF the OR group
+        _i(2004, 21, "<Ii", 10000, speffect),  # Clear SpEffect
+        _i(1000, 4, "<Bxxx", 1),  # restart
+    ]})
+    return build(e, events)
+
+
+def _dcx_apply(path_in, path_out, fn):
+    """`fn` on the EMEVD in `path_in` (plain or DFLT DCX), written to `path_out` the same way."""
+    data = open(path_in, "rb").read()
+    dcx = data[:4] == b"DCX\0"
+    assert not dcx or data[0x28:0x2C] == b"DFLT", "expected a DFLT-compressed file"
+    raw = fn(zlib.decompress(data[0x4C:]) if dcx else data)
+    if dcx:
+        packed = zlib.compress(raw, 9)
+        head = bytearray(data[:0x4C])
+        struct.pack_into(">II", head, 0x1C, len(raw), len(packed))
+        raw = bytes(head) + packed
+    open(path_out, "wb").write(raw)
 
 
 def _i(bank, iid, fmt, *args):
@@ -387,6 +462,39 @@ def boss_bar(d, event_id=BOSS_BAR_EVENT, boss=RATTLEBONES, arena=RATTLEBONES_ARE
     return build(e, events)
 
 
+# Round 33 (U6b): the street mobs drop nothing on the ground any more (their own NpcParam rows without the enemy lot,
+# er_regulation.py U6B); each one's event gives the same lot straight into the inventory when it dies.
+# (first entity, last entity, ItemLotParam_map lot) from the MSB (round 29, 61ba28c3: c4180_90NN / c3500 / c3450).
+DROPS = (
+    (1042360860, 1042360863, 1042368600), (1042360870, 1042360885, 1042368600),  # Lost Souls (c4180)
+    (1042360864, 1042360867, 1042368610), (1042360886, 1042360901, 1042368610),  # Skeletal Pirates (c3500)
+    (1042360868, 1042360869, 1042368620), (1042360902, 1042360909, 1042368620),  # Dark Sprites (c3450)
+)
+DROP_EVENT = 1042368700  # + (entity - 1042360860): 1042368700..1042368749, free in m60_42_36_00
+
+
+def drops(d, drops=DROPS, first_event=DROP_EVENT):
+    """One new event per street mob (rest 1, started from the top of event 0): wait until it is alive, then until it
+    is dead (as boss_bar: 4[0] group 1 alive, group -1 dead), 2003[4] Award Item Lot (ItemLotParam_map; the lot rolls
+    as the enemy lot it copies), restart. Waiting for alive first means a mob still dead when the map loads again
+    gives nothing twice; it gives again once it is back after a rest. Rerunning replaces the events."""
+    e = Emevd(d)
+    events = events_of(e)
+    for lo, hi, lot in drops:
+        for entity in range(lo, hi + 1):
+            event_id = first_event + entity - 1042360860
+            _start_once(events, event_id)
+            events.append({"id": event_id, "rest": 1, "pars": [], "ins": [
+                _i(4, 0, "<bxxxIBBxxf", 1, entity, 0, 0, 1.0),  # IF alive (group 1)
+                _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
+                _i(4, 0, "<bxxxIBBxxf", -1, entity, 1, 0, 1.0),  # IF dead (OR group -1)
+                _i(0, 0, "<bBbx", 0, 1, -1),  # IF condition group -1
+                _i(2003, 4, "<i", lot),  # Award Item Lot
+                _i(1000, 4, "<Bxxx", 1),  # restart
+            ]})
+    return build(e, events)
+
+
 HIDDEN_AT_LOAD = (SERAPH,)  # bosses kept disabled until the player walks into their arena
 
 
@@ -428,24 +536,184 @@ def phase_one_only(d, boss=SERAPH, event_id=PHASE_ONE_EVENT):
     return build(e, events)
 
 
+WATCHDOG_EVENT = 1042362857
+RATTLEBONES_ROOM = 1042362856  # msb_add_boss.WATCHED: sphere holding the room above its floor
+WATCHDOG_WAIT = 2.0  # seconds outside before he is put back (a fall is over by then; a brief dip is ignored)
+
+
+def boss_watchdog(d, event_id=WATCHDOG_EVENT, boss=RATTLEBONES, room=RATTLEBONES_ROOM, sigil=RATTLEBONES_SIGIL,
+                  animation=20010, wait=WATCHDOG_WAIT):
+    """Round 25 B2: Rattlebones (Giant Skeleton Torso) fell through the floor with a little HP left and never came
+    back (the room hangs in empty space 60 m under the street; blender_build_room now also has a catch floor 2 m
+    down). New event `event_id` (restarts on rest, started from the top of event 0):
+      wait until the boss is alive AND outside region `room` (msb_add_boss.WATCHED: everything above the floor)
+      wait `wait` s, then 2004[10] gravity off, 2004[41] warp onto the sigil, gravity on, 2003[18] the wake
+      animation (as boss_bar: he rises out of the floor), restart.
+    HP and the fight are kept. Conditions packed as in boss_bar (3[2] with the boss as the character). Rerunning
+    replaces the event."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
+    body = [
+        _i(4, 0, "<bxxxIBBxxf", 1, boss, 0, 0, 1.0),  # IF boss alive (group 1)
+        _i(3, 2, "<bBxxIIi", 1, 0, boss, room, 1),  # IF boss outside the room sphere (group 1)
+        _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
+        _i(1001, 0, "<f", wait),
+        _i(2004, 10, "<IBxxx", boss, 0),  # gravity off
+        _i(2004, 41, "<IIIi", boss, 1, sigil, -1),  # back onto the sigil
+        _i(2004, 10, "<IBxxx", boss, 1),  # gravity on
+        _i(2003, 18, "<IiBBBbf", boss, animation, 0, 0, 0, 0, 1.0),
+        _i(1000, 4, "<Bxxx", 1),  # restart
+    ]
+    events.append({"id": event_id, "rest": 1, "pars": [], "ins": body})
+    return build(e, events)
+
+
+QUEST_WINDOW_EVENT = 1042362858
+SINISTER_ASSIGNED, RATTLEBONES_DEFEATED = 1042360360, 1042360362  # w101_quests: quest 6 +0 assigned, goal 2 done
+
+
+def quest_window(d, event_id=QUEST_WINDOW_EVENT, window=WINDOW_ENTITY, assigned=SINISTER_ASSIGNED,
+                 done=RATTLEBONES_DEFEATED):
+    """Round 26 (W2): Rattlebones' tower's blue "quest inside" windows (asset aeg030_529, entity `window`) light up
+    while its goals are current, as Wizard101 shows the WC_Unicorn_T2_quest windows. Round 6's window_off (event
+    1042362994) turns them off at every load and nothing turned them on again since (Ryan, 2026-10-25: "no blue light
+    until a quest there is active, when a quest event can enable it again"), so they were never seen after round 6.
+    New event `event_id` (rest 1, started from the top of event 0, after window_off's start):
+      wait until Sinister Skeleton is assigned AND Rattlebones not yet defeated -> 2005[3] window on
+      wait until not assigned OR defeated -> window off, restart.
+    The Roundtable reset clears the flags, so the window goes dark with it. Rerunning replaces the event."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
+    events.append({"id": event_id, "rest": 1, "pars": [], "ins": [
+        _i(1001, 0, "<f", 1.0),  # after window_off (same frame at load) has turned it off
+        _i(3, 0, "<bBBxI", 1, 1, 0, assigned),  # IF assigned (group 1)
+        _i(3, 0, "<bBBxI", 1, 0, 0, done),  # AND Rattlebones not defeated
+        _i(0, 0, "<bBbx", 0, 1, 1),
+        _i(2005, 3, "<IBxxx", window, 1),  # window on
+        _i(3, 0, "<bBBxI", -1, 0, 0, assigned),  # IF not assigned (OR group -1)
+        _i(3, 0, "<bBBxI", -1, 1, 0, done),  # OR defeated
+        _i(0, 0, "<bBbx", 0, 1, -1),
+        _i(2005, 3, "<IBxxx", window, 0),  # window off
+        _i(1000, 4, "<Bxxx", 1),  # restart
+    ]})
+    return build(e, events)
+
+
+FOG_WALL_EVENT = 1042362860
+FOG_WALLS = (1042361892, 1042361893)  # msb_fog_gate.FOG_WALLS: AEG099_001 copies across the Commons gateway
+FOG_WALL_DUMMY, FOG_WALL_SFX = 100, 3  # vanilla m18 event 18000870 -> common_func 9005811 (18001850, dummy 101, SFX 3)
+# Round 33 (G8): the fog gates are AEG099_990 now (msb_fog_gate.FOG_WALL_MODEL, no collision); its dummy 100 is
+# AEG099_001's dummy 101 (same frame).
+FOG_PLANES = (1042361894, 1042361895)  # msb_fog_gate.FOG_ENTITIES: our mist plane aeg030_530 and the phantom-wall copy
+FOG_SIDE = 1042362702  # msb_fog_gate.FOG_SIDE_ENTITY: box over the street side of the graveyard exit door
+
+
+# Round 29 (F1, Ryan: "our fog is yellow, Elden Ring's own fog gate is white"): our plane aeg030_530 is drawn with
+# the street's lit M_AMSN_V material (flver_textures.blend_material), so the warm Limgrave sun tints its near-white
+# texture (236, 238, 242); Elden Ring's fog gate (AEG099_001 + SFX 3) is a self-lit effect. The planes are now kept
+# off and only Elden Ring's own fog gates show at the gate. (An unlit alpha-blended plane is untested.)
+FOG_PLANES_SHOWN = False
+
+
+def fog_wall(d, event_id=FOG_WALL_EVENT, walls=FOG_WALLS, planes=FOG_PLANES, side=FOG_SIDE,
+             planes_shown=FOG_PLANES_SHOWN):
+    """Round 27 (A6): Elden Ring's own fog gate look on the Commons gate. Vanilla shows a fog wall (AEG099_001, a
+    mesh-less asset) with common_func 9005811: 2005[3] Change Asset Enable State (asset, 1) and 2006[4] Create
+    Asset-following SFX (asset, dummypoly 101, SFX 3) (m18 event 18000870 for the Stranded Graveyard's own fog walls
+    18001850 / 18001851, SFX 3 / 4).
+
+    Round 28 (W3, Ryan: "not visible from behind"): the fog walls' SFX and our planes show from both sides, so the
+    event (rest 1, started from the top of event 0) now shows them only while the player is on the street side of the
+    gate (region `side`, msb_fog_gate.FOG_SIDE_REGION; 3[2] IfInoutsideArea packed as in boss_bar):
+      everything off (SFX deleted with 2006[5] first, as 9005811 does, so a restart never stacks two)
+      wait until the player is inside `side`: walls on + their SFX, planes on
+      wait until the player is outside `side`: SFX deleted, walls and planes off; restart.
+    Rerunning replaces the event."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
+
+    def off():
+        out = []
+        for wall in walls:
+            out += [_i(2006, 5, "<IBxxx", wall, 1), _i(2005, 3, "<IBxxx", wall, 0)]
+        return out + [_i(2005, 3, "<IBxxx", plane, 0) for plane in planes]
+
+    ins = off()
+    ins.append(_i(3, 2, "<bBxxIIi", 0, 1, 10000, side, 1))  # IF the player is on the street side (main group)
+    for wall in walls:
+        ins += [_i(2005, 3, "<IBxxx", wall, 1),
+                _i(2006, 5, "<IBxxx", wall, 1),
+                _i(2006, 4, "<Iii", wall, FOG_WALL_DUMMY, FOG_WALL_SFX)]
+    if planes_shown:
+        ins += [_i(2005, 3, "<IBxxx", plane, 1) for plane in planes]
+    ins.append(_i(3, 2, "<bBxxIIi", 0, 0, 10000, side, 1))  # IF the player has left it (behind the gate)
+    ins += off()
+    ins.append(_i(1000, 4, "<Bxxx", 1))  # restart
+    events.append({"id": event_id, "rest": 1, "pars": [], "ins": ins})
+    return build(e, events)
+
+
+RESURFACE_EVENT = 1042362859
+RESURFACE_WAIT = 10.0  # s out of battle state, checked twice, before he is made to rise again
+RESURFACE_ANIM_TIME = 16.0  # a000_020010 is 15.87 s long (c4960.tae)
+
+
+def boss_resurface(d, event_id=RESURFACE_EVENT, boss=RATTLEBONES, arena=RATTLEBONES_ARENA, animation=20010,
+                   wait=RESURFACE_WAIT):
+    """Round 26 (W3) safety net: Rattlebones (Giant Skeleton Torso c4960) sank out of sight in Ryan's 21:44 fight and
+    his AI never brought him back; the only thing that did was boss_bar's 2003[18] 20010 (rise out of the floor,
+    fading in) when Ryan came back in at 21:51:46. Vanilla wakes these torsos from an event too (m12_05 event
+    12052250: 20010 when the c3471 next to it reaches AI state 3). New event `event_id` (rest 1, from the top of
+    event 0): while he is alive and the player is in the arena, if his AI state is not Battle (4[9] state 3,
+    comparison 1 "!=") for `wait` s (tested at both ends), play 20010 again, wait for it, restart. Packed like 4[0]
+    (EMEDF 4[9]: group s8, entity u32, state u8, comparison s8, count f32). Rerunning replaces the event."""
+    e = Emevd(d)
+    events = events_of(e)
+    _start_once(events, event_id)
+    out_of_battle = [
+        _i(4, 0, "<bxxxIBBxxf", 1, boss, 0, 0, 1.0),  # IF alive
+        _i(3, 2, "<bBxxIIi", 1, 1, 10000, arena, 1),  # AND player in the arena
+        _i(4, 9, "<bxxxIBbxxf", 1, boss, 3, 1, 1.0),  # AND AI state != Battle
+        _i(0, 0, "<bBbx", 0, 1, 1),
+    ]
+    events.append({"id": event_id, "rest": 1, "pars": [], "ins": out_of_battle + [_i(1001, 0, "<f", wait)]
+                   + out_of_battle + [
+        _i(2003, 18, "<IiBBBbf", boss, animation, 0, 0, 0, 0, 1.0),  # rise again (as boss_bar)
+        _i(1001, 0, "<f", RESURFACE_ANIM_TIME),
+        _i(1000, 4, "<Bxxx", 1),  # restart
+    ]})
+    return build(e, events)
+
+
 WELCOME_EVENT = 1042362989
 WELCOME_DELAY = 10.0  # seconds into a map before the welcome message is armed again (the card shows in the first few)
 
 
-def welcome_cards(d, event_id=WELCOME_EVENT, delay=WELCOME_DELAY):
+def welcome_cards(d, event_id=WELCOME_EVENT, delay=WELCOME_DELAY, street=FOG_SIDE):
     """Event `event_id` (started from the top of event 0, rest 0): wait `delay` s, then 2012[8] 1 (area welcome
     message on). The riding doors turn it off before their map warp and the state survives the load (vanilla relies
     on that in common event 910), so something has to arm it again or no title card would ever show. Waiting past
     the card's own moment leaves the door's arrival silent while fast travel to the grace, and the card on walking
     out of the graveyard door (title_on_door_exit, 2007[14], which the same state gates), still work. Rerunning
-    replaces it."""
+    replaces it.
+
+    Round 29 (H1): the message is armed only while the player is inside the street box `street` (FOG_SIDE,
+    1042362702, which holds every street door's arrival but not the hedge maze, the garden doors' regions or the boss
+    rooms), then the event waits for him to leave the box and starts over. Before, both this event (10 s into the
+    map) and the on-foot doors (6 s after the warp) armed it while the player could be standing in the maze, so the
+    maze still got its "Unicorn Way" card; with the message off everywhere off the street that cannot happen."""
     e = Emevd(d)
     events = events_of(e)
     _start_once(events, event_id)
     events.append({"id": event_id, "rest": 0, "pars": [], "ins": [
         _i(1001, 0, "<f", delay),
-        _i(2012, 8, "<Bxxx", 1),
-        _i(1000, 4, "<Bxxx", 0),  # End
+        _i(3, 2, "<bBxxIIi", 0, 1, 10000, street, 1),  # IF the player is on the street (main group)
+        _i(2012, 8, "<Bxxx", 1),  # welcome message on
+        _i(3, 2, "<bBxxIIi", 0, 0, 10000, street, 1),  # IF he has left the street box
+        _i(1000, 4, "<Bxxx", 1),  # restart
     ]})
     return build(e, events)
 
@@ -457,7 +725,7 @@ def all_bosses(d, on_foot=False):
     d = welcome_cards(clear_weather(window_off(d)))
     for event_id, boss, arena, sigil, name, animation, masks in BOSSES:
         d = boss_bar(d, event_id, boss, arena, sigil, name, animation, masks)
-    return phase_one_only(boss_setup(d))
+    return boss_watchdog(phase_one_only(boss_setup(d)))
 
 
 GUIDANCE_GRACES = (1042361981, 1042361980)  # AEG099_090 grace markers of The First Step (76101) and Church of Elleh (76100)
@@ -736,6 +1004,78 @@ def crafting(d, recipes):
     return build(e, events)
 
 
+# Round 27 (B2): Ugo Kalahad's shop window (hud_orbs/src/shop.rs SHOP_*), free flags 1042362300-329 of the mod's
+# 1042362xxx block (no vanilla common/m60_42_36 emevd uses them; crafting's are 160-182 and 350-399). The window opens
+# on the street worker's markers::SHOP_REQUEST (1042362441, Ugo's talk) and answers that talk with 1042362620 on close.
+SHOP_REQUEST = 1042362300  # the window turns it on to buy or sell; the item's event turns it off
+SHOP_SELL = 1042362301  # on: sell, off: buy
+SHOP_INDEX = 1042362302  # the item's number (shop.tsv n), bit k in flag SHOP_INDEX + k (302-311)
+SHOP_INDEX_BITS = 10
+SHOP_DONE, SHOP_FAILED = 1042362312, 1042362313
+SHOP_GIVE = 1042362316  # event value (4 bits, 316-319): how many to give
+SHOP_GIVE_BITS = 4
+SHOP_COUNT = 1042362320  # event value (10 bits, 320-329): how many of the item are held
+SHOP_COUNT_BITS = 10
+SHOP_EVENT = 1042365200  # + n (crafting uses 1042365000 + recipe, < 200 recipes)
+
+
+def read_shop(path):
+    """shop.tsv (w101_shop.py): [(n, sell, item type 0 weapon / 1 armour, param id)]."""
+    out = []
+    for line in open(path, encoding="utf-8"):
+        f = line.rstrip("\n").split("\t")
+        if f[0] == "B" and len(f) >= 7:
+            item = int(f[6])
+        elif f[0] == "S" and len(f) >= 5:
+            item = int(f[3])
+        else:
+            continue
+        out.append((int(f[1]), f[0] == "S", item >> 28, item & 0x0FFFFFFF))
+    return out
+
+
+def shop(d, rows):
+    """common.emevd: one event per shop.tsv row, all started from the top of event 0 (rerunning replaces them), as
+    crafting's. Event SHOP_EVENT + n waits for SHOP_REQUEST with SHOP_SELL on (sell rows) or off (buy rows) and n in
+    the SHOP_INDEX flags (each tested on or off, so exactly one event answers); request, done and failed off; then
+    buy: SHOP_GIVE counted to 1 (2003[32] clear, 2003[31] increment), 2003[43] Directly Give Player Item, SHOP_DONE on
+    (the DLL checked the runes first and takes them once SHOP_DONE is on); sell: 2003[42] Store Item Amount Held into
+    SHOP_COUNT, IF it is >= 1 (3[12], group 2) else SHOP_FAILED on and restart; 2003[24] Remove Item From Player 1,
+    SHOP_DONE on (the DLL then pays the runes). Item type: 0 weapon, 1 armour (ItemType)."""
+    e = Emevd(d)
+    events = events_of(e)
+    for n, sell, kind, item in rows:
+        assert n < 1 << SHOP_INDEX_BITS
+        event_id = SHOP_EVENT + n
+        _start_once(events, event_id)
+        ins = [_i(3, 0, "<bBBxI", 1, 1, 0, SHOP_REQUEST), _i(3, 0, "<bBBxI", 1, int(sell), 0, SHOP_SELL)]
+        ins += [_i(3, 0, "<bBBxI", 1, n >> k & 1, 0, SHOP_INDEX + k) for k in range(SHOP_INDEX_BITS)]
+        ins += [
+            _i(0, 0, "<bBbx", 0, 1, 1),  # IF condition group 1
+            _i(2003, 66, "<BxxxIBxxx", 0, SHOP_REQUEST, 0),
+            _i(2003, 66, "<BxxxIBxxx", 0, SHOP_DONE, 0),
+            _i(2003, 66, "<BxxxIBxxx", 0, SHOP_FAILED, 0),
+        ]
+        if sell:
+            ins += [
+                _i(2003, 42, "<BxxxiII", kind, item, SHOP_COUNT, SHOP_COUNT_BITS),  # Store Item Amount Held
+                _i(3, 12, "<bxxxIBBxxI", 2, SHOP_COUNT, SHOP_COUNT_BITS, 4, 1),  # IF held >= 1 (group 2)
+                _i(1000, 1, "<BBbx", 2, 1, 2),  # SKIP 2 IF condition group 2 true (uncompiled)
+                _i(2003, 66, "<BxxxIBxxx", 0, SHOP_FAILED, 1),
+                _i(1000, 4, "<Bxxx", 1),  # restart
+                _i(2003, 24, "<Bxxxii", kind, item, 1),  # Remove Item From Player
+            ]
+        else:
+            ins += [
+                _i(2003, 32, "<II", SHOP_GIVE, SHOP_GIVE_BITS),  # Clear Event Value
+                _i(2003, 31, "<III", SHOP_GIVE, SHOP_GIVE_BITS, 1),  # Increment Event Value
+                _i(2003, 43, "<BxxxiII", kind, item, SHOP_GIVE, SHOP_GIVE_BITS),  # Directly Give Player Item
+            ]
+        ins += [_i(2003, 66, "<BxxxIBxxx", 0, SHOP_DONE, 1), _i(1000, 4, "<Bxxx", 1)]  # done, restart
+        events.append({"id": event_id, "rest": 0, "pars": [], "ins": ins})
+    return build(e, events)
+
+
 def build(e, events):
     """EMEVD bytes from `events` [{id, rest, ins: [{bank, id, args, layer}], pars: [(index, target, source, size, unk)]}]
     with the header flags, linked files and strings of the parsed file `e` (no layers)."""
@@ -779,6 +1119,10 @@ if __name__ == "__main__":
     if sys.argv[1] == "--book-warps":  # emevd.py --book-warps common.emevd out.emevd
         open(sys.argv[3], "wb").write(book_warps(open(sys.argv[2], "rb").read()))
         sys.exit()
+    if sys.argv[1] == "--shop":  # emevd.py --shop common.emevd[.dcx] shop.tsv out.emevd[.dcx]
+        rows = read_shop(sys.argv[3])
+        _dcx_apply(sys.argv[2], sys.argv[4], lambda raw: shop(raw, rows))
+        sys.exit()
     if sys.argv[1] == "--crafting":  # emevd.py --crafting common.emevd er_recipes.tsv out.emevd
         open(sys.argv[4], "wb").write(crafting(open(sys.argv[2], "rb").read(), read_recipes(sys.argv[3])))
         sys.exit()
@@ -790,6 +1134,29 @@ if __name__ == "__main__":
         sys.exit()
     if sys.argv[1] == "--garden":  # emevd.py --garden m60_42_36_00.emevd out.emevd (doors of msb_add_garden.py)
         open(sys.argv[3], "wb").write(garden_doors(open(sys.argv[2], "rb").read()))
+        sys.exit()
+    if sys.argv[1] == "--garden-doors":  # emevd.py --garden-doors in.emevd[.dcx] out.emevd[.dcx] (round 32 G7)
+        _dcx_apply(sys.argv[2], sys.argv[3], lambda raw: rattlebones_doors(raw, GARDEN_DOORS))
+        sys.exit()
+    if sys.argv[1] == "--drops":  # emevd.py --drops in.emevd[.dcx] out.emevd[.dcx] (round 33 U6b, er_regulation.py)
+        _dcx_apply(sys.argv[2], sys.argv[3], drops)
+        sys.exit()
+    if sys.argv[1] == "--sidewalk":  # emevd.py --sidewalk in.emevd[.dcx] out.emevd[.dcx] (round 24 M1)
+        _dcx_apply(sys.argv[2], sys.argv[3], sidewalk)
+        sys.exit()
+    if sys.argv[1] == "--doors":  # emevd.py --doors in.emevd[.dcx] out.emevd[.dcx]: every door warp again (round 23 H3)
+        data = open(sys.argv[2], "rb").read()
+        dcx = data[:4] == b"DCX\0"
+        assert not dcx or data[0x28:0x2C] == b"DFLT", "expected a DFLT-compressed file"
+        raw = zlib.decompress(data[0x4C:]) if dcx else data
+        for doors in (RATTLEBONES_DOORS, GARDEN_DOORS, INTERIOR_DOORS):
+            raw = rattlebones_doors(raw, doors)
+        if dcx:
+            packed = zlib.compress(raw, 9)
+            head = bytearray(data[:0x4C])
+            struct.pack_into(">II", head, 0x1C, len(raw), len(packed))
+            raw = bytes(head) + packed
+        open(sys.argv[3], "wb").write(raw)
         sys.exit()
     if sys.argv[1] == "--interiors":  # emevd.py --interiors in.emevd out.emevd (doors of msb_add_interiors.py)
         open(sys.argv[3], "wb").write(interior_doors(open(sys.argv[2], "rb").read()))
@@ -808,6 +1175,21 @@ if __name__ == "__main__":
         sys.exit()
     if sys.argv[1] == "--bosses":  # emevd.py --bosses in.emevd out.emevd [--on-foot] (msb_add_boss.py, msb_add_indoor.py)
         open(sys.argv[3], "wb").write(all_bosses(open(sys.argv[2], "rb").read(), "--on-foot" in sys.argv))
+        sys.exit()
+    if sys.argv[1] == "--boss-watchdog":  # emevd.py --boss-watchdog in.emevd[.dcx] out.emevd[.dcx] (round 25 B2)
+        _dcx_apply(sys.argv[2], sys.argv[3], boss_watchdog)
+        sys.exit()
+    if sys.argv[1] == "--quest-window":  # emevd.py --quest-window in.emevd[.dcx] out.emevd[.dcx] (round 26 W2)
+        _dcx_apply(sys.argv[2], sys.argv[3], quest_window)
+        sys.exit()
+    if sys.argv[1] == "--welcome":  # emevd.py --welcome in.emevd[.dcx] out.emevd[.dcx] (round 29 H1)
+        _dcx_apply(sys.argv[2], sys.argv[3], welcome_cards)
+        sys.exit()
+    if sys.argv[1] == "--fog-wall":  # emevd.py --fog-wall in.emevd[.dcx] out.emevd[.dcx] (round 27 A6)
+        _dcx_apply(sys.argv[2], sys.argv[3], fog_wall)
+        sys.exit(0)
+    if sys.argv[1] == "--boss-resurface":  # emevd.py --boss-resurface in.emevd[.dcx] out.emevd[.dcx] (round 26 W3)
+        _dcx_apply(sys.argv[2], sys.argv[3], boss_resurface)
         sys.exit()
     if sys.argv[1] == "--no-guidance":  # emevd.py --no-guidance m60_42_36_00.emevd out.emevd
         open(sys.argv[3], "wb").write(no_guidance_wisps(open(sys.argv[2], "rb").read()))

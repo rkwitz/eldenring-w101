@@ -18,7 +18,13 @@ mod itemdata;
 mod layout;
 mod loadscreen;
 mod markers;
+mod music;
+mod wisps;
+mod fairies;
+mod goalpopup;
+mod floaters;
 mod nameplates;
+mod occlusion;
 mod steam;
 mod teleport;
 mod model;
@@ -32,6 +38,14 @@ mod talk;
 mod settings;
 mod options;
 mod sheet;
+mod sidewalk;
+mod picker;
+mod prompt;
+mod shop;
+mod npcturn;
+mod ridewarp;
+mod cages;
+mod weather;
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -134,6 +148,20 @@ struct Orbs {
     live: Option<live_preview::LivePreview>,
     /// The last stats read in normal play (B2: the book shows them while the hidden mirror hides Elden Ring's HUD).
     last_stats: Option<game::Stats>,
+    /// Wizard101's Unicorn Way music (round 20 M1-M5, music.rs).
+    music: music::Music,
+    /// Wizard101's health and mana wisps (round 21 M3, wisps.rs).
+    wisps: wisps::Wisps,
+    fairies: fairies::Fairies,
+    /// Round 24 M1: enemies don't see the player off the road (sidewalk.rs).
+    sidewalk: sidewalk::Sidewalk,
+    /// Round 32 (G2, G7, G5): NPCs face the player in a talk, the maze doors keep the rider mounted, cage sound.
+    npcturn: npcturn::NpcTurn,
+    ridewarp: ridewarp::RideWarp,
+    cages: cages::Cages,
+    ride_press: cages::RidePress,
+    /// Round 33 (G1): Elden Ring's wind-blown leaves off on Unicorn Way.
+    weather: weather::Weather,
 }
 
 /// Frame timing written to w101_orbs.log every few seconds, to see what the overlay costs the game.
@@ -189,7 +217,15 @@ impl Orbs {
             }
         }
         let probe = settings.scene_probe.then(probe::Probe::new);
+        let music = music::Music::new(&folder);
+        let wisps = wisps::Wisps::new(&folder);
+        let fairies = fairies::Fairies::new(&folder);
+        let sidewalk = sidewalk::Sidewalk::load(&folder.join("w101_orbs").join("road_mask.tsv"));
         Orbs {
+            music,
+            wisps,
+            fairies,
+            sidewalk,
             settings,
             probe,
             live,
@@ -209,6 +245,11 @@ impl Orbs {
             focused: true,
             flag_check_logged: false,
             teleport: teleport::Teleport::default(),
+            npcturn: npcturn::NpcTurn::default(),
+            ridewarp: ridewarp::RideWarp::default(),
+            cages: cages::Cages::default(),
+            ride_press: cages::RidePress::default(),
+            weather: weather::Weather::default(),
         }
     }
 
@@ -278,6 +319,9 @@ impl ImguiRenderLoop for Orbs {
         let game = self.game.as_ref().and_then(|g| g.as_ref());
         let plain = game.is_some() && !self.book.open && !self.loadscreen.holding() && game::hud_shown()
             && game::faded() < 0.05;
+        if let Some(g) = game {
+            g.tick_camera(self.settings.marker_frames);
+        }
         let camera = game.and_then(|g| g.camera());
         let forward = camera.as_ref().map(|c| [c.matrix[2][0], c.matrix[2][1], c.matrix[2][2]]);
         self.teleport.capture(render, &mut self.book.textures, plain, camera);
@@ -333,6 +377,12 @@ impl ImguiRenderLoop for Orbs {
         let hud = game::hud_shown();
         let faded = game::faded();
         let position = game.and_then(|g| g.position());
+        // Round 22 S1: the street position from the loaded street NPCs first (the block origin read garbage after a
+        // grace warp in Ryan's 00:30 log), then the block origin.
+        let street = game.and_then(questhelper::player_msb_now).or_else(|| position.and_then(questhelper::player_msb));
+        self.music.frame(game, stats, position, street, self.focused);
+        self.weather.frame(street.is_some());
+        self.sidewalk.frame(game.is_some() && stats.is_some(), street, position);
         let settings_path = self.folder.join("w101_orbs.ini");
         let mut cx = book::Context {
             game,
@@ -341,20 +391,38 @@ impl ImguiRenderLoop for Orbs {
             hud,
             faded,
             position,
+            street,
             settings: &mut self.settings,
             settings_path: &settings_path,
         };
         self.book.frame(ui, &mut cx);
+        // Round 26 (O1): the game's scene depth for the tags, markers and wisps (occlusion.rs).
+        hudhook::depth::set_copy_at_end(cx.settings.depth_copy_at_end);
+        occlusion::frame(game, game.and_then(|g| g.camera()), ui.io().display_size,
+                         cx.gameplay && !self.book.blocking() && !self.loadscreen.holding(), cx.settings.depth_occlusion);
         if !self.loadscreen.holding() {
+            // Round 33 (NP2): signs, plates and floaters drawn far-to-near as one list (occlusion::order_start).
+            occlusion::order_start();
             self.book.draw_markers(ui, &cx);
+            occlusion::order_top();
             self.book.draw_quest_helper(ui, &cx);
+            self.book.draw_goal_popup(ui, &cx);
             if cx.settings.nameplates {
                 self.book.draw_nameplates(ui, &cx);
             }
+            self.book.draw_floaters(ui, &cx);
+            occlusion::order_finish();
+            let wisp_play = cx.gameplay && !self.book.blocking();
+            self.wisps.frame(ui, &mut self.book.textures, game, wisp_play, street, &self.book.nav);
+            self.fairies.frame(ui, &mut self.book.textures, game, wisp_play, street);
         }
         // Polled every frame: the screen goes up on the first frame the door flag is on, or Elden Ring starts a
         // loading screen of its own. The flag is cleared when the screen starts to fade (or right away when the
         // loading screen is turned off).
+        self.ridewarp.frame(game);
+        self.npcturn.frame(game, self.book.talking());
+        self.cages.frame(game.is_some() && stats.is_some());
+        self.ride_press.frame(game.filter(|_| !self.book.blocking()), self.book.prompt.binding());
         let door = game.is_some() && game::event_flag(loadscreen::DOOR_FLAG) == Some(true);
         let loading = self.loadscreen.game_loading_started(game::loading_screens());
         let loading = self.teleport.frame(ui, &mut self.book.textures, game, loading, door, stats.map(|s| s.hp));
@@ -375,6 +443,7 @@ impl ImguiRenderLoop for Orbs {
         // in its default state then).
         let busy = game.is_none() || faded > 0.3 || stats.is_none() || !hud;
         self.loadscreen.draw(ui, &self.book.textures, busy, stats.is_some());
+        self.teleport.arrival(self.loadscreen.holding());
         if let Some(probe) = &mut self.probe {
             probe.tick(self.game.as_ref().and_then(|g| g.as_ref()), self.settings.scene_probe_nudge);
         }

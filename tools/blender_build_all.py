@@ -9,12 +9,18 @@ from its file on disk, so an old copy open in Blender's text editor can't be run
   room       blender_build_room.py        Rattlebones' and Lady Blackhope's tower room (aeg030_519)
   garden     blender_build_garden.py      hedge-maze garden (aeg030_555) and the glowing quest window (aeg030_529)
   interiors  blender_build_interiors.py   Fear of Fire's house (aeg030_557)
+  cage       blender_build_cage.py        Wizard101's Bone Cage, closed and open (aeg030_558 / 559)
+  fog        blender_build_fog.py         the Commons gate's fog, seen from anywhere (aeg030_530)
+  boss       blender_build_boss.py        Rattlebones (c4960) never fades out of sight (project chr/c4960.anibnd.dcx)
+  portraits  blender_npc_portraits.py     the NPCs' dialogue portraits, rendered from the game's models (orbs/w101_orbs/book/
+                                          art/GUI/NpcPortraits/ER; a few minutes; SKIP = {"portraits"} once they are made)
 
 SKIP leaves steps out (e.g. SKIP = {"street", "footprint"} when only a room changed). A failing step is reported and
 the rest still run. Map placement, events and the navmesh are not rebuilt here; they are already in the project.
 Reload the maps in Smithbox before saving them after a run.
 """
 
+import os
 import runpy
 import time
 import traceback
@@ -22,7 +28,7 @@ from pathlib import Path
 
 SKIP = set()
 
-TOOLS = Path.home() / "Documents" / "game_modding" / "eldenring-w101" / "tools"
+TOOLS = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding")) / "eldenring-w101" / "tools"
 STEPS = [
     ("street", "blender_switch_street.py"),
     ("footprint", "blender_clear_footprint.py"),
@@ -30,6 +36,10 @@ STEPS = [
     ("room", "blender_build_room.py"),
     ("garden", "blender_build_garden.py"),
     ("interiors", "blender_build_interiors.py"),
+    ("cage", "blender_build_cage.py"),
+    ("fog", "blender_build_fog.py"),
+    ("boss", "blender_build_boss.py"),
+    ("portraits", "blender_npc_portraits.py"),
 ]
 
 results = []

@@ -39,8 +39,12 @@ pub const SCREEN: [f32; 2] = [1024.0, 768.0];
 const NEXT: &str = "NEXT";
 const BACK: &str = "BACK";
 const DONE: &str = "DONE";
-const YES: &str = "yes";
-const NO: &str = "no";
+/// Round 28 (Q2, Ryan: "Decline (left) and Accept (right), not Yes/No"): Wizard101's GUI.lang ACCEPT / DECLINE
+/// strings (keys ACCEPT and DECLINE; GUI_00000378/379 "yes"/"no" are DialogWindow.gui's own labels, which Ryan
+/// doesn't want). DialogWindow.gui has btnYes left (448..576) and btnNo right (616..744); the pair is swapped so
+/// Decline is on the left and Accept on the right.
+const YES: &str = "Accept";
+const NO: &str = "Decline";
 
 /// One conversation of dialogue.tsv.
 #[derive(Clone, Debug, Default)]
@@ -149,6 +153,21 @@ impl Conversation {
         self.offer && self.last()
     }
 
+    /// Round 22 S3: Wizard101's sound for a press (_Shared-WorldData GUI/DialogWindow.gui m_sSelectSound: btnRight
+    /// HudSelect, btnBack CancelButtonClick, btnExit HudCancel; a quest taken or turned down plays
+    /// Sound/GUI/ui_quest_accepted / ui_quest_decline).
+    pub fn press_sound(&self, press: Press) -> Option<&'static str> {
+        match press {
+            Press::Next if self.choosing() => None,
+            Press::Next => Some("HudSelect"),
+            Press::Back => Some("CancelButtonClick"),
+            Press::Accept if self.choosing() => Some(if self.offer { "ui_quest_accepted" } else { "HudSelect" }),
+            Press::Decline if self.choosing() => Some(if self.offer { "ui_quest_decline" } else { "HudSelect" }),
+            Press::Accept | Press::Decline => None,
+            Press::Close => Some("HudCancel"),
+        }
+    }
+
     /// Applies a press; Some(answer) ends the conversation.
     pub fn press(&mut self, press: Press) -> Option<Answer> {
         match press {
@@ -179,7 +198,7 @@ impl Conversation {
                 v.node_art.insert(id, portrait.to_string());
             }
         }
-        v.set(window.find("txtTitle"), format!("<center>{name}</center>"));
+        title_left(window, &mut v, name);
         let text = self.pages.get(self.page).cloned().unwrap_or_default();
         if let Some(id) = window.find("txtMessage") {
             v.text.insert(id, text);
@@ -210,7 +229,33 @@ impl Conversation {
         v.show(window.find("btnNo"), choosing);
         label(&mut v, "btnYes", YES);
         label(&mut v, "btnNo", NO);
+        if let (Some(yes), Some(no)) = (window.find("btnYes"), window.find("btnNo")) {
+            v.rect.insert(yes, window.nodes[no].rect);
+            v.rect.insert(no, window.nodes[yes].rect);
+        }
+        // Round 28 (Q3): no red X on an offer. Wizard101's own dialogue box with a choice (Ryan's screenshot
+        // round25/ref/2_w101_multi_quest_picker.png: "What can I do for you?" with CANCEL) shows no close X at the
+        // bottom right; the offer is closed by Decline (B / Esc).
+        if choosing {
+            v.show(window.find("btnExit"), false);
+        }
         v
+    }
+
+    /// Round 27 (A3, Ryan: "Diego's name in the dialogue box is not centred"): DialogWindow's txtTitle (169..730) and
+    /// txtMessage (185..768) leave room for the 180-wide portrait on the left, so a speaker without one (Diego and Ugo
+    /// had no ER portrait yet: the log's "NpcPortraits/ER/diego.png: cannot find the file") had his name centred
+    /// 48 layout px right of the box's middle over an empty space. With no portrait loaded the name is centred on the
+    /// whole title scroll (the box's 0..802 less the scroll ends: 40..762) and the text starts at the same 40.
+    /// With a portrait, Wizard101's own layout is kept. Round 30 (D1): the name is left-justified (title_left), so
+    /// with no portrait it starts at the scroll's left, 40.
+    pub fn without_portrait(window: &Layout, v: &mut View) {
+        for (name, left, right) in [("txtTitle", 40.0, 762.0), ("txtMessage", 40.0, 768.0)] {
+            if let Some(id) = window.find(name) {
+                let r = window.nodes[id].rect;
+                v.rect.insert(id, [left, r[1], right, r[3]]);
+            }
+        }
     }
 
     /// The current page's speaker, (name, portrait): the request's own unless the page names another.
@@ -236,14 +281,23 @@ pub fn button(name: &str) -> Option<Press> {
     })
 }
 
+/// The experience bar's top on a `screen` (pixels), as lib.rs draws it (XP_BAR 733 of HUDWindow's 768, scaled by
+/// the screen's height and w101_orbs.ini `scale`).
+pub fn xp_bar_top(screen: [f32; 2], hud_scale: f32) -> f32 {
+    const XP_BAR_TOP: f32 = 733.0;
+    screen[1] - (SCREEN[1] - XP_BAR_TOP) * hud_scale * screen[1] / SCREEN[1]
+}
+
 /// DialogWindow's place on a `screen` (pixels): the scale (screen pixels per layout pixel, Wizard101 scaling its GUI
-/// with the screen's height) and the window's top-left corner, bottom-docked and centred as its flags say.
-pub fn placement(window: &Layout, screen: [f32; 2]) -> (f32, [f32; 2]) {
+/// with the screen's height) and the window's top-left corner, centred across. Round 22 (H4, Ryan: "move the
+/// dialogue down a little bit; put it right above the level bar"): its bottom BAR_GAP layout pixels over the
+/// experience bar's top (`bar_top`, xp_bar_top), not at DialogWindow.gui's 687 of 768 (81 pixels up).
+pub fn placement(window: &Layout, screen: [f32; 2], bar_top: f32) -> (f32, [f32; 2]) {
+    const BAR_GAP: f32 = 4.0;
     let s = screen[1] / SCREEN[1];
     let r = window.nodes.first().map(|n| n.rect).unwrap_or([0.0, 0.0, 800.0, 180.0]);
-    let bottom_gap = SCREEN[1] - 687.0;
     let (w, h) = (r[2] - r[0], r[3] - r[1]);
-    (s, [(screen[0] - w * s) / 2.0, screen[1] - (bottom_gap + h) * s])
+    (s, [(screen[0] - w * s) / 2.0, bar_top - (BAR_GAP + h) * s])
 }
 
 /// DialogImage's picture square (imgSprite, 399 square, centred across the screen; its 588-high parent window
@@ -261,4 +315,21 @@ pub fn picture_rect(image: Option<&Layout>, screen: [f32; 2]) -> [f32; 4] {
     };
     let x = (screen[0] - side * s) / 2.0;
     [x, top * s, x + side * s, (top + side) * s]
+}
+
+/// Round 30 (D1, Ryan: "the dialogue window's speaker name is still centred: left-justify it, starting right after
+/// the portrait"): DialogWindow.gui's txtTitle (169..730, HCENTER) was drawn centred ("<center>" and the node's own
+/// style) by Conversation::view and by picker.rs's dialog_view (the "What can I do for you?" menu). It is now drawn
+/// left-justified from TITLE_LEFT, just right of imgPortrait (0..180), in the node's own font, size and colour.
+pub const TITLE_LEFT: f32 = 186.0;
+
+pub fn title_left(window: &Layout, v: &mut View, name: &str) {
+    let Some(id) = window.find("txtTitle") else { return };
+    v.text.insert(id, name.to_string());
+    let r = window.nodes[id].rect;
+    v.rect.insert(id, [TITLE_LEFT, r[1], r[2], r[3]]);
+    if let Some(mut style) = window.nodes[id].text_style.clone() {
+        style.align = crate::layout::Align::Left;
+        v.style.insert(id, style);
+    }
 }

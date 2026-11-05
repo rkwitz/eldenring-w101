@@ -14,7 +14,8 @@ use windows::core::{Error, IUnknown, Interface, Result, BOOL, HRESULT};
 use windows::Win32::Foundation::{HWND, LUID};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::{
-    D3D12CreateDevice, ID3D12CommandList, ID3D12CommandQueue, ID3D12Device, ID3D12Resource,
+    D3D12CreateDevice, ID3D12CommandAllocator, ID3D12CommandList, ID3D12CommandQueue, ID3D12Device,
+    ID3D12GraphicsCommandList, ID3D12Resource,
     D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -892,7 +893,18 @@ unsafe extern "system" fn d3d12_command_queue_execute_command_lists_impl(
     let Trampolines { d3d12_command_queue_execute_command_lists, .. } =
         TRAMPOLINES.get().expect("DirectX 12 trampolines uninitialized");
 
+    // w101_orbs (round 28, W2): the lists in GPU order, for the scene depth's state at Present (crate::depth).
+    let queue_raw = command_queue.as_raw() as usize;
+    let lists: Vec<usize> = if command_lists.is_null() {
+        Vec::new()
+    } else {
+        std::slice::from_raw_parts(command_lists as *const usize, num_command_lists as usize).to_vec()
+    };
+    crate::depth::ECL_TRAMPOLINE
+        .store(*d3d12_command_queue_execute_command_lists as usize, std::sync::atomic::Ordering::Relaxed);
+    let _order = crate::depth::queue_guard();
     d3d12_command_queue_execute_command_lists(command_queue, num_command_lists, command_lists);
+    crate::depth::executed(queue_raw, &lists);
 }
 
 unsafe extern "system" fn dxgi_factory_create_swap_chain_impl(
@@ -962,6 +974,7 @@ fn get_target_addrs() -> (
     DXGISwapChainSetSourceSizeType,
     DXGISwapChainResizeBuffers1Type,
     D3D12CommandQueueExecuteCommandListsType,
+    crate::depth::ResourceBarrierFn,
 ) {
     let dummy_hwnd = DummyHwnd::new();
 
@@ -1034,6 +1047,12 @@ fn get_target_addrs() -> (
         unsafe { mem::transmute(swap_chain3.vtable().ResizeBuffers1) };
     let cqecl_ptr: D3D12CommandQueueExecuteCommandListsType =
         unsafe { mem::transmute(command_queue.vtable().ExecuteCommandLists) };
+    // w101_orbs (round 26, O1): ID3D12GraphicsCommandList::ResourceBarrier (crate::depth).
+    let allocator: ID3D12CommandAllocator =
+        unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }.unwrap();
+    let list: ID3D12GraphicsCommandList =
+        unsafe { device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None) }.unwrap();
+    let barrier_ptr: crate::depth::ResourceBarrierFn = unsafe { mem::transmute(list.vtable().ResourceBarrier) };
 
     (
         create_swap_chain_ptr,
@@ -1044,11 +1063,12 @@ fn get_target_addrs() -> (
         set_source_size_ptr,
         resize_buffers1_ptr,
         cqecl_ptr,
+        barrier_ptr,
     )
 }
 
 /// Hooks for DirectX 12.
-pub struct ImguiDx12Hooks([MhHook; 8]);
+pub struct ImguiDx12Hooks([MhHook; 9]);
 
 impl ImguiDx12Hooks {
     /// Construct a set of [`MhHook`]s that will render UI via the
@@ -1080,6 +1100,7 @@ impl ImguiDx12Hooks {
             dxgi_swap_chain_set_source_size_addr,
             dxgi_swap_chain_resize_buffers1_addr,
             d3d12_command_queue_execute_command_lists_addr,
+            d3d12_resource_barrier_addr,
         ) = get_target_addrs();
 
         trace!(
@@ -1133,6 +1154,15 @@ impl ImguiDx12Hooks {
         )
         .expect("couldn't create ID3D12CommandQueue::ExecuteCommandLists hook");
 
+        // w101_orbs (round 26, O1): the game's depth passes (crate::depth).
+        let hook_barrier = MhHook::new(
+            d3d12_resource_barrier_addr as *mut _,
+            crate::depth::resource_barrier_impl as *mut _,
+        )
+        .expect("couldn't create ID3D12GraphicsCommandList::ResourceBarrier hook");
+        crate::depth::BARRIER_TRAMPOLINE
+            .store(hook_barrier.trampoline() as usize, std::sync::atomic::Ordering::SeqCst);
+
         RENDER_LOOP.get_or_init(|| Box::new(t));
 
         TRAMPOLINES.get_or_init(|| Trampolines {
@@ -1179,6 +1209,7 @@ impl ImguiDx12Hooks {
             hook_set_source_size,
             hook_resize_buffers1,
             hook_cqecl,
+            hook_barrier,
         ])
     }
 }

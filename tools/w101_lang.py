@@ -85,19 +85,24 @@ NAME_HASH, POS_HASH = bytes.fromhex("f303faca"), bytes.fromhex("1bdc7e85")
 
 
 def placed_objects(gamedata):
-    """[(name, x, y, z)] of a zone's gamedata.bin: each object name (hash f303faca, u16 length, text) and the first
-    position after it (hash 1bdc7e85, 3 floats, W101 units, Z up) before the next name."""
-    out, i = [], 0
+    """[(name, x, y, z)] of a zone's gamedata.bin: each object name (hash f303faca, u16 length, text) and the
+    position of the same object (hash 1bdc7e85 = m_location, 3 floats, W101 units, Z up), which the serializer writes
+    BEFORE the name: the last position between the previous name and this one.
+    Round 26 (N1): rounds 15-25 took the first position AFTER the name, which is the NEXT object's location, so every
+    NPC got its neighbour's spot (Connelly stood on Ugo's spot, Ceren on Olivia's, Olivia on Connelly's). Checked
+    against w101_pathing's property decoder (tools/w101_npc_spots.py) and the zone's "Player Stand In instance - <NPC>"
+    cinematic markers, which stand 3 m in front of the right NPC."""
+    out, i, prev = [], 0, 0
     while True:
         i = gamedata.find(NAME_HASH, i)
         if i < 0:
             return out
         n = struct.unpack_from("<H", gamedata, i + 4)[0]
         name = gamedata[i + 6:i + 6 + n].decode("latin-1")
-        j, k = gamedata.find(POS_HASH, i + 6 + n), gamedata.find(NAME_HASH, i + 6 + n)
-        if j > 0 and (k < 0 or j < k):
+        j = gamedata.rfind(POS_HASH, prev, i)
+        if j >= 0:
             out.append((name,) + struct.unpack_from("<3f", gamedata, j + 4))
-        i += 6 + n
+        prev = i = i + 6 + n
 
 
 def main(argv):

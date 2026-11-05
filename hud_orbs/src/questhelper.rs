@@ -10,71 +10,107 @@
 //! is one flat quad 42.46 x 70 units (the arrow lying on the ground, tip forward); here it is drawn as that quad seen
 //! by a fixed camera above and behind it, turned by the goal's bearing from the camera's view direction, so it
 //! leans into the screen when the goal is ahead and swings round as the camera turns.
+//! Round 24 (H2): replaced by the flat yellow arrow of Ryan's Wizard101 screenshot (arrow_faces: no texture, olive
+//! underside, fitted to the screenshot).
 //!
 //! The goal is the first quest of the Quests page (main quests first, as Wizard101's helper follows the main
 //! quest unless another is picked): its first current goal, or once ready its turn-in. Where each goal is
 //! (TARGETS) comes from the map itself (tools/w101_quest_targets.py reading m60_42_36_00.msb): talk goals point at
 //! the NPC, goto goals at their sphere, defeat goals at the nearest enemy of the kind, the Bone Cages at the nearest
 //! cage, bosses at the boss; for a goal in a room (60 m under the street) the arrow points at the room's door
-//! until the player is inside. txtDistance is left empty: the client fills it from code with no string in its
-//! .lang files to copy.
+//! until the player is inside.
+//!
+//! Round 20 (Q8): txtDistance shows the steps to the goal. Wizard101's players' guide (wizard101.com
+//! w101playersguide/questing3): the arrow shows "the approximate number of steps it will take your Wizard to reach
+//! that destination". The walk is measured along Wizard101's own walk graph of Unicorn Way (zone.nav, 1079 nodes on
+//! a 4.8 m grid, decoded by tools/w101_pathing.py, moved into this map's coordinates: w101_orbs/book/quest_nav.tsv,
+//! Wizard101 data, made on the PC), from the node nearest the player to the one nearest the goal, plus the two ends;
+//! where the graph doesn't reach (the hedge maze, the rooms) it is the straight distance. One step is STEP metres
+//! (the client's own stride length isn't in its data files; a walking stride).
+
+use std::collections::BinaryHeap;
+use std::path::Path;
 
 use hudhook::imgui::{DrawListMut, ImColor32};
 
-use crate::layout::{Layout, Textures, View};
+use crate::layout::{Layout, View};
 use crate::markers::Camera;
 use crate::quests::Active;
 
 pub const LAYOUT: &str = "QuestHelperHud";
-pub const ARROW: &str = "Quest/Quest_Arrow.png";
-/// QuestHelperHud's m_Window on Wizard101's 1024 x 768 screen (its top; HCENTER centres it across).
-const TOP: f32 = 425.0;
-const SCREEN_H: f32 = 768.0;
+pub const SCREEN_H: f32 = 768.0;
+/// Round 22 (H1, Ryan: "the quest description needs to be moved way down, right above the level bar"): the gap
+/// (layout pixels) between txtGoalName's bottom and the experience bar's top.
+const BAR_GAP: f32 = 4.0;
 /// The tile of the street (m60_42_36_00) and how far from its corner the helper still shows (metres).
 const TILE: [i32; 2] = [42, 36];
 const TILE_RANGE: f32 = 600.0;
 /// Below this MSB height the player is in one of the rooms under the street (the street is at about 94 m).
 const ROOM_HEIGHT: f32 = 70.0;
-/// Quest_Arrow_JT.nif's quad: half width and half length (units), the tip at +y (the texture's bottom edge).
-const HALF_W: f32 = 21.23;
-const HALF_L: f32 = 35.0;
-/// The little camera over the arrow: back, up (units) and focal length (layout pixels per unit at depth 1).
-const BACK: f32 = 100.0;
-const UP: f32 = 120.0;
-const FOCAL: f32 = 230.0;
+/// Round 24 (H2, Ryan's screenshot of the real helper, round24/ryan_arrow_w101.png: "a flat, wide yellow up-arrow (big
+/// triangle head, short wide stem) seen almost face-on, with a darker yellow/orange underside visible below it as
+/// thickness, the step count (black, bold) INSIDE the arrow"): no texture and no ink edge, one flat yellow top and
+/// olive sides. Shape and little camera fitted to the screenshot's corners (tip, wing tips, stem top and bottom
+/// corners, the thickness under the stem and a wing; 0.5 px rms; scratchpad h1/fitarrow.py): in units of the stem's
+/// width where it meets the head, the tail is TAIL wide, the head HEAD wide and HEAD_L long, the stem STEM_L long,
+/// THICK deep; seen from ELEVATION above with the camera's axis on the ground AXIS units behind the tail at DISTANCE.
+const TAIL: f32 = 1.379;
+const HEAD: f32 = 2.005;
+const STEM_L: f32 = 2.025;
+const HEAD_L: f32 = 0.956;
+const THICK: f32 = 0.222;
+const ELEVATION: f32 = 0.698; // 40 degrees
+const DISTANCE: f32 = 6.444;
+const AXIS: f32 = -1.285;
+/// The point it turns about and the step count is centred on (txtDistance's middle): on the stem PIVOT units from
+/// the tail, where the screenshot's number sits (just under the head).
+const PIVOT: f32 = 1.640;
+/// Layout pixels per unit at depth 1: the screenshot's 318.8 px, scaled so the arrow's size against the goal text
+/// (txtGoalName, the same WizardNormal line in both) matches the screenshot (head 71 px over 234 px of text).
+const FOCAL: f32 = 338.0;
+/// The screenshot's colours: the top (255, 238, 42) and the sides under it (132, 119, 14).
+const TOP: [u8; 3] = [255, 238, 42];
+const UNDER: [u8; 3] = [132, 119, 14];
 
 // tools/w101_quest_targets.py m60_42_36_00.msb.dcx (msb 17b1dd61): (quest, goal index from 0, MSB points, the
 // room's door on the street for goals inside a room).
 const TARGETS: &[(&str, usize, &[[f32; 3]], Option<[f32; 3]>)] = &[
-    ("unicorn_way", 0, &[[5.003, 94.183, -44.078]], None),
+    ("unicorn_way", 0, &[[-65.865, 92.825, -7.976]], None),
     ("ghost_hunters", 0, &[[-106.838, 93.988, -41.934], [-125.000, 93.999, -83.660], [-143.009, 93.999, -43.909], [-153.779, 92.499, -65.799], [-112.926, 93.999, -41.266], [-122.484, 93.999, -47.028], [-118.689, 93.999, -55.466], [-110.309, 93.999, -47.553], [-121.378, 93.999, -93.675], [-114.960, 93.999, -90.218], [-120.229, 93.999, -79.554], [-125.000, 93.999, -71.722], [-146.090, 93.999, -31.099], [-151.042, 93.999, -18.986], [-156.601, 93.999, -21.262], [-152.333, 93.999, -29.959], [-144.529, 92.499, -69.751], [-140.999, 92.520, -68.820], [-141.858, 92.499, -60.844], [-149.830, 92.499, -53.881]], None),
-    ("ghost_hunters", 1, &[[5.003, 94.183, -44.078]], None),
-    ("ghost_hunters", 2, &[[-84.838, 94.488, -18.448]], None),
+    ("ghost_hunters", 1, &[[-65.865, 92.825, -7.976]], None),
+    ("ghost_hunters", 2, &[[-80.319, 93.700, -12.822]], None),
     ("skeleton_crew", 0, &[[-174.706, 93.865, -7.295], [-224.319, 93.999, -14.996], [-233.068, 93.999, -38.080], [-211.351, 92.499, -48.532], [-191.699, 93.999, -14.760], [-200.160, 93.999, -19.839], [-197.825, 93.999, -26.461], [-188.622, 93.999, -20.708], [-226.537, 93.999, -2.599], [-231.498, 93.999, 5.621], [-237.135, 93.999, 0.639], [-233.131, 93.999, -5.810], [-246.934, 93.997, -42.301], [-253.552, 93.997, -46.452], [-250.329, 93.997, -54.021], [-242.953, 93.997, -48.753], [-206.137, 92.499, -46.495], [-202.871, 92.527, -37.287], [-214.245, 92.499, -37.220], [-220.472, 92.499, -43.283]], None),
-    ("skeleton_crew", 1, &[[-84.838, 94.488, -18.448]], None),
-    ("monsters_and_mazes", 0, &[[-335.106, 94.299, 103.547]], None),
-    ("monsters_and_mazes", 1, &[[-335.106, 93.499, 103.547]], None),
-    ("finding_out_why", 0, &[[-284.496, 93.000, -57.482], [-268.677, 93.000, -48.272], [-325.141, 93.999, -26.388], [-66.410, 93.171, -12.722]], None),
+    ("skeleton_crew", 1, &[[-80.319, 93.700, -12.822]], None),
+    ("monsters_and_mazes", 0, &[[-336.103, 94.299, 105.505]], None),
+    ("monsters_and_mazes", 1, &[[-336.103, 93.499, 105.505]], None),
+    ("finding_out_why", 0, &[[-284.496, 93.000, -57.482], [-268.677, 93.000, -48.272], [-325.141, 93.999, -26.388], [-332.026, 93.999, -13.127]], None),
     ("finding_out_why", 1, &[[-278.594, 93.997, -44.062], [-289.062, 92.999, 3.035], [-281.735, 93.997, -30.283], [-284.642, 93.999, -20.763], [-290.663, 93.999, -22.944], [-287.072, 93.999, -32.296], [-303.581, 92.992, -1.351], [-320.420, 93.999, -12.637], [-316.935, 93.999, -18.455], [-299.868, 92.999, -9.293]], None),
-    ("finding_out_why", 2, &[[-335.106, 94.299, 103.547]], None),
-    ("finding_out_why", 3, &[[-335.106, 93.499, 103.547]], None),
-    ("who_could_it_be_now", 0, &[[-84.838, 94.488, -18.448]], None),
+    ("finding_out_why", 2, &[[-336.103, 94.299, 105.505]], None),
+    ("finding_out_why", 3, &[[-336.103, 93.499, 105.505]], None),
+    ("who_could_it_be_now", 0, &[[-80.319, 93.700, -12.822]], None),
     ("sinister_skeleton", 0, &[[-242.629, 37.999, 20.072]], Some([-240.829, 94.349, 16.343])),
-    ("sinister_skeleton", 1, &[[-242.425, 33.999, 19.671]], Some([-240.829, 94.349, 16.343])),
-    ("sinister_skeleton", 2, &[[-84.838, 94.999, -18.448]], None),
-    ("sinister_skeleton", 3, &[[-84.838, 94.488, -18.448]], None),
-    ("pesky_pirates", 0, &[[-174.706, 93.865, -7.295], [-224.319, 93.999, -14.996], [-233.068, 93.999, -38.080], [-211.351, 92.499, -48.532], [-191.699, 93.999, -14.760], [-200.160, 93.999, -19.839], [-197.825, 93.999, -26.461], [-188.622, 93.999, -20.708], [-226.537, 93.999, -2.599], [-231.498, 93.999, 5.621], [-237.135, 93.999, 0.639], [-233.131, 93.999, -5.810], [-246.934, 93.997, -42.301], [-253.552, 93.997, -46.452], [-250.329, 93.997, -54.021], [-242.953, 93.997, -48.753], [-206.137, 92.499, -46.495], [-202.871, 92.527, -37.287], [-214.245, 92.499, -37.220], [-220.472, 92.499, -43.283]], None),
-    ("pesky_pirates", 1, &[[-65.865, 92.825, -7.976]], None),
-    ("saving_private_oryan", 0, &[[-160.827, 94.999, -54.024]], None),
-    ("saving_private_oryan", 1, &[[-160.827, 93.488, -54.024]], None),
-    ("saving_private_oryan", 2, &[[-106.973, 34.999, -114.507]], Some([-112.061, 94.379, -104.406])),
-    ("saving_private_oryan", 3, &[[-110.717, 33.999, -106.976]], Some([-112.061, 94.379, -104.406])),
-    ("saving_private_oryan", 4, &[[-160.827, 93.488, -54.024]], None),
-    ("saving_private_oryan", 5, &[[5.003, 94.183, -44.078]], None),
-    ("fear_of_fire", 0, &[[-188.150, 34.999, -2.772]], Some([-188.461, 94.349, -2.847])),
-    ("fear_of_fire", 1, &[[-182.461, 33.999, -13.764]], Some([-188.461, 94.349, -2.847])),
-    ("fear_of_fire", 2, &[[-65.865, 92.825, -7.976]], None),
+    ("sinister_skeleton", 1, &[[-244.014, 33.999, 22.789]], Some([-240.829, 94.349, 16.343])),
+    ("sinister_skeleton", 2, &[[-80.319, 94.999, -12.822]], None),
+    ("sinister_skeleton", 3, &[[-80.319, 93.700, -12.822]], None),
 ];
+
+/// Round 22 (H3): the hedge maze garden is not under the street like the rooms but beside it, behind a door that
+/// teleports (m60_42_36_00.msb: W101_Garden_out 1042362807 on the street, W101_Garden_in 1042362805 inside; Lady
+/// Oriel 1042360823 in its middle). A point within GARDEN_RADIUS of GARDEN_CENTRE (the middle of the arrival point
+/// and Oriel; the street's walk graph comes no nearer than 75 m) is in the garden.
+const GARDEN_CENTRE: [f32; 2] = [-327.62, 88.90];
+const GARDEN_RADIUS: f32 = 40.0;
+const GARDEN_DOOR: [f32; 3] = [-356.827, 95.679, -34.576];
+const GARDEN_INSIDE: [f32; 3] = [-320.138, 95.679, 74.260];
+
+pub fn in_garden(p: [f32; 3]) -> bool {
+    dist([p[0], p[2]], GARDEN_CENTRE) < GARDEN_RADIUS
+}
+
+/// Below ROOM_HEIGHT the player is in one of the rooms under the street.
+pub fn in_room(p: [f32; 3]) -> bool {
+    p[1] < ROOM_HEIGHT
+}
 
 /// The player's MSB position in the street's tile, from Game::position (chunk position, block, block origin).
 pub fn player_msb(position: ([f32; 3], i32, i32)) -> Option<[f32; 3]> {
@@ -82,6 +118,78 @@ pub fn player_msb(position: ([f32; 3], i32, i32)) -> Option<[f32; 3]> {
     let o = crate::markers::tile(origin)?;
     let p = [chunk[0] + o[0] - TILE[0] as f32 * 256.0, chunk[1], chunk[2] + o[1] - TILE[1] as f32 * 256.0];
     (p[0].abs() < TILE_RANGE && p[2].abs() < TILE_RANGE).then_some(p)
+}
+
+/// Round 33 (G10): the graveyard's lift-up exit door AEG110_064_1000 (msb 61ba28c3: MSB position and yaw; its local +z
+/// points out of the graveyard, onto the street; tools/msb_name_region.DOOR).
+const GATE: [f32; 3] = [-3.522, 93.956, -86.030];
+const GATE_YAW: f32 = -27.887;
+/// Past the door plane by this much (the fog gates stand at +0.10).
+const GATE_PAST: f32 = 0.3;
+
+/// Round 33 (G10): an MSB position in the gate's frame: (across, up, out of the graveyard).
+pub fn gate_frame(p: [f32; 3]) -> [f32; 3] {
+    let (s, c) = GATE_YAW.to_radians().sin_cos();
+    let (dx, dz) = (p[0] - GATE[0], p[2] - GATE[2]);
+    [dx * c - dz * s, p[1] - GATE[1], dx * s + dz * c]
+}
+
+/// Round 33 (G10, Ryan: "W101 music must only play once the player is actually in Unicorn Way, not in the graveyard
+/// tunnel coming up to the gate"): the street tile's NPCs are loaded (so player_msb_now gives a tile position) while
+/// the player is still in the Stranded Graveyard's exit tunnel. On Unicorn Way = through the gate (gate frame z >
+/// GATE_PAST) and either at street level (y > -20; the street box starts 10 m under the door, the hedge maze floor
+/// is +1.7) or on the rooms' side (x < -60: the three rooms under the street are at x -104 / -125 / -162, the maze
+/// at -205). m18 (Stranded Graveyard, MSB + (147, 16, -102)) has nothing past the gate above y -20 except the door
+/// itself; its deep parts past the gate plane lie at y -230..-54 and x +23..+162.
+pub fn on_unicorn_way(p: [f32; 3]) -> bool {
+    let [x, y, z] = gate_frame(p);
+    z > GATE_PAST && (y > -20.0 || x < -60.0)
+}
+
+/// Round 21 (Q6): the player's MSB position from the street NPCs the game has loaded (`entities` =
+/// Game::entities): each one's MSB spot (markers::NPCS) plus the player's offset from it in the physics space,
+/// averaged. Needs no block origin (Ryan's round 20 helper never showed; the block-origin path is the fallback).
+pub fn player_msb_from_npcs(camera: &Camera, entities: &[(u32, [f32; 3])]) -> Option<[f32; 3]> {
+    player_msb_consensus(camera, entities).map(|(p, _, _)| p)
+}
+
+/// How close two NPCs' estimates of the player's MSB position must be to agree (m).
+const AGREE: f32 = 2.0;
+
+/// Round 35 (Ryan: "going through the gate to the hedge maze on Torrent caused me to fall out of the map and die"):
+/// each loaded street NPC gives one estimate (its MSB home + the player's offset from it). The plain average used
+/// until now let one NPC away from its home (walking back, pushed, turned to talk, or a home that isn't where it
+/// stands) pull the result many metres off, and the ride warp put Torrent there, off the maze floor. Now the
+/// largest group of estimates that agree within AGREE m is averaged. Returns (position, agreeing, loaded).
+pub fn player_msb_consensus(camera: &Camera, entities: &[(u32, [f32; 3])]) -> Option<([f32; 3], usize, usize)> {
+    let p = camera.player;
+    let est: Vec<[f32; 3]> = entities.iter().filter_map(|(id, at)| {
+        let npc = crate::markers::NPCS.iter().find(|n| n.2 == *id)?;
+        Some(std::array::from_fn(|k| npc.4[k] + p[k] - at[k]))
+    }).collect();
+    let near = |a: &[f32; 3], b: &[f32; 3]| (a[0] - b[0]).hypot(a[2] - b[2]) < AGREE && (a[1] - b[1]).abs() < AGREE;
+    let best = est.iter().max_by_key(|a| est.iter().filter(|b| near(a, b)).count())?;
+    let group: Vec<&[f32; 3]> = est.iter().filter(|b| near(best, b)).collect();
+    let n = group.len() as f32;
+    let avg = std::array::from_fn(|k| group.iter().map(|g| g[k]).sum::<f32>() / n);
+    Some((avg, group.len(), est.len()))
+}
+
+/// Round 22 S1: the player's MSB position from the loaded street NPCs (player_msb_from_npcs), when it is on the tile.
+pub fn player_msb_now(game: &crate::game::Game) -> Option<[f32; 3]> {
+    let camera = game.camera()?;
+    let entities = game.entities(&crate::markers::MODELS, &crate::markers::entity_ids());
+    crate::markers::track_homes(&entities);
+    player_msb_from_npcs(&camera, &entities).filter(|p| p[0].abs() < TILE_RANGE && p[2].abs() < TILE_RANGE)
+}
+
+/// The Bone Cages goal (finding_out_why goal 0) and the first cage's flag (tools/w101_quests.py CAGE_FLAG).
+pub const CAGES_GOAL: usize = 0;
+pub const CAGE_FLAG: u32 = 1042360540;
+
+/// Round 25 (H3): the Bone Cages' MSB spots (finding_out_why's first goal), in CAGE_FLAG order.
+pub fn cages() -> &'static [[f32; 3]] {
+    TARGETS.iter().find(|t| t.0 == "finding_out_why" && t.1 == CAGES_GOAL).map_or(&[], |t| t.2)
 }
 
 /// Where the arrow points for quest `active` with the player at `player` (MSB): the goal's nearest point, or the
@@ -94,7 +202,22 @@ pub fn target(active: &Active, player: [f32; 3]) -> Option<[f32; 3]> {
         }
     }
     let d2 = |p: &[f32; 3]| (p[0] - player[0]).powi(2) + (p[2] - player[2]).powi(2);
-    points.iter().min_by(|a, b| d2(a).total_cmp(&d2(b))).copied()
+    // Round 24 (M2): the Bone Cages goal pointed at the nearest cage even when it was already open ("about 0
+    // steps" at Ryan's opened cage, so he wasn't led on to the other two); now at the nearest cage still shut, i.e.
+    // whose flag CAGE_FLAG + i (same order as the points) is off.
+    let shut = |i: usize| !(active.slug == "finding_out_why" && active.goal_index == CAGES_GOAL
+        && crate::game::event_flag(CAGE_FLAG + i as u32) == Some(true));
+    let goal = points.iter().enumerate().filter(|(i, _)| shut(*i)).map(|(_, p)| p)
+        .min_by(|a, b| d2(a).total_cmp(&d2(b))).or_else(|| points.iter().min_by(|a, b| d2(a).total_cmp(&d2(b))))
+        .copied()?;
+    // Round 22 (H3, Ryan: "it points to where the hedge maze is on the map, not where the door is"): a goal in the
+    // garden from the street points at the garden's door on the street; a street goal from inside the garden at
+    // the garden's own door (where its arrival point is).
+    Some(match (in_garden(goal), in_garden(player)) {
+        (true, false) => GARDEN_DOOR,
+        (false, true) => GARDEN_INSIDE,
+        _ => goal,
+    })
 }
 
 /// The goal's bearing from the camera's view direction (radians, clockwise on the ground, 0 = straight ahead).
@@ -106,51 +229,374 @@ pub fn bearing(camera: &Camera, player: [f32; 3], goal: [f32; 3]) -> f32 {
     right.atan2(ahead)
 }
 
-/// The helper's scale (screen pixels per layout pixel) and its top-left corner on a `screen`.
-pub fn placement(layout: &Layout, screen: [f32; 2]) -> (f32, [f32; 2]) {
+/// The helper's scale (screen pixels per layout pixel) and its top-left corner on a `screen`. Round 22 (H1): docked
+/// to the bottom: txtGoalName's bottom sits BAR_GAP over `bar_top` (the experience bar's top, screen pixels;
+/// talk::xp_bar_top); the arrow (ArrowWindow) is right over the goal's name as in QuestHelperHud.gui.
+pub fn placement(layout: &Layout, screen: [f32; 2], bar_top: f32) -> (f32, [f32; 2]) {
     let s = screen[1] / SCREEN_H;
     let w = layout.nodes.first().map(|n| n.rect[2] - n.rect[0]).unwrap_or(600.0);
-    (s, [(screen[0] - w * s) / 2.0, TOP * s])
+    let name_bottom = layout.find("txtGoalName").map(|i| layout.nodes[i].rect[3]).unwrap_or(150.0);
+    (s, [(screen[0] - w * s) / 2.0, bar_top - (name_bottom + BAR_GAP) * s])
 }
 
-/// The arrow quad's corners in layout pixels (tail left, tail right, tip right, tip left: the texture's (0,0),
-/// (1,0), (1,1), (0,1)), turned by `bearing`, in ArrowWindow's middle.
-pub fn arrow_quad(layout: &Layout, bearing: f32) -> [[f32; 2]; 4] {
-    let r = layout.find("ArrowWindow").map(|i| layout.nodes[i].rect).unwrap_or([225.0, 39.0, 375.0, 149.0]);
-    let centre = [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0];
+/// Round 22 (H2): the point the arrow turns about and the steps are centred on (layout pixels): txtDistance's
+/// middle, which QuestHelperHud.gui centres across like ArrowWindow. Round 21 moved the arrow's outline middle onto
+/// the window's middle every frame, so its pivot (and the number on it) wandered as it turned.
+pub fn pivot(layout: &Layout) -> [f32; 2] {
+    let r = layout.find("txtDistance").or_else(|| layout.find("ArrowWindow")).map(|i| layout.nodes[i].rect)
+        .unwrap_or([110.0, 73.0, 489.0, 97.0]);
+    [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0]
+}
+/// Round 24 (H2): a point of the arrow (units: `right`, `forward` from the tail, `up`) turned by `bearing` about the
+/// pivot, in the little camera's space (right, up, depth; camera at the origin).
+fn view_space(right: f32, forward: f32, up: f32, bearing: f32) -> [f32; 3] {
     let (sin, cos) = bearing.sin_cos();
-    let length = (BACK * BACK + UP * UP).sqrt();
-    let corner = |x: f32, y: f32| {
-        // On the ground: right, ahead; then seen from (0, -BACK, UP) looking at the arrow's middle.
-        let (gx, gy) = (x * cos + y * sin, -x * sin + y * cos);
-        let depth = ((gy + BACK) * BACK + UP * UP) / length;
-        let up = gy * UP / length;
-        [centre[0] + gx / depth * FOCAL, centre[1] - up / depth * FOCAL]
-    };
-    let q = [corner(-HALF_W, -HALF_L), corner(HALF_W, -HALF_L), corner(HALF_W, HALF_L), corner(-HALF_W, HALF_L)];
-    // Kept inside ArrowWindow whichever way it turns: its outline's middle on the window's middle.
-    let (lo, hi) = q.iter().fold(([f32::MAX; 2], [f32::MIN; 2]), |(lo, hi), p| {
-        ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])])
-    });
-    let shift = [centre[0] - (lo[0] + hi[0]) / 2.0, centre[1] - (lo[1] + hi[1]) / 2.0];
-    q.map(|p| [p[0] + shift[0], p[1] + shift[1]])
+    let f0 = forward - PIVOT;
+    let (r, f) = (right * cos + f0 * sin, -right * sin + f0 * cos);
+    let g = f + PIVOT - AXIS;
+    let (se, ce) = ELEVATION.sin_cos();
+    [r, up * ce + g * se, DISTANCE + g * ce - up * se]
 }
 
-/// QuestHelperHud's view: the goal's name in txtGoalName; txtDistance and the button left empty.
-pub fn view(layout: &Layout, active: &Active) -> View {
+/// Layout pixels of a view-space point, the pivot landing on `pivot` (an off-centre view: the camera's axis is
+/// behind the arrow, as in the screenshot where the arrow sits above the middle of its window).
+fn to_layout(p: [f32; 3], pivot: [f32; 2]) -> [f32; 2] {
+    let c = view_space(0.0, PIVOT, 0.0, 0.0);
+    [pivot[0] + p[0] / p[2] * FOCAL, pivot[1] - (p[1] / p[2] - c[1] / c[2]) * FOCAL]
+}
+
+/// The arrow's outline on the ground (right, forward), counter-clockwise seen from above: tail, stem, wings, tip.
+fn outline() -> [[f32; 2]; 7] {
+    [[-TAIL / 2.0, 0.0], [TAIL / 2.0, 0.0], [0.5, STEM_L], [HEAD / 2.0, STEM_L], [0.0, STEM_L + HEAD_L],
+     [-HEAD / 2.0, STEM_L], [-0.5, STEM_L]]
+}
+
+/// Round 24 (H2): the arrow turned by `bearing`, in layout pixels: the sides the camera sees (far ones first) and the
+/// top as two convex pieces (stem, head), each (corners, colour).
+pub fn arrow_faces(layout: &Layout, bearing: f32) -> Vec<(Vec<[f32; 2]>, [u8; 3])> {
+    let c = pivot(layout);
+    let o = outline();
+    let top: Vec<[f32; 3]> = o.iter().map(|p| view_space(p[0], p[1], 0.0, bearing)).collect();
+    let bottom: Vec<[f32; 3]> = o.iter().map(|p| view_space(p[0], p[1], -THICK, bearing)).collect();
+    let mut sides: Vec<(f32, Vec<[f32; 2]>)> = Vec::new();
+    for i in 0..o.len() {
+        let j = (i + 1) % o.len();
+        let (a, b, d) = (top[i], top[j], bottom[i]);
+        // Outward normal = (b - a) x (d - a) for a counter-clockwise outline seen from above; seen when it faces the
+        // camera at the origin.
+        let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [d[0] - a[0], d[1] - a[1], d[2] - a[2]]);
+        let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, (a[2] + b[2]) / 2.0];
+        if n[0] * mid[0] + n[1] * mid[1] + n[2] * mid[2] >= 0.0 {
+            continue;
+        }
+        sides.push((mid[2], [top[i], top[j], bottom[j], bottom[i]].iter().map(|p| to_layout(*p, c)).collect()));
+    }
+    sides.sort_by(|x, y| y.0.total_cmp(&x.0));
+    let mut out: Vec<(Vec<[f32; 2]>, [u8; 3])> = sides.into_iter().map(|s| (s.1, UNDER)).collect();
+    let t: Vec<[f32; 2]> = top.iter().map(|p| to_layout(*p, c)).collect();
+    out.push((vec![t[0], t[1], t[2], t[6]], TOP));
+    out.push((vec![t[3], t[4], t[5]], TOP));
+    out
+}
+
+
+/// Round 20 (Q8): metres per step, and how far from the walk graph a point still joins it.
+const STEP: f32 = 0.75;
+const NAV_REACH: f32 = 12.0;
+
+/// Wizard101's walk graph of the street (quest_nav.tsv: "N x z" nodes in MSB metres, "E a b" edges).
+#[derive(Default)]
+pub struct Nav {
+    nodes: Vec<[f32; 2]>,
+    edges: Vec<Vec<(usize, f32)>>,
+    /// Round 22 (H6): the street seen from above on a CELL grid: 0 = outside (walls, buildings, the hedges: off the
+    /// walk graph and joined to the edge of the map), 1 = open (on the graph, or a hole in it such as a fountain or a
+    /// lamp post's base, which hides nothing as tall as a marker).
+    grid: Vec<u8>,
+    grid_origin: [f32; 2],
+    grid_size: [usize; 2],
+    /// Round 24 (H1): the street's own geometry as voxels (street_sight.bin, tools/w101_street_sight.py), for
+    /// sees_3d; None without the file (then sees_3d falls back to the walk-graph test).
+    geometry: Option<StreetSight>,
+}
+
+/// Round 24 (H1, Ryan: "Wisps are STILL visible through walls"): round 23's walk-graph test (Nav::sees) let 19 % of
+/// the sight lines through that the street's houses and walls block (checked on every position in Ryan's round 23 log
+/// against the street mesh): its open area reaches OPEN_REACH metres into the buildings, a wall had to be 2.4 m thick
+/// along the line, and lines leaving the grid counted as open. This is the street mesh itself (the classic street the
+/// game draws) on a CELL x CELL grid, each cell a bit per SLAB metres of height: a surface in that box.
+pub struct StreetSight {
+    origin: [f32; 2],
+    cell: f32,
+    y0: f32,
+    slab: f32,
+    size: [usize; 2],
+    cells: Vec<u64>,
+}
+
+impl StreetSight {
+    pub fn load(path: &Path) -> Option<StreetSight> {
+        let data = std::fs::read(path).ok()?;
+        let f = |i: usize| f32::from_le_bytes(data[i..i + 4].try_into().unwrap());
+        let u = |i: usize| u32::from_le_bytes(data[i..i + 4].try_into().unwrap()) as usize;
+        if data.len() < 36 || &data[0..4] != b"W1SG" || u(4) != 1 {
+            return None;
+        }
+        let size = [u(28), u(32)];
+        let cells: Vec<u64> = data[36..].chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect();
+        (cells.len() == size[0] * size[1]).then_some(StreetSight { origin: [f(8), f(12)], cell: f(16), y0: f(20),
+                                                                  slab: f(24), size, cells })
+    }
+
+    /// Whether the line from `a` to `b` (MSB metres) is clear of the street's geometry. The first and last END metres
+    /// (the eye's and the target's own spot) don't count, and a surface blocks only where it reaches at least one more
+    /// slab above the line (so the ground under a line that dips near the ends and a kerb hide nothing) and over two
+    /// samples in a row (STEP apart).
+    pub fn sees(&self, a: [f32; 3], b: [f32; 3]) -> bool {
+        self.sees_ends(a, b, 0.8, 0.8)
+    }
+
+    /// `sees` with the free lengths at the eye's end (`end_a`) and the target's (`end_b`) given. Round 25 (H4): a wisp
+    /// uses its cloud's radius at its end, so a house corner within 0.8 m of it no longer lets it show.
+    pub fn sees_ends(&self, a: [f32; 3], b: [f32; 3], end_a: f32, end_b: f32) -> bool {
+        const STEP: f32 = 0.2;
+        let flat = ((b[0] - a[0]).powi(2) + (b[2] - a[2]).powi(2)).sqrt();
+        let length = (flat * flat + (b[1] - a[1]).powi(2)).sqrt();
+        let n = (length / STEP) as usize;
+        let mut run = 0;
+        for i in 1..n {
+            let t = i as f32 / n as f32;
+            if flat * t < end_a || flat * (1.0 - t) < end_b {
+                run = 0;
+                continue;
+            }
+            let p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+            let (x, z) = ((p[0] - self.origin[0]) / self.cell, (p[2] - self.origin[1]) / self.cell);
+            let s = ((p[1] - self.y0) / self.slab).floor();
+            let blocked = x >= 0.0 && z >= 0.0 && (x as usize) < self.size[0] && (z as usize) < self.size[1]
+                && (0.0..63.0).contains(&s)
+                && (self.cells[z as usize * self.size[0] + x as usize] >> s as u32) & 3 == 3;
+            run = if blocked { run + 1 } else { 0 };
+            if run >= 2 {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Round 22 (H6): grid cell (metres); a point within OPEN_REACH of a walk node is open (the nodes are 4.8 m apart,
+/// so every point between four of them is within 3.4 m).
+const CELL: f32 = 1.2;
+const OPEN_REACH: f32 = 3.6;
+
+impl Nav {
+    pub fn load(path: &Path) -> Nav {
+        let mut nav = Nav::default();
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        for line in text.lines() {
+            let f: Vec<&str> = line.split('\t').collect();
+            match (f.first().copied(), f.get(1).and_then(|v| v.parse::<f32>().ok()), f.get(2).and_then(|v| v.parse::<f32>().ok())) {
+                (Some("N"), Some(x), Some(z)) => nav.nodes.push([x, z]),
+                (Some("E"), Some(a), Some(b)) => {
+                    let (a, b) = (a as usize, b as usize);
+                    if a < nav.nodes.len() && b < nav.nodes.len() {
+                        nav.edges.resize(nav.nodes.len(), Vec::new());
+                        let d = dist(nav.nodes[a], nav.nodes[b]);
+                        nav.edges[a].push((b, d));
+                        nav.edges[b].push((a, d));
+                    }
+                }
+                _ => {}
+            }
+        }
+        nav.build_grid();
+        let sight = path.with_file_name("street_sight.bin");
+        nav.geometry = StreetSight::load(&sight);
+        tracing::info!("quest helper: walk graph {} nodes from {} (sight grid {}x{}); street geometry for sight {}",
+                       nav.nodes.len(), path.display(), nav.grid_size[0], nav.grid_size[1],
+                       match &nav.geometry {
+                           Some(g) => format!("{}x{} cells of {} m from {}", g.size[0], g.size[1], g.cell, sight.display()),
+                           None => format!("MISSING ({}): falling back to the walk graph", sight.display()),
+                       });
+        nav
+    }
+
+    fn build_grid(&mut self) {
+        if self.nodes.is_empty() {
+            return;
+        }
+        let margin = 10.0;
+        let lo = self.nodes.iter().fold([f32::MAX; 2], |m, n| [m[0].min(n[0]), m[1].min(n[1])]);
+        let hi = self.nodes.iter().fold([f32::MIN; 2], |m, n| [m[0].max(n[0]), m[1].max(n[1])]);
+        self.grid_origin = [lo[0] - margin, lo[1] - margin];
+        let size = [((hi[0] - lo[0] + 2.0 * margin) / CELL) as usize + 1, ((hi[1] - lo[1] + 2.0 * margin) / CELL) as usize + 1];
+        self.grid_size = size;
+        // 2 = near a node, 0 = outside (filled from the border), what stays 1 is a hole inside the street.
+        let mut grid = vec![1u8; size[0] * size[1]];
+        let r = (OPEN_REACH / CELL).ceil() as i64;
+        for n in &self.nodes {
+            let (cx, cz) = (((n[0] - self.grid_origin[0]) / CELL) as i64, ((n[1] - self.grid_origin[1]) / CELL) as i64);
+            for z in cz - r..=cz + r {
+                for x in cx - r..=cx + r {
+                    if x < 0 || z < 0 || x >= size[0] as i64 || z >= size[1] as i64 {
+                        continue;
+                    }
+                    let centre = [self.grid_origin[0] + (x as f32 + 0.5) * CELL, self.grid_origin[1] + (z as f32 + 0.5) * CELL];
+                    if dist(centre, *n) <= OPEN_REACH {
+                        grid[z as usize * size[0] + x as usize] = 2;
+                    }
+                }
+            }
+        }
+        let mut stack: Vec<usize> = Vec::new();
+        for x in 0..size[0] {
+            stack.extend([x, (size[1] - 1) * size[0] + x]);
+        }
+        for z in 0..size[1] {
+            stack.extend([z * size[0], z * size[0] + size[0] - 1]);
+        }
+        while let Some(i) = stack.pop() {
+            if grid[i] != 1 {
+                continue;
+            }
+            grid[i] = 0;
+            let (x, z) = (i % size[0], i / size[0]);
+            if x > 0 { stack.push(i - 1); }
+            if x + 1 < size[0] { stack.push(i + 1); }
+            if z > 0 { stack.push(i - size[0]); }
+            if z + 1 < size[1] { stack.push(i + size[0]); }
+        }
+        self.grid = grid;
+    }
+
+    /// Whether a point is open street (None off the grid or without a walk graph).
+    fn open(&self, p: [f32; 2]) -> Option<bool> {
+        let (x, z) = ((p[0] - self.grid_origin[0]) / CELL, (p[1] - self.grid_origin[1]) / CELL);
+        if self.grid.is_empty() || x < 0.0 || z < 0.0 || x >= self.grid_size[0] as f32 || z >= self.grid_size[1] as f32 {
+            return None;
+        }
+        Some(self.grid[z as usize * self.grid_size[0] + x as usize] != 0)
+    }
+
+    /// Round 22 (H6, Ryan: "I shouldn't be able to see the question mark and exclamation points through walls"):
+    /// whether the street lets the player at `a` see `b` (MSB x, z): false when the straight line crosses outside the
+    /// walk graph (a wall, a house, the hedges). Elden Ring has no public ray cast for this game version, so the
+    /// street's own walk area stands in for its walls. The first stretch while the player stands off the graph
+    /// (steps, a doorway) and the last END metres before the NPC (who may stand at the street's edge) don't count.
+    ///
+    /// Round 23 (H2, Ryan: "all of the name tags appear at once and they all disappear"): one closed sample (a corner
+    /// of the 1.2 m grid, the walk graph's ~1-2 m fit) hid every NPC behind the same corner at once; now a wall must be
+    /// WALL metres thick along the line (two samples or more in a row) to hide anything.
+    pub fn sees(&self, a: [f32; 2], b: [f32; 2]) -> bool {
+        const STEP: f32 = 0.8;
+        const END: f32 = 2.0;
+        const WALL: usize = 3;
+        let length = dist(a, b);
+        let n = (length / STEP).ceil().max(1.0) as usize;
+        let mut started = false;
+        let mut closed = 0;
+        for i in 1..n {
+            let t = i as f32 / n as f32;
+            if length * (1.0 - t) < END {
+                break;
+            }
+            let p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+            match self.open(p) {
+                None => return true,
+                Some(true) => {
+                    started = true;
+                    closed = 0;
+                }
+                Some(false) if started => {
+                    closed += 1;
+                    if closed >= WALL {
+                        return false;
+                    }
+                }
+                Some(false) => {}
+            }
+        }
+        true
+    }
+
+    /// Round 24 (H1): whether an eye at `a` sees `b` (MSB x, y, z): the street's geometry (StreetSight) when
+    /// street_sight.bin is there, else round 22's walk-graph test.
+    pub fn sees_3d(&self, a: [f32; 3], b: [f32; 3]) -> bool {
+        match &self.geometry {
+            Some(g) => g.sees(a, b),
+            None => self.sees([a[0], a[2]], [b[0], b[2]]),
+        }
+    }
+
+    /// Round 25 (H4): sees_3d with only `end_b` metres free at the target's end (a wisp's cloud radius).
+    pub fn sees_3d_near(&self, a: [f32; 3], b: [f32; 3], end_b: f32) -> bool {
+        match &self.geometry {
+            Some(g) => g.sees_ends(a, b, 0.8, end_b),
+            None => self.sees([a[0], a[2]], [b[0], b[2]]),
+        }
+    }
+
+    fn nearest(&self, p: [f32; 2]) -> Option<(usize, f32)> {
+        self.nodes.iter().enumerate().map(|(i, n)| (i, dist(*n, p))).min_by(|a, b| a.1.total_cmp(&b.1))
+            .filter(|(_, d)| *d <= NAV_REACH)
+    }
+
+    /// The walk from `a` to `b` along the graph (metres), or None when either end is off it or no path joins them.
+    pub fn walk(&self, a: [f32; 2], b: [f32; 2]) -> Option<f32> {
+        let ((start, da), (goal, db)) = (self.nearest(a)?, self.nearest(b)?);
+        let mut best = vec![f32::INFINITY; self.nodes.len()];
+        let mut heap = BinaryHeap::new();
+        best[start] = 0.0;
+        heap.push((std::cmp::Reverse((0.0f32).to_bits()), start));
+        while let Some((std::cmp::Reverse(bits), i)) = heap.pop() {
+            let d = f32::from_bits(bits);
+            if i == goal {
+                return Some(da + d + db);
+            }
+            if d > best[i] {
+                continue;
+            }
+            for &(j, w) in self.edges.get(i).map(|e| e.as_slice()).unwrap_or(&[]) {
+                if d + w < best[j] {
+                    best[j] = d + w;
+                    heap.push((std::cmp::Reverse((d + w).to_bits()), j));
+                }
+            }
+        }
+        None
+    }
+}
+
+fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+}
+
+/// Round 20 (Q8): the steps from the player to the goal (MSB positions): the walk along the graph, else straight.
+pub fn steps(nav: &Nav, player: [f32; 3], goal: [f32; 3]) -> u32 {
+    let (a, b) = ([player[0], player[2]], [goal[0], goal[2]]);
+    let metres = nav.walk(a, b).unwrap_or_else(|| dist(a, b));
+    (metres / STEP).round() as u32
+}
+
+/// QuestHelperHud's view: the goal's name in txtGoalName, the steps to it in txtDistance (round 20), no button.
+pub fn view(layout: &Layout, active: &Active, steps: u32) -> View {
     let mut v = View::default();
     v.set(layout.find("txtGoalName"), format!("<center>{}</center>", active.goal));
-    v.set(layout.find("txtDistance"), String::new());
+    v.set(layout.find("txtDistance"), format!("<center>{steps}</center>"));
     v.show(layout.find("btnQuestHelper"), false);
     v
 }
 
-/// Draws the arrow (screen pixels: `origin` and scale `s` from placement).
-pub fn draw_arrow(draw: &DrawListMut, textures: &Textures, layout: &Layout, bearing: f32, origin: [f32; 2], s: f32) {
-    let Some((texture, _)) = textures.get(ARROW) else { return };
-    let q = arrow_quad(layout, bearing).map(|p| [origin[0] + p[0] * s, origin[1] + p[1] * s]);
-    draw.add_image_quad(texture, q[0], q[1], q[2], q[3])
-        .uv([0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0])
-        .col(ImColor32::WHITE)
-        .build();
+/// Draws the arrow (screen pixels: `origin` and scale `s` from placement): round 24 (H2) Wizard101's flat yellow
+/// arrow with its olive underside showing as thickness.
+pub fn draw_arrow(draw: &DrawListMut, layout: &Layout, bearing: f32, origin: [f32; 2], s: f32, alpha: f32) {
+    let screen = |p: [f32; 2]| [origin[0] + p[0] * s, origin[1] + p[1] * s];
+    let a = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
+    for (corners, rgb) in arrow_faces(layout, bearing) {
+        let colour = ImColor32::from_rgba(rgb[0], rgb[1], rgb[2], a);
+        let points: Vec<[f32; 2]> = corners.into_iter().map(screen).collect();
+        draw.add_polyline(points, colour).filled(true).build();
+    }
 }

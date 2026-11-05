@@ -22,7 +22,16 @@ meshes have no links across tile borders, so all five walked to the seam and sto
 patrol point of our mobs' routes that lies outside the tile most of its route is in, or within SEAM_MARGIN of that
 tile's border, back inside by SEAM_MARGIN, and our mobs standing outside it with them.
 
-Usage: python msb_more_mobs.py map.msb.dcx out.msb.dcx
+Even spacing (round 28, W1, Ryan: "Lost Souls overlap each other"): copies used to stand on patrol point
+round(j * n / PER_ROUTE), and the W101 points are unevenly spaced, so two members of a route could start 3.7 m apart
+(c4180_9016 / 9017 on route 16, segments 10.1 / 3.7 / 8.0 / 10.6 / 12.6 m) or 6.1 m apart while others were 15 m
+apart (route 13). Each member walks the same loop at the same speed from where it stands, so the gaps it starts with
+are the gaps it keeps. even_spacing puts copy j at arc length j * L / PER_ROUTE along the original's loop (L = loop
+length, measured from the original's point 0, the original's own spot), on the segment between two points, facing
+the next point, and turns its own route so it starts at that next point. Rerunning gives the same result.
+
+Usage: python msb_more_mobs.py map.msb.dcx out.msb.dcx            (adds missing copies, then spaces them)
+       python msb_more_mobs.py --even map.msb.dcx out.msb.dcx     (only even_spacing, on a map that has the copies)
 """
 
 import math
@@ -100,6 +109,7 @@ def more_mobs(raw, per_route=PER_ROUTE):
         report.append(f"{entry_name(mob)} ({mob_entity}) route {route}: + {ids}")
     report += spread_routes(lists)
     report += off_seams(lists)
+    report += even_spacing(lists)
     count_users(lists)
     check_grouped(lists)
     _check_type_indices(_list(lists, "PARTS_PARAM_ST").entries)
@@ -147,6 +157,65 @@ def spread_routes(lists):
         struct.pack_into("<h", e, td + WALK_ROUTE, new_index)
         parts[k] = bytes(e)
         report.append(f"{entry_name(e)}: own route {new_index} (route {route} from point {start})")
+    return report
+
+
+def even_spacing(lists, per_route=PER_ROUTE):
+    """Copies spread evenly by arc length along their original's loop (see the module doc). Returns report lines."""
+    parts = _list(lists, "PARTS_PARAM_ST").entries
+    events = _list(lists, "EVENT_PARAM_ST").entries
+    regions = _list(lists, "POINT_PARAM_ST").entries
+    patrols = [k for k, e in enumerate(events) if u32(e, 0x0C) == PATROL_EVENT]
+
+    def route_of(e):
+        return struct.unpack_from("<h", e, q(e, 0x68) + WALK_ROUTE)[0]
+
+    def entity(e):
+        return u32(e, q(e, 0x60))
+
+    report = []
+    by_entity = {entity(e): k for k, e in enumerate(parts) if u32(e, 0x0C) == ENEMY}
+    for m, mob_entity in enumerate(FIRST_MOBS):
+        if mob_entity not in by_entity:
+            continue
+        mob = parts[by_entity[mob_entity]]
+        source = events[patrols[route_of(mob)]]
+        loop = [i for i in struct.unpack_from("<64h", source, q(source, 0x20) + 16) if i >= 0]
+        points = [struct.unpack_from("<3f", regions[i], 0x14) for i in loop]
+        n = len(points)
+        segs = [math.dist(points[k], points[(k + 1) % n]) for k in range(n)]
+        total = sum(segs)
+        starts = [0.0]
+        for j in range(1, per_route):
+            copy_entity = FIRST_NEW_ENTITY + m * (per_route - 1) + j - 1
+            if copy_entity not in by_entity:
+                continue
+            k_part = by_entity[copy_entity]
+            target = j * total / per_route
+            k, run_ = 0, 0.0
+            while run_ + segs[k] < target - 1e-6:
+                run_ += segs[k]
+                k += 1
+            t = (target - run_) / segs[k] if segs[k] > 0 else 0.0
+            a, b = points[k], points[(k + 1) % n]
+            here = tuple(a[c] + (b[c] - a[c]) * t for c in range(3))
+            nxt = (k + 1) % n
+            e = bytearray(parts[k_part])
+            struct.pack_into("<3f", e, 0x20, *here)
+            struct.pack_into("<3f", e, 0x2C, 0.0, facing(here, b), 0.0)
+            parts[k_part] = bytes(e)
+            own = events[patrols[route_of(e)]]
+            if own is source:
+                raise SystemExit(f"{entry_name(e)} still shares route {route_of(e)}: run spread_routes first")
+            turned = loop[nxt:] + loop[:nxt]
+            own = bytearray(own)
+            struct.pack_into("<64h", own, q(own, 0x20) + 16, *(turned + [-1] * (64 - len(turned))))
+            events[patrols[route_of(e)]] = bytes(own)
+            starts.append(target)
+            report.append(f"{entry_name(e)} ({copy_entity}): {target:.1f} m along {entry_name(mob)}'s {total:.1f} m loop "
+                          f"at ({here[0]:.1f}, {here[1]:.1f}, {here[2]:.1f}), segment {k}->{nxt}, route starts at point {nxt}")
+        gaps = [round((b - a) % total, 1) for a, b in zip(starts, starts[1:] + [starts[0] + total])]
+        report.append(f"{entry_name(mob)} route {route_of(mob)}: loop {total:.1f} m, {len(starts)} members, gaps {gaps}")
     return report
 
 
@@ -206,8 +275,18 @@ def _check_type_indices(parts):
 def main():
     from msb_add_garden import run
 
+    even_only = "--even" in sys.argv
+    if even_only:
+        sys.argv.remove("--even")
+
     def place(raw):
-        out, report = more_mobs(raw)
+        if even_only:
+            header, lists = read_msb(raw)
+            report = even_spacing(lists)
+            check_grouped(lists)
+            out = write_msb(header, lists)
+        else:
+            out, report = more_mobs(raw)
         print("\n".join(report))
         return out
     run(place)

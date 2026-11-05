@@ -24,7 +24,9 @@ For every map given (m60 tiles of all three sizes, project copies or vanilla):
     deleted within FLYING_MARGIN times the radius, as they wander in.
 Map pieces and collision of other tiles, and anything already sunk, are left alone, so rerunning changes nothing more.
 
-Usage: python dome_clear.py home.msb.dcx dome.geombnd.dcx out_dir map.msb[.dcx]... [--apply]
+--trees (round 21) also sinks every tree asset (TREES) in the maps given, inside the dome or not (sink_trees).
+
+Usage: python dome_clear.py home.msb.dcx dome.geombnd.dcx out_dir map.msb[.dcx]... [--trees] [--apply]
   home: m60_42_36_00 (the dome part's transform); dome: the project's asset/aeg/aeg030/aeg030_523.geombnd.dcx.
   Prints one line per finding; with --apply writes every changed map to out_dir as DFLT DCX.
 """
@@ -60,6 +62,7 @@ FLYING = {"c6001", "c6040", "c6070", "c6072", "c6080", "c6081", "c6082",  # eagl
           "c5401", "c5430", "c5460", "c5470", "c5471", "c5472",  # DLC eagle, owl, murre, dragonflies
           "c4200", "c4201", "c5530", "c4210", "c4560", "c4561", "c5090",  # bats, warhawk, giant crows, gravebird
           "c4980", "c6260", "c4500", "c4505"}  # death rite birds, flying dragons
+TREES = ("AEG800", "AEG801")  # SpeedTree trees (sink_trees)
 KIND = {2: "enemy", 9: "dummy asset", 10: "dummy enemy", 13: "asset"}
 
 
@@ -200,19 +203,57 @@ def clear(name, raw, dome, tiles, margin=MARGIN, apply=False):
         struct.pack_into("<3f", e, 0x20, x, y - SINK, z)
         parts[k] = bytes(e)
     if delete:
-        events = _list(lists, "EVENT_PARAM_ST").entries
-        drop = [i for i, ev in enumerate(events) if _orphaned(ev, delete)]
-        for i in reversed(drop):
-            lines.append(f"{name}: event {entry_name(events[i])} (type {u32(events[i], 0x0C)}) removed with its parts")
-            del events[i]
-        _renumber(events, 0x0C)
-        gone = sorted(delete)
-        remap_parts(lists, lambda i: -1 if i in delete else i - sum(1 for g in gone if g < i))
-        for k in reversed(gone):
-            del parts[k]
-        _renumber(parts, 0x0C)
-        count_users(lists)
+        delete_parts(name, lists, delete, lines)
     check_grouped(lists)
+    return write_msb(header, lists), lines
+
+
+def delete_parts(name, lists, delete, lines):
+    """Delete the parts at indices `delete` the way msb_audit.py does: events left without their parts go, every
+    part-index field is remapped, model user counts are redone."""
+    parts = _list(lists, "PARTS_PARAM_ST").entries
+    events = _list(lists, "EVENT_PARAM_ST").entries
+    drop = [i for i, ev in enumerate(events) if _orphaned(ev, delete)]
+    for i in reversed(drop):
+        lines.append(f"{name}: event {entry_name(events[i])} (type {u32(events[i], 0x0C)}) removed with its parts")
+        del events[i]
+    _renumber(events, 0x0C)
+    gone = sorted(delete)
+    remap_parts(lists, lambda i: -1 if i in delete else i - sum(1 for g in gone if g < i))
+    for k in reversed(gone):
+        del parts[k]
+    _renumber(parts, 0x0C)
+    count_users(lists)
+
+
+def sink_trees(name, raw, apply=False):
+    """Round 21 (Ryan: "I can still see the base Elden Ring trees in the distance. They might disappear when I get
+    closer"): every vanilla tree asset (TREES models: SpeedTree trees AEG800 / AEG801) still standing in map `name`,
+    at any distance, is moved SINK m down; the near trees inside the dome were already sunk, these are the ones
+    outside it. The LOD maps (levels 01/02) hold no tree assets: their far-view ground pieces (GROUND names) carry the
+    distant forests and give way to the near tiles as the player walks closer, so every one still up there is sunk
+    too (they have no collision; near tiles' ground and collision outside the dome stay). (new bytes or None, lines)."""
+    header, lists = read_msb(raw)
+    parts = _list(lists, "PARTS_PARAM_ST").entries
+    models = [entry_name(m) for m in _list(lists, "MODEL_PARAM_ST").entries]
+    lines = []
+    for k, e in enumerate(parts):
+        kind = u32(e, 0x0C)
+        x, y, z = struct.unpack_from("<3f", e, 0x20)
+        if y < -SINK / 2 or ours(e):
+            continue
+        if kind == MAP_PIECE and not name.endswith("_00") and GROUND.match(entry_name(e)):
+            what = "far-view ground (trees baked in)"
+        elif kind in (ASSET, DUMMY_ASSET) and u32(e, 0x14) >= 0 and models[u32(e, 0x14)].startswith(TREES):
+            what = "tree"
+        else:
+            continue
+        lines.append(f"{name}: {what} {entry_name(e)} at ({x:.1f}, {y:.1f}, {z:.1f}): sunk {SINK:.0f} m")
+        e = bytearray(e)
+        struct.pack_into("<3f", e, 0x20, x, y - SINK, z)
+        parts[k] = bytes(e)
+    if not apply or not lines:
+        return None, lines
     return write_msb(header, lists), lines
 
 
@@ -231,6 +272,9 @@ def main():
         raw = load(path)
         assert write_msb(*read_msb(raw)) == raw, f"{name} does not round-trip"
         new, lines = clear(name, raw, dome, tiles, apply=apply)
+        if "--trees" in sys.argv:
+            more, tree_lines = sink_trees(name, new or raw, apply=apply)
+            new, lines = more or new, lines + tree_lines
         print("\n".join(lines) or f"{name}: nothing found")
         if new is not None:
             Path(out).mkdir(parents=True, exist_ok=True)

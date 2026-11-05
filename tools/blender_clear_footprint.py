@@ -8,6 +8,7 @@ moves the parts footprint_clear.py picks 1000 m down. Project maps are edited in
 written to project/map/mapstudio/footprint_clear.txt. Safe to rerun. Reload the maps in Smithbox before saving them.
 """
 
+import os
 import importlib
 import struct
 import sys
@@ -16,7 +17,7 @@ from pathlib import Path
 
 from soulstruct.dcx import decompress
 
-ROOT = Path.home() / "Documents" / "game_modding"
+ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
 import msb_floor  # noqa: E402
 import footprint_clear  # noqa: E402
@@ -24,7 +25,7 @@ import footprint_clear  # noqa: E402
 for module in (msb_floor, footprint_clear):
     importlib.reload(module)
 
-GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game") / "map" / "mapstudio"
+GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / "map" / "mapstudio"
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "map" / "mapstudio"
 CLASSIC = ROOT / "reference" / "w101" / "converted_classic"
 OBJ = next(p for p in (CLASSIC / "WC_Z06_Unicorn_Way_Classic_edited.obj", CLASSIC / "WC_Z06_Unicorn_Way_Classic.obj")

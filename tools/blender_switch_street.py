@@ -11,6 +11,7 @@ Run in Blender's Scripting tab (it only uses Soulstruct for the game's compressi
 Console. Building the collision takes about a minute. Relaunch the game afterwards.
 """
 
+import os
 import importlib
 import re
 import shutil
@@ -21,7 +22,7 @@ from pathlib import Path
 from soulstruct.containers import Binder
 from soulstruct.dcx import compress, decompress
 
-ROOT = Path.home() / "Documents" / "game_modding"
+ROOT = Path(os.environ.get("W101ER_ROOT", Path.home() / "Documents" / "game_modding"))
 sys.path.insert(0, str(ROOT / "eldenring-w101" / "tools"))
 import dds_color  # noqa: E402
 import flver_build  # noqa: E402
@@ -31,8 +32,10 @@ import flver_textures  # noqa: E402
 import hkx_collision  # noqa: E402
 import hkx_tag  # noqa: E402
 import tpf  # noqa: E402
+import w101_window_states  # noqa: E402
 
-for module in (dds_color, flver_fix, flver_build, flver_floor, flver_textures, hkx_tag, hkx_collision, tpf):
+for module in (dds_color, flver_fix, flver_build, flver_floor, flver_textures, hkx_tag, hkx_collision, tpf,
+               w101_window_states):
     importlib.reload(module)
 
 STYLE = "classic"  # "classic" or "hd"
@@ -40,9 +43,19 @@ STYLE = "classic"  # "classic" or "hd"
 # brighter (1.0 and 1.0 keep them as they are). See dds_color.py.
 SATURATION = 1.4  # sRGB textures (tpf.build_tpf) at 1.4x saturation: Ryan, 2026-10-27, wanted more than the true colours
 BRIGHTNESS = 1.0
+# Round 35 (G13, Ryan: "the actual road is a little bit too dark, but the sidewalk is fine"; round35/color_ref
+# w101_road.png vs er_road.png). Screen colour over texture colour (same pixel classes in the texture, ours after the
+# 1.4 saturation), in linear light: W101 lights every surface alike, cobbles 1.57/1.30/0.65, green bands 1.77/1.52/0.80,
+# sidewalk flagstones 1.60/1.37/0.70. Ours: flagstones 1.13/1.15/0.65 but cobbles 0.91/0.82/0.54, bands 0.70/0.67/0.47,
+# and the opaque grass R/G 0.86-0.95/0.59-0.71. The sidewalk (WC_Sidewalk_Unicorn) is the only one of them with
+# transparent texels, so it alone gets the alpha-tested material m60_fort_215 (M_AMSN_V__Edge); the road and grass get
+# the opaque m60_fort_220, which draws the same texture under the same light about 0.78x as bright (cobbles 0.80 /
+# 0.71 / 0.83 of the flagstones' gains). Opaque textures are now brightened to make up for it: 1.12 on the sRGB values
+# is 1.28x in linear light (1.12^2.2).
+OPAQUE_BRIGHTNESS = 1.12
 
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset"
-GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset")
+GAME = Path(os.environ.get("ER_GAME", r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game")) / r"asset"
 GEOMBND = PROJECT / "aeg" / "aeg030" / "aeg030_518.geombnd.dcx"
 SINGLE_MESH = GEOMBND.with_name(GEOMBND.name + ".before_textures")  # our HD export: layout, bone and binder template
 COLLISION = PROJECT / "aeg" / "aeg030" / "aeg030_518_l.geomhkxbnd.dcx"
@@ -56,6 +69,16 @@ CLASSIC = ROOT / "reference" / "w101" / "converted_classic"
 EDITED = CLASSIC / "WC_Z06_Unicorn_Way_Classic_edited.obj"
 OBJ = EDITED if EDITED.exists() else CLASSIC / "WC_Z06_Unicorn_Way_Classic.obj"
 MTL = OBJ.with_suffix(".mtl")
+# Round 26 (W2): Wizard101's per-building window states (w101_window_states.py output, Wizard101 data).
+WINDOW_STATES = CLASSIC / "window_states.tsv"
+# Wizard101's own vertex normals of the classic zone (nif_normals.py, from ClassicMode-WC_Streets-WC_Unicorn.wad's
+# WC_Z06_Unicorn_Way.nif). Without them every triangle got its own flat normal and Elden Ring's sun lit each one as
+# a facet (round 24: trees with one triangle near white and the next much darker); with them the street shades
+# smoothly like W101. If the file is missing, normals are averaged from the geometry instead (close, not exact).
+NORMALS = CLASSIC / "WC_Z06_Unicorn_Way_Classic.normals"
+# Blue channel of the flat normal map AET030_518_n = Elden Ring's glossiness (_n: red/green normal, blue inverted
+# roughness). It was 64 (a faint sheen); classic W101 has no specular at all (no NiSpecularProperty in the zone), so 0.
+GLOSS = 0
 OUTPUTS = [GEOMBND, COLLISION, *TEXTURES]
 
 
@@ -77,6 +100,41 @@ def tunnel_inside(positions, face):
     return abs(x) < 4.0 and 11.35 < z < 16.0 and y < 5.5
 
 
+# Round 35 (G12/G12b/G12c): the Stranded Graveyard (m18) door stands in the Commons gatehouse, so parts of the
+# gatehouse reach behind the door plane into the graveyard: its arch bases, the tower plinths beside the door and the
+# side walls of the gate passage (x +-7, back to 14 m, through the room behind the door). Cutting them did not work:
+# a cut wide enough left holes in the street (G12, commons_holes.png), and boxes guessed from m18's props left shards
+# against its walls (G12b, door_clip3.png). Ryan: "Can you just move these vertexes back, like translate them so
+# they're like inside of the Elden Ring wall so they're not visible?"
+# So nothing is cut. street_graveyard_fix.py (run outside Blender) reads the graveyard's real walls: the render meshes
+# of the m18 assets around the door, placed by m18_00_00_00.msb (its map collision has nothing at that height). For
+# each column across the door it finds where the graveyard's open space ends toward the street, and moves every
+# street vertex behind the door along the door's normal, toward the street (x and y stay), far enough that each of
+# its triangles lies inside the walls or in front of the door plane at every point. Neighbouring triangles stay
+# joined. Its output, graveyard_fix.tsv next to the classic OBJ, is applied here; without it the street is built as
+# it is.
+GRAVEYARD_FIX = CLASSIC / "graveyard_fix.tsv"
+
+
+def graveyard_fix(positions, path):
+    """Round 35 (G12c): apply street_graveyard_fix.py's output, lines "v x y z x' y' z'" (OBJ coordinates: a vertex
+    and where it moves; every vertex at that position moves). Returns (vertices moved, lines in the file)."""
+    key = lambda p: tuple(round(c, 4) for c in p)
+    moves = {}
+    for line in path.read_text().splitlines():
+        cols = line.split()
+        if cols and cols[0] == "v":
+            values = [float(c) for c in cols[1:7]]
+            moves[key(values[:3])] = tuple(values[3:])
+    moved = 0
+    for i, p in enumerate(positions):
+        target = moves.get(key(p))
+        if target is not None:
+            positions[i] = target
+            moved += 1
+    return moved, len(moves)
+
+
 def hd_copy(path):
     return path.with_name(path.name + ".hd")
 
@@ -92,12 +150,28 @@ def build_classic():
     print(f"Building from {OBJ.name}")
     positions, uvs, faces = flver_build.parse_obj(OBJ)
     walls = [f for f in faces if backdrop(positions, f)]
-    # Your own edit decides for itself what's left of the archway; only the converted original gets it cut.
-    cut = (lambda f: False) if OBJ == EDITED else (lambda f: tunnel_inside(positions, f))
-    tunnel = [f for f in faces if cut(f)]
-    faces = [f for f in faces if not backdrop(positions, f) and not cut(f)]
+    # Round 33 (G9, Ryan: "from the graveyard side of the gate, W101 street models poke through the wall"): the cut
+    # used to be skipped for your own edit ("it decides for itself what's left of the archway"), but your edit
+    # (WC_Z06_Unicorn_Way_Classic_edited.obj, 2026-10-21) still has 69 triangles inside the archway box (30 grass,
+    # 30 street, 9 WC_Wall_01), the ramp and walls that stick into the Stranded Graveyard's lift landing behind the
+    # door. Both OBJs get it cut now.
+    tunnel = [f for f in faces if tunnel_inside(positions, f)]
+    faces = [f for f in faces if not backdrop(positions, f) and not tunnel_inside(positions, f)]
     print(f"Left out {len(walls)} triangles of the zone's backdrop walls and {len(tunnel)} inside the Commons archway")
-    single, materials = flver_build.build_single_mesh(template, positions, uvs, faces)
+    if GRAVEYARD_FIX.exists():  # round 35 (G12c)
+        moved, listed = graveyard_fix(positions, GRAVEYARD_FIX)
+        print(f"Stranded Graveyard behind the door: {moved} vertices moved out of it ({listed} positions listed)")
+    else:
+        print(f"No {GRAVEYARD_FIX.name}: the street pokes into the Stranded Graveyard (run street_graveyard_fix.py)")
+    # Round 26 (W2): one window state per building (w101_window_states.py): lit (_on) where a door leads in, dark
+    # (_off) elsewhere, no blue _quest copies (that is asset aeg030_529, switched by its event).
+    if WINDOW_STATES.exists():
+        drop, counts = w101_window_states.window_filter(positions, uvs, faces, w101_window_states.load(WINDOW_STATES))
+        faces = [f for k, f in enumerate(faces) if k not in drop]
+        print(f"Window states: {len(drop)} window triangles left out; lit: "
+              f"{sorted(w101_window_states.ENTERABLE)}; matched {sum(counts.values())}")
+    else:
+        print(f"No {WINDOW_STATES}: every window state is drawn on top of the others (run w101_window_states.py)")
     texture_of_material = flver_textures.parse_mtl(MTL)
     if OBJ == EDITED:
         # Blender may drop a texture it couldn't load or rename a material "name.001"; the original MTL fills in.
@@ -109,9 +183,21 @@ def build_classic():
         missing = {m for m, _ in faces} - set(texture_of_material)
         if missing:
             print(f"No texture for {len(missing)} materials of your edit: {sorted(m or '' for m in missing)[:5]}")
+    reference = flver_build.read_normals(NORMALS) if NORMALS.exists() else None
+    if reference is None:
+        print(f"No {NORMALS.name}: normals are smoothed from the geometry instead of W101's own")
+    drawn = [m in texture_of_material for m, _ in faces]  # untextured faces are dropped by split_materials anyway
+    normals, used = flver_build.corner_normals(positions, [f for f, d in zip(faces, drawn) if d], reference)
+    normals = iter(normals)
+    normals = [next(normals) if d else None for d in drawn]
+    print(f"Smooth normals: {used['w101']} corners from W101, {used['smoothed']} averaged from the geometry")
+    single, materials = flver_build.build_single_mesh(template, positions, uvs, faces, normals=normals)
     stems = sorted(set(texture_of_material.values()))
-    dds = [dds_color.boost((CLASSIC / "textures" / f"{stem}.dds").read_bytes(), SATURATION, BRIGHTNESS)
-           for stem in stems]
+    raw = [(CLASSIC / "textures" / f"{stem}.dds").read_bytes() for stem in stems]
+    alpha = {i for i, data in enumerate(raw) if tpf.has_alpha(data)}
+    # Round 35 (G13): opaque textures (m60_fort_220) get OPAQUE_BRIGHTNESS on top; alpha-tested ones (m60_fort_215) not.
+    dds = [dds_color.boost(data, SATURATION, BRIGHTNESS * (1.0 if i in alpha else OPAQUE_BRIGHTNESS))
+           for i, data in enumerate(raw)]
     alpha = {i for i, data in enumerate(dds) if tpf.has_alpha(data)}
     face_textures = [stems.index(texture_of_material[m]) if m in texture_of_material else None for m in materials]
     split = flver_textures.split_materials(single, vanilla, face_textures, stems, alpha)
@@ -122,7 +208,7 @@ def build_classic():
     print(f"Wrote {GEOMBND}: {len(faces)} triangles, {len(stems)} textures ({len(alpha)} with transparency)")
 
     textures = [(flver_textures.texture_name(i), data) for i, data in enumerate(dds)]
-    textures.append((flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, 64)))
+    textures.append((flver_textures.FLAT_NORMAL, tpf.solid_dds(128, 128, GLOSS)))
     _, dcx_type = decompress(AET_TEMPLATE)
     packed = compress(tpf.build_tpf(textures), dcx_type)
     for path in TEXTURES:
