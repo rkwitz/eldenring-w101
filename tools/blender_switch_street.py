@@ -42,6 +42,16 @@ STYLE = "classic"  # "classic" or "hd"
 # brighter (1.0 and 1.0 keep them as they are). See dds_color.py.
 SATURATION = 1.4  # sRGB textures (tpf.build_tpf) at 1.4x saturation: Ryan, 2026-10-27, wanted more than the true colours
 BRIGHTNESS = 1.0
+# Round 35 (G13, Ryan: "the actual road is a little bit too dark, but the sidewalk is fine"; round35/color_ref
+# w101_road.png vs er_road.png). Screen colour over texture colour (same pixel classes in the texture, ours after the
+# 1.4 saturation), in linear light: W101 lights every surface alike, cobbles 1.57/1.30/0.65, green bands 1.77/1.52/0.80,
+# sidewalk flagstones 1.60/1.37/0.70. Ours: flagstones 1.13/1.15/0.65 but cobbles 0.91/0.82/0.54, bands 0.70/0.67/0.47,
+# and the opaque grass R/G 0.86-0.95/0.59-0.71. The sidewalk (WC_Sidewalk_Unicorn) is the only one of them with
+# transparent texels, so it alone gets the alpha-tested material m60_fort_215 (M_AMSN_V__Edge); the road and grass get
+# the opaque m60_fort_220, which draws the same texture under the same light about 0.78x as bright (cobbles 0.80 /
+# 0.71 / 0.83 of the flagstones' gains). Opaque textures are now brightened to make up for it: 1.12 on the sRGB values
+# is 1.28x in linear light (1.12^2.2).
+OPAQUE_BRIGHTNESS = 1.12
 
 PROJECT = ROOT / "reference" / "eldenring" / "project" / "asset"
 GAME = Path(r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game\asset")
@@ -182,8 +192,11 @@ def build_classic():
     print(f"Smooth normals: {used['w101']} corners from W101, {used['smoothed']} averaged from the geometry")
     single, materials = flver_build.build_single_mesh(template, positions, uvs, faces, normals=normals)
     stems = sorted(set(texture_of_material.values()))
-    dds = [dds_color.boost((CLASSIC / "textures" / f"{stem}.dds").read_bytes(), SATURATION, BRIGHTNESS)
-           for stem in stems]
+    raw = [(CLASSIC / "textures" / f"{stem}.dds").read_bytes() for stem in stems]
+    alpha = {i for i, data in enumerate(raw) if tpf.has_alpha(data)}
+    # Round 35 (G13): opaque textures (m60_fort_220) get OPAQUE_BRIGHTNESS on top; alpha-tested ones (m60_fort_215) not.
+    dds = [dds_color.boost(data, SATURATION, BRIGHTNESS * (1.0 if i in alpha else OPAQUE_BRIGHTNESS))
+           for i, data in enumerate(raw)]
     alpha = {i for i, data in enumerate(dds) if tpf.has_alpha(data)}
     face_textures = [stems.index(texture_of_material[m]) if m in texture_of_material else None for m in materials]
     split = flver_textures.split_materials(single, vanilla, face_textures, stems, alpha)

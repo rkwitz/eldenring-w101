@@ -131,7 +131,7 @@ FLAT_LIGHTING = True
 # 2026-10-26: the Wizard101 textures are now sRGB at their true colours (tpf.build_tpf; before they were read as
 # linear with a 1.3/1.1 boost), which decodes about 2.5x darker on average (street 2.5, room 2.6, garden 2.25,
 # interiors 2.5), so both lights are 2.5x what they were (1.5, 0.8) to keep the zone as bright as Ryan last saw it.
-AMBIENT = 4.05  # round 34 (see OVERHEAD): was 2.6. 3.3 "still too bright" (2026-10-27 round 9, ~21% down); 3.75 "a little too bright" (2026-10-27); 0.5 looked very dark (2026-10-23), 0.8 still "like lighting is off" (2026-10-25)
+AMBIENT = 4.94  # round 35: 4.05 (see OVERHEAD); round 34 (see OVERHEAD): was 2.6. 3.3 "still too bright" (2026-10-27 round 9, ~21% down); 3.75 "a little too bright" (2026-10-27); 0.5 looked very dark (2026-10-23), 0.8 still "like lighting is off" (2026-10-25)
 # Round 33 (G4, Ryan's same-spot screenshots round33/ref/2 (W101) and 3 (ours)): measured on the near flagstone path
 # (texture WC_Street30, sRGB mean 117,112,91): W101 shows 140,134,71, we showed 220,206,173. In linear light that is
 # a gain of 4.0 (all channels) for us against 1.49 / 1.31 / 0.61 for W101: ours 2.7x too bright on the ground and
@@ -146,7 +146,11 @@ AMBIENT = 4.05  # round 34 (see OVERHEAD): was 2.6. 3.3 "still too bright" (2026
 # linear light; the ground's median luminance is 0.136 vs 0.085 (1.6x). So both lights go up 1.56x, colour unchanged:
 # AMBIENT 2.6 -> 4.05, OVERHEAD 0.43 -> 0.67 (ground light 2.31 / 2.04 / 1.34 per channel, still below the round 32
 # 4.0 white that Ryan found washed out).
-OVERHEAD = 0.67  # round 33: 0.43
+# Round 35 (G13, round35/color_ref): the sidewalk flagstones (the only alpha-tested street texture, which round 34
+# measured on) still came out 1.22x too dark in linear luminance (W101 211,172,104, ours 189,159,92), so both lights
+# go up 1.22x again: AMBIENT 4.05 -> 4.94, OVERHEAD 0.67 -> 0.82 (the opaque street textures get their own 1.28x in
+# blender_switch_street.OPAQUE_BRIGHTNESS).
+OVERHEAD = 0.82  # round 34: 0.67, round 33: 0.43
 OVERHEAD_COLOUR = (0.965, 0.805, 0.400)
 # Elden Ring's eye adaptation (auto exposure) re-exposes the screen by what fills the view: with a big glowing sky it
 # darkened everything, and the same glow looked different by where you looked. FIXED_EXPOSURE turns it off in every
