@@ -136,10 +136,10 @@ The author edited the street in Blender and exported his whole scene as `WC_Z06_
 `blender_switch_street.py` uses `_edited.obj` when it exists and the converted OBJ otherwise. `obj_patch.py` recreates his file from your two converted OBJs:
 
 ```
-python obj_patch.py apply WC_Z06_Unicorn_Way_Classic_edited.objpatch.gz reference\w101\converted_classic\WC_Z06_Unicorn_Way_Classic_edited.obj reference\w101\converted_classic\WC_Z06_Unicorn_Way_Classic.obj reference\w101\converted\WC_Z06_Unicorn_Way.obj
+python obj_patch.py apply eldenring-w101\patches\street\WC_Z06_Unicorn_Way_Classic_edited.objpatch.gz reference\w101\converted_classic\WC_Z06_Unicorn_Way_Classic_edited.obj reference\w101\converted_classic\WC_Z06_Unicorn_Way_Classic.obj reference\w101\converted\WC_Z06_Unicorn_Way.obj
 ```
 
-The result is byte for byte his file (md5 `f6aab2eb…`). Copy `WC_Z06_Unicorn_Way_Classic.mtl` to `_edited.mtl`; the build fills in missing materials from the original MTL. The patch file is not in this repository (see Known gaps). Without it, delete `_edited.obj` and the build cuts the tunnel itself.
+The result is byte for byte his file (md5 `f6aab2eb…`). Copy `WC_Z06_Unicorn_Way_Classic.mtl` to `_edited.mtl`; the build fills in missing materials from the original MTL. The patch is in `patches/street/`.
 
 Then move the street's vertices out of the Stranded Graveyard. This needs only the game files and your OBJ:
 
@@ -201,7 +201,7 @@ Run the same commands on `item.msgbnd` and `menu.msgbnd` as well. The game reads
 Run this step after step 8: it needs `npc_dialogue.json`, `er_recipes.tsv` and `shop.tsv` from that step.
 
 ```
-python build_map.py <out folder> --dialogue npc_dialogue.json --recipes ORBS\book\er\er_recipes.tsv --shop ORBS\book\er\shop.tsv --patches <folder of *.msbpatch.gz> [--compare <project>]
+python build_map.py <out folder> --dialogue npc_dialogue.json --recipes ORBS\book\er\er_recipes.tsv --shop ORBS\book\er\shop.tsv --patches eldenring-w101\patches\maps [--compare <project>]
 ```
 
 Then copy `<out folder>\event` and `<out folder>\map` over the project folder.
@@ -325,11 +325,11 @@ Start the game with `launchmod_eldenring.bat`. Back up your save first (`%APPDAT
 
 ## 6. Known gaps
 
-1. **The two patch files are not in this repository yet:** `WC_Z06_Unicorn_Way_Classic_edited.objpatch.gz` (about 6.7 MB, or 3.8 MB with `--no-normals`) and the `*.msbpatch.gz` map patches (about 330 KB for all 46 maps). Their contents:
+1. **The recorded patches** in `patches/` (`street/WC_Z06_Unicorn_Way_Classic_edited.objpatch.gz`, 6.7 MB, and `maps/*.msbpatch.gz`, about 330 KB for 46 maps) are how the author's hand edits are reproduced. They hold no game data on their own:
    - The OBJ patch holds references into your own converted OBJs plus Blender's float noise. Its only literal geometry is our floor and 12 other values.
-   - The map patches hold byte edits to vanilla map entries, plus our own entries.
+   - The map patches hold byte edits to vanilla map entries, plus our own entries. `patches/maps/MD5SUMS` lists them.
 
-   The author still has to decide whether they may be published. Until he does, steps 3 and 7 can be rebuilt only with a copy from him.
+   They only work on top of your own game files.
 2. **Voice lines** exist only after the Wizard101 client has played them (step 2 prerequisite).
 3. **Blender renders and the navmesh** (portraits, fairy sheet, every Blender build step, `er_navmesh.py`) were not rerun for the verification. Renders also depend on the Blender and Cycles versions.
 4. **The DLL** builds with the same code and imports, but not byte for byte (PE timestamp and import order).

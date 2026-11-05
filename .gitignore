@@ -38,6 +38,8 @@ npc_dialogue.json
 uw_lang.json
 wizqst*.json
 unicorn_way_quests.json
-# Recorded patches (obj_patch.py, msb_patch.py): held back until Ryan decides they may be published
+# Recorded patches (obj_patch.py, msb_patch.py) live only in patches/ (published 2026-11-05)
 *.objpatch.gz
 *.msbpatch.gz
+!patches/**/*.objpatch.gz
+!patches/**/*.msbpatch.gz
