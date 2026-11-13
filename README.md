@@ -1,10 +1,26 @@
 <img width="2560" height="1440" alt="20261105005507_1" src="https://github.com/user-attachments/assets/eed363a7-0b73-407c-9178-bb5d0601d691" />
 
-# Elden Ring on Unicorn Way
+# Elden Ring Wizard101
 
-A personal, offline Elden Ring mod. You leave the Stranded Graveyard and walk out onto Wizard101's Unicorn Way, which has been rebuilt at The First Step (map tile `m60_42_36_00`). The street has its classic look, its sky, its NPCs and its quest line up to Rattlebones. A HUD DLL draws Wizard101's globes, spellbook, dialogue, shop and music over the game.
+A personal, offline mod that rebuilds Wizard101 inside Elden Ring. The goal is to play through Wizard101's world as an Elden Ring character: Wizard101's maps, with its mobs and bosses replaced by matching Elden Ring enemies, its quests and NPCs, its spellbook and HUD, and its music. Elden Ring supplies the player, the combat and the enemy AI. The tools in this repository bring the rest across from Wizard101.
 
-This repository holds **code only**: Python tools, a Rust DLL and a small C++ navmesh baker. It does not contain anything from either game. One script, `build.py`, makes every model, texture, sound and game file from your own installs of Wizard101 and Elden Ring.
+This is a proof of concept, built one zone at a time.
+
+## Status: Unicorn Way is the only zone so far
+
+Wizard City's Unicorn Way is the first zone, and for now the only one. It has been rebuilt at The First Step (map tile `m60_42_36_00`); you leave the Stranded Graveyard and walk out onto the street. What works there:
+
+- **Map:** the street in its Classic Mode look, with its own sky, lighting, collision and navmesh, and the side areas you can enter from it (the hedge maze garden, Rattlebones' room and the other boss interiors).
+- **Enemies:** the street's ghosts, skeletal pirates and dark sprites are Elden Ring enemies chosen to match them, walking Wizard101's patrol paths. Rattlebones and the street's other bosses are Elden Ring bosses.
+- **Quests and NPCs:** only the quest line that leads to defeating Rattlebones, plus the talk with the NPC after it. The street NPCs are Elden Ring stand-ins with Wizard101 names, portraits, dialogue and voice lines, quest markers and a shop.
+- **UI and HUD:** a DLL draws Wizard101's health and mana globes, nameplates, dialogue, quest goals, floating damage numbers, loading screen and the spellbook (character, backpack, deck, map, crafting, help and settings pages) over the game.
+- **Music and sound:** the street, battle and boss tracks, and Wizard101's interface sounds, in place of Elden Ring's music.
+
+Other Wizard City zones and the worlds beyond are not started. Adding a zone means converting its map, picking its enemies, and writing its quests, the same way Unicorn Way was done.
+
+## Code only, no game files
+
+This repository holds **code only**: Python tools, a Rust DLL and a small C++ navmesh baker. It does not contain anything from either game, and never will. One script, `build.py`, makes every model, texture, sound and game file from your own installs of Wizard101 and Elden Ring.
 
 ---
 
@@ -15,6 +31,19 @@ This repository holds **code only**: Python tools, a Rust DLL and a small C++ na
 - Tools from third parties keep their own licences. hudhook is vendored under `hud_orbs/vendor/hudhook` with its LICENSE. Recast is zlib-licensed and is not included.
 
 ---
+
+## How it fits together
+
+| Part | What it does | Where |
+| --- | --- | --- |
+| Wizard101 conversion | Unpacks the WADs and converts zone models, textures, patrol paths, quest text, voice and music | `tools/w101_*.py`, `tools/nif2obj.py`, `tools/tex2dds.py` |
+| Elden Ring assets | Builds the street, rooms, sky and collision as Elden Ring assets in Blender | `tools/blender_*.py`, `tools/flver_*.py`, `tools/hkx_*.py` |
+| Maps, events, params | Places the street, enemies, NPCs and doors, writes the quest events and a minimal `regulation.bin` | `tools/msb_*.py`, `tools/build_map.py`, `tools/emevd*.py`, `tools/er_*.py`, `patches/` |
+| Navmesh | Bakes a navmesh so enemies can walk the street | `tools/er_navmesh.py`, `tools/recast_bake.cpp` |
+| HUD DLL | Wizard101's interface, quests, music and sound in game | `hud_orbs/` |
+| Build | Runs all of the above in order | `build.py`, `config.example.toml`, [docs/BUILD_DETAILS.md](docs/BUILD_DETAILS.md) |
+
+The steps below build the Unicorn Way zone.
 
 ---
 
