@@ -2,7 +2,7 @@
 
 See README.md for the full step-by-step build. This file only lists the apps.
 
-Everything needed to work on Elden Ring on Unicorn Way, laid out under `Documents\game_modding`.
+Everything needed to work on Elden Ring Wizard101, laid out under `Documents\game_modding`.
 
 ## Folder layout
 
